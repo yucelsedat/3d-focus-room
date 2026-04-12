@@ -1,0 +1,99 @@
+import { useRef, useMemo, useEffect, useState } from 'react'
+import { useFrame } from '@react-three/fiber'
+import { useTexture } from '@react-three/drei'
+import { useStore } from '../store/useStore'
+import * as THREE from 'three'
+
+const GRID_SIZE = 20
+const TILE_SIZE = 1
+const COUNT = GRID_SIZE * GRID_SIZE
+const DEFAULT_COLOR = new THREE.Color('#cccccc')
+const HOVER_COLOR = new THREE.Color('#00f2ff')
+
+export function Grid() {
+  const setHoveredTile = useStore((state) => state.setHoveredTile)
+  const meshRef = useRef()
+  const hoveredRef = useRef(-1) // -1 = nothing hovered, avoids pre-init false positives
+  const [ready, setReady] = useState(false)
+
+  const texture = useTexture('/textures/zemin.png')
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
+  texture.anisotropy = 16
+
+  const tempObj = useMemo(() => new THREE.Object3D(), [])
+
+  // Runs exactly once after textures load and mesh mounts (tempObj never changes)
+  useEffect(() => {
+    const mesh = meshRef.current
+    if (!mesh) return
+
+    let i = 0
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let z = 0; z < GRID_SIZE; z++) {
+        tempObj.position.set(
+          x * TILE_SIZE - GRID_SIZE / 2 + TILE_SIZE / 2,
+          0,
+          z * TILE_SIZE - GRID_SIZE / 2 + TILE_SIZE / 2
+        )
+        tempObj.rotation.set(-Math.PI / 2, 0, 0)
+        tempObj.updateMatrix()
+        mesh.setMatrixAt(i, tempObj.matrix)
+        mesh.setColorAt(i, DEFAULT_COLOR)
+        i++
+      }
+    }
+    mesh.instanceMatrix.needsUpdate = true
+    mesh.instanceColor.needsUpdate = true
+    mesh.computeBoundingSphere()
+    setReady(true)
+  }, [tempObj])
+
+  useFrame((state) => {
+    const mesh = meshRef.current
+    if (!mesh || !ready) return
+
+    state.raycaster.setFromCamera({ x: 0, y: 0 }, state.camera)
+    const intersects = state.raycaster.intersectObject(mesh)
+    const hit = intersects.length > 0 ? intersects[0].instanceId : -1
+
+    if (hoveredRef.current === hit) return
+
+    // Reset previously hovered tile
+    if (hoveredRef.current >= 0) {
+      mesh.setColorAt(hoveredRef.current, DEFAULT_COLOR)
+    }
+
+    // Apply to newly hovered tile
+    if (hit >= 0) {
+      mesh.setColorAt(hit, HOVER_COLOR)
+
+      const mat = new THREE.Matrix4()
+      mesh.getMatrixAt(hit, mat)
+      const pos = new THREE.Vector3()
+      mat.decompose(pos, new THREE.Quaternion(), new THREE.Vector3())
+
+      setHoveredTile({
+        id: hit,
+        position: [pos.x, pos.y + 0.01, pos.z],
+        rotation: [-Math.PI / 2, 0, 0],
+      })
+    } else {
+      const stored = useStore.getState().hoveredTile
+      if (stored && typeof stored.id === 'number') {
+        setHoveredTile(null)
+      }
+    }
+
+    hoveredRef.current = hit
+    mesh.instanceColor.needsUpdate = true
+  })
+
+  return (
+    // visible={ready} prevents the "ghost tile" glitch where all instances
+    // render at origin (0,0,0) before useEffect sets their real positions
+    <instancedMesh ref={meshRef} args={[null, null, COUNT]} visible={ready}>
+      <planeGeometry args={[TILE_SIZE, TILE_SIZE]} />
+      <meshStandardMaterial map={texture} side={THREE.DoubleSide} />
+    </instancedMesh>
+  )
+}
