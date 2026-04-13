@@ -120,6 +120,24 @@ app.post('/api/fetch-url', async (req, res) => {
   }
 });
 
+app.post('/api/add-text', (req, res) => {
+  const { tileId, content, width, height, position, rotation } = req.body
+  const newItem = {
+    id: Date.now(),
+    tileId,
+    type: 'markdown',
+    content,
+    width: parseFloat(width) || 1,
+    height: parseFloat(height) || 1,
+    position: JSON.parse(position),
+    rotation: JSON.parse(rotation)
+  }
+  const data = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8') || '[]')
+  data.push(newItem)
+  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2))
+  res.json(newItem)
+})
+
 app.put('/api/media/:id', (req, res) => {
   const id = parseInt(req.params.id)
   const { width, height } = req.body

@@ -1,6 +1,7 @@
 import React, { Suspense, Component } from 'react'
 import { useTexture, useVideoTexture, Html } from '@react-three/drei'
 import * as THREE from 'three'
+import { marked } from 'marked'
 
 // Error boundary to catch texture load failures (CORS, 404, etc.)
 // useTexture throws a real Error on failure, which Suspense cannot catch — needs ErrorBoundary
@@ -107,6 +108,56 @@ function YoutubeMesh({ url, width, height }) {
   )
 }
 
+// 200 px = 1 Three.js birim. Her sütun 600px × 1000px → 3×5 birim.
+const MD_PX_PER_UNIT = 200
+const MD_COL_PX_W = 600
+
+function MarkdownMesh({ content, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+
+  // Piksel boyutları orana göre türetilir (aynı density her zaman)
+  const pxWidth = Math.round(w * MD_PX_PER_UNIT)
+  const pxHeight = Math.round(h * MD_PX_PER_UNIT)
+  const nCols = Math.max(1, Math.round(pxWidth / MD_COL_PX_W))
+  const scaleFactor = w * 40 / pxWidth  // = 40/300 sabit
+
+  const html = marked(content || '')
+
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      <Html
+        transform
+        position={[0, 0, 0.01]}
+        scale={scaleFactor}
+        style={{ pointerEvents: 'none' }}
+      >
+        <div style={{
+          width: `${pxWidth}px`,
+          height: `${pxHeight}px`,
+          backgroundColor: 'rgba(255,255,255,0.95)',
+          borderRadius: '8px',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+          fontFamily: 'system-ui, sans-serif',
+          fontSize: '16px',
+          lineHeight: '1.6',
+          color: '#1a1a1a',
+          // Çok sütunlu akış
+          columnCount: nCols,
+          columnGap: '0px',
+          columnFill: 'auto',
+          padding: '24px',
+        }}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </Html>
+    </mesh>
+  )
+}
+
 function GifMesh({ url, width, height }) {
   // Sabit bir CSS çözünürlüğü kullanıyoruz (örn: Genişlik 600px).
   // Böylece devasa duvarlarda browser'ı kilitleyen 10000x10000 px boyutunu engelliyoruz.
@@ -142,11 +193,12 @@ function LoadingMesh({ width, height }) {
   )
 }
 
-export function MediaOverlay({ type, url, width, height, position, rotation }) {
+export function MediaOverlay({ type, url, width, height, position, rotation, content }) {
   const isVideo = type === 'video'
   const isYoutube = type === 'youtube'
+  const isMarkdown = type === 'markdown'
   // Proxy might append query params, so we cleanly check if format is likely GIF
-  const isGif = !isVideo && !isYoutube && typeof url === 'string' && url.toLowerCase().includes('.gif')
+  const isGif = !isVideo && !isYoutube && !isMarkdown && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   // Tile'ın sol alt köşesine sabitlemek için gereken yerel eksen kaydırması
   const offsetX = (width - 1) / 2
@@ -156,20 +208,23 @@ export function MediaOverlay({ type, url, width, height, position, rotation }) {
     <group position={position} rotation={rotation}>
       {/* Anchor adjusting group */}
       <group position={[offsetX, offsetY, 0]}>
-        {/* Each overlay has its own ErrorBoundary + Suspense so failures are isolated */}
-        <TextureErrorBoundary width={width} height={height}>
-          <Suspense fallback={<LoadingMesh width={width} height={height} />}>
-            {isVideo ? (
-              <VideoMesh url={url} width={width} height={height} />
-            ) : isYoutube ? (
-              <YoutubeMesh url={url} width={width} height={height} />
-            ) : isGif ? (
-              <GifMesh url={url} width={width} height={height} />
-            ) : (
-              <ImageMesh url={url} width={width} height={height} />
-            )}
-          </Suspense>
-        </TextureErrorBoundary>
+        {isMarkdown ? (
+          <MarkdownMesh content={content} width={width} height={height} />
+        ) : (
+          <TextureErrorBoundary width={width} height={height}>
+            <Suspense fallback={<LoadingMesh width={width} height={height} />}>
+              {isVideo ? (
+                <VideoMesh url={url} width={width} height={height} />
+              ) : isYoutube ? (
+                <YoutubeMesh url={url} width={width} height={height} />
+              ) : isGif ? (
+                <GifMesh url={url} width={width} height={height} />
+              ) : (
+                <ImageMesh url={url} width={width} height={height} />
+              )}
+            </Suspense>
+          </TextureErrorBoundary>
+        )}
       </group>
     </group>
   )

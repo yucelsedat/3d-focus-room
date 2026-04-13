@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import { marked } from 'marked'
 import { useStore } from '../store/useStore'
 
 export function EditModal() {
@@ -11,6 +12,29 @@ export function EditModal() {
   const [loading, setLoading] = useState(false)
   const [loadingStep, setLoadingStep] = useState('')
   const [naturalRatio, setNaturalRatio] = useState(null) // ratio = width / height
+  const [markdownContent, setMarkdownContent] = useState('')
+  const mdMeasureRef = useRef(null)
+
+  // Markdown: h=5 sabit, içerik ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*2
+  const MD_COL_PX_W = 600   // her sütunun CSS piksel genişliği
+  const MD_COL_PX_H = 1000  // her sütunun CSS piksel yüksekliği (5 birim × 200 px/birim)
+  const MD_H = 5             // sabit 3D yükseklik
+  const MD_COL_W = MD_COL_PX_W / (MD_COL_PX_H / MD_H) // = 600/200 = 3 birim/sütun
+
+  useEffect(() => {
+    if (activeTab !== 'markdown') return
+    if (!markdownContent.trim()) {
+      setHeight(MD_H)
+      setWidth(MD_COL_W)
+      return
+    }
+    const el = mdMeasureRef.current
+    if (!el) return
+    el.innerHTML = marked(markdownContent)
+    const nCols = Math.max(1, Math.ceil(el.scrollHeight / MD_COL_PX_H))
+    setHeight(MD_H)
+    setWidth(Number((nCols * MD_COL_W).toFixed(2)))
+  }, [markdownContent, activeTab])
 
   const tileMedia = selectedTile ? worldMedia.filter(
     (m) => String(m.tileId) === String(selectedTile.id)
@@ -83,6 +107,43 @@ export function EditModal() {
   }
 
   const handleApply = async () => {
+    if (activeTab === 'markdown') {
+      if (!markdownContent.trim()) {
+        alert('Lütfen metin girin.')
+        return
+      }
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/add-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            content: markdownContent,
+            width,
+            height,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation)
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Kayıt hatası')
+        addMedia(d)
+        closeModal()
+        setMarkdownContent('')
+        setWidth(1)
+        setHeight(1)
+      } catch (err) {
+        console.error(err)
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (!file && !url.trim()) {
       alert('Lütfen bir dosya seçin veya URL girin.')
       return
@@ -191,6 +252,16 @@ export function EditModal() {
 
   return (
     <div style={s.overlay}>
+      {/* Gizli ölçüm div'i — markdown'un gerçek yüksekliğini hesaplamak için */}
+      <div
+        ref={mdMeasureRef}
+        style={{
+          position: 'fixed', visibility: 'hidden', pointerEvents: 'none',
+          width: '600px', fontSize: '16px', lineHeight: '1.6',
+          fontFamily: 'system-ui, sans-serif', padding: '24px',
+          boxSizing: 'border-box', top: '-9999px', left: '-9999px',
+        }}
+      />
       <div style={s.modal}>
 
         {/* Header */}
@@ -210,7 +281,7 @@ export function EditModal() {
               <div key={m.id} style={s.mediaItem}>
                 <div style={{ flex: 1, marginRight: '10px' }}>
                   <span style={s.mediaItemLabel}>
-                    {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : '🖼'} {m.type === 'youtube' ? 'YouTube Video' : (m.url || '').split('/').pop()}
+                    {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : '🖼'} {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : (m.url || '').split('/').pop()}
                   </span>
                   <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                      <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -263,12 +334,32 @@ export function EditModal() {
           >
             ▶️ YouTube
           </button>
+          <button
+            style={activeTab === 'markdown' ? s.activeTab : s.tab}
+            onClick={() => setActiveTab('markdown')}
+          >
+            📝 Metin
+          </button>
         </div>
 
         {/* Form */}
         <div style={s.form}>
 
+          {/* Markdown textarea */}
+          {activeTab === 'markdown' && (
+            <div style={s.inputGroup}>
+              <label style={s.label}>Markdown İçerik</label>
+              <textarea
+                style={{ ...s.input, height: '140px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.5' }}
+                value={markdownContent}
+                onChange={e => setMarkdownContent(e.target.value)}
+                placeholder={'# Başlık\n\nMetin buraya...\n\n**kalın**, _italik_'}
+              />
+            </div>
+          )}
+
           {/* URL input */}
+          {activeTab !== 'markdown' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : 'YouTube Linki (veya iframe)'}
@@ -289,9 +380,10 @@ export function EditModal() {
             />
             {file && <p style={s.note}>URL devre dışı — dosya seçildi</p>}
           </div>
+          )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
@@ -308,26 +400,32 @@ export function EditModal() {
           {/* Size inputs */}
           <div style={s.row}>
             <div style={{ flex: 1 }}>
-              <label style={s.label}>Genişlik (tile)</label>
+              <label style={s.label}>
+                Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : ''}
+              </label>
               <input
-                style={s.input}
+                style={{ ...s.input, opacity: activeTab === 'markdown' ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={width}
                 onChange={(e) => handleWidthChange(e.target.value)}
+                readOnly={activeTab === 'markdown'}
               />
             </div>
             <div style={{ width: 12 }} />
             <div style={{ flex: 1 }}>
-              <label style={s.label}>Yükseklik (tile) {naturalRatio ? '🔗' : ''}</label>
+              <label style={s.label}>
+                Yükseklik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : naturalRatio ? '🔗' : ''}
+              </label>
               <input
-                style={s.input}
+                style={{ ...s.input, opacity: activeTab === 'markdown' ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={height}
                 onChange={(e) => handleHeightChange(e.target.value)}
+                readOnly={activeTab === 'markdown'}
               />
             </div>
           </div>
