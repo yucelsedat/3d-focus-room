@@ -28,7 +28,7 @@ function App() {
         { name: 'backward', keys: ['ArrowDown', 's', 'S'] },
         { name: 'left', keys: ['ArrowLeft', 'a', 'A'] },
         { name: 'right', keys: ['ArrowRight', 'd', 'D'] },
-        { name: 'edit', keys: ['p', 'P'] },
+        { name: 'edit', keys: ['e', 'E'] },
       ]}
     >
       <div style={{ width: '100vw', height: '100vh' }}>

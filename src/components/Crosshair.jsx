@@ -1,18 +1,9 @@
 import React from 'react'
-import { useStore } from '../store/useStore'
 
 export function Crosshair() {
-  const hoveredTile = useStore((state) => state.hoveredTile)
-
   return (
     <div style={styles.wrapper}>
       <div style={styles.crosshair}>+</div>
-      {hoveredTile && (
-        <div style={styles.hint}>
-          <span style={styles.key}>P</span>
-          <span style={styles.hintText}>Düzenle</span>
-        </div>
-      )}
     </div>
   )
 }

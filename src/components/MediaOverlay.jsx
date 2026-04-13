@@ -53,22 +53,76 @@ function VideoMesh({ url, width, height }) {
   )
 }
 
+function YoutubeMesh({ url, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+
+  // Chromium iframe render boyutunu koruyup viewport'u hileleyen referans genişliği
+  const pxWidth = 600
+  const pxHeight = Math.round(600 * (h / w))
+  // Plan A: drei Html transform modunda f=400/distanceFactor=40 faktörü XY ölçeğini büyütür.
+  // Bu faktör hesaba katılmadan scale w/pxWidth olarak bırakılırsa iframe 40x küçük görünür.
+  const scaleFactor = w * 40 / pxWidth
+
+  const cleanUrl = url.replace(/[?&]autoplay=1/g, '')
+
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      {/* 3D Kırmızı Test Çerçevesi */}
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0.1} color="red" depthWrite={false} side={THREE.DoubleSide} />
+
+      {/* 
+        1) occlude KALDIRILDI: Duvarın açısıyla yaşanan görünmezlik (opacity: 0) kapatıldı. 
+        2) position: Kırmızı çerçevenin tam sol-alt köşesine vidalandı.
+      */}
+      <Html
+        key={`yt-${w}-${h}`}
+        transform
+        position={[0, 0, 0.01]}
+        scale={scaleFactor}
+        style={{ pointerEvents: 'none' }}
+      >
+        <div style={{
+          width: `${pxWidth}px`,
+          height: `${pxHeight}px`,
+          backgroundColor: '#000',
+        }}>
+          {/* Iframe boyutunu orantısal koru ama her zaman köşeden başla */}
+          <iframe
+            src={cleanUrl}
+            frameBorder="0"
+            allowFullScreen
+            style={{
+              width: '100%',
+              height: '100%',
+              border: 'none',
+              display: 'block',
+              pointerEvents: 'auto'
+            }}
+          ></iframe>
+        </div>
+      </Html>
+    </mesh>
+  )
+}
+
 function GifMesh({ url, width, height }) {
   // Sabit bir CSS çözünürlüğü kullanıyoruz (örn: Genişlik 600px).
   // Böylece devasa duvarlarda browser'ı kilitleyen 10000x10000 px boyutunu engelliyoruz.
   const pxWidth = 600
   const pxHeight = 600 * (height / width)
-  const scale = width / pxWidth
+  const scale = width * 40 / pxWidth
 
   return (
     <mesh position={[0, 0, 0.02]}>
       <planeGeometry args={[width, height]} />
       {/* Invisible mesh allows raycaster to still hit this area if we want, while not drawing color */}
       <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
-      <Html 
-        transform 
-        occlude="blending" 
-        position={[0, 0, 0]} 
+      <Html
+        transform
+        occlude="blending"
+        position={[0, 0, 0]}
         scale={scale}
         style={{ width: `${pxWidth}px`, height: `${pxHeight}px`, pointerEvents: 'none' }}
       >
@@ -90,23 +144,33 @@ function LoadingMesh({ width, height }) {
 
 export function MediaOverlay({ type, url, width, height, position, rotation }) {
   const isVideo = type === 'video'
+  const isYoutube = type === 'youtube'
   // Proxy might append query params, so we cleanly check if format is likely GIF
-  const isGif = !isVideo && typeof url === 'string' && url.toLowerCase().includes('.gif')
+  const isGif = !isVideo && !isYoutube && typeof url === 'string' && url.toLowerCase().includes('.gif')
+
+  // Tile'ın sol alt köşesine sabitlemek için gereken yerel eksen kaydırması
+  const offsetX = (width - 1) / 2
+  const offsetY = (height - 1) / 2
 
   return (
     <group position={position} rotation={rotation}>
-      {/* Each overlay has its own ErrorBoundary + Suspense so failures are isolated */}
-      <TextureErrorBoundary width={width} height={height}>
-        <Suspense fallback={<LoadingMesh width={width} height={height} />}>
-          {isVideo ? (
-            <VideoMesh url={url} width={width} height={height} />
-          ) : isGif ? (
-            <GifMesh url={url} width={width} height={height} />
-          ) : (
-            <ImageMesh url={url} width={width} height={height} />
-          )}
-        </Suspense>
-      </TextureErrorBoundary>
+      {/* Anchor adjusting group */}
+      <group position={[offsetX, offsetY, 0]}>
+        {/* Each overlay has its own ErrorBoundary + Suspense so failures are isolated */}
+        <TextureErrorBoundary width={width} height={height}>
+          <Suspense fallback={<LoadingMesh width={width} height={height} />}>
+            {isVideo ? (
+              <VideoMesh url={url} width={width} height={height} />
+            ) : isYoutube ? (
+              <YoutubeMesh url={url} width={width} height={height} />
+            ) : isGif ? (
+              <GifMesh url={url} width={width} height={height} />
+            ) : (
+              <ImageMesh url={url} width={width} height={height} />
+            )}
+          </Suspense>
+        </TextureErrorBoundary>
+      </group>
     </group>
   )
 }

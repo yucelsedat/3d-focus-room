@@ -18,6 +18,11 @@ export function EditModal() {
 
   React.useEffect(() => {
     const probeAspectRatio = (sourceUrl, type) => {
+      if (type === 'youtube') {
+        setNaturalRatio(16/9)
+        setHeight(w => Number((w / (16/9)).toFixed(2)))
+        return
+      }
       if (!sourceUrl) return
       if (type === 'video') {
          const vid = document.createElement('video')
@@ -46,6 +51,8 @@ export function EditModal() {
       const objectUrl = URL.createObjectURL(file)
       probeAspectRatio(objectUrl, activeTab)
       return () => URL.revokeObjectURL(objectUrl)
+    } else if (activeTab === 'youtube') {
+      probeAspectRatio(url, activeTab)
     } else if (url && url.length > 5 && url.startsWith('http')) {
       probeAspectRatio(url, activeTab)
     } else {
@@ -88,8 +95,24 @@ export function EditModal() {
       let resolvedUrl = url.trim()
       let resolvedType = activeTab
 
+      if (resolvedType === 'youtube') {
+        let src = resolvedUrl;
+        const iframeMatch = resolvedUrl.match(/<iframe.*?src=["'](.*?)["']/i);
+        if (iframeMatch) src = iframeMatch[1];
+        
+        try {
+          const u = new URL(src);
+          if (u.hostname.includes('youtube.com') && u.searchParams.has('v')) {
+            src = `https://www.youtube.com/embed/${u.searchParams.get('v')}`;
+          } else if (u.hostname.includes('youtu.be')) {
+            src = `https://www.youtube.com/embed/${u.pathname.slice(1)}`;
+          }
+        } catch (e) {}
+        resolvedUrl = src;
+      }
+
       // Download external URL server-side to avoid CORS
-      if (!file && resolvedUrl) {
+      if (!file && resolvedUrl && resolvedType !== 'youtube') {
         const r = await fetch('/api/fetch-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -187,7 +210,7 @@ export function EditModal() {
               <div key={m.id} style={s.mediaItem}>
                 <div style={{ flex: 1, marginRight: '10px' }}>
                   <span style={s.mediaItemLabel}>
-                    {m.type === 'video' ? '🎬' : '🖼'} {(m.url || '').split('/').pop()}
+                    {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : '🖼'} {m.type === 'youtube' ? 'YouTube Video' : (m.url || '').split('/').pop()}
                   </span>
                   <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                      <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -234,6 +257,12 @@ export function EditModal() {
           >
             🎬 Video
           </button>
+          <button
+            style={activeTab === 'youtube' ? s.activeTab : s.tab}
+            onClick={() => setActiveTab('youtube')}
+          >
+            ▶️ YouTube
+          </button>
         </div>
 
         {/* Form */}
@@ -242,7 +271,7 @@ export function EditModal() {
           {/* URL input */}
           <div style={s.inputGroup}>
             <label style={s.label}>
-              {activeTab === 'image' ? 'Resim Linki' : 'Video Linki'}
+              {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : 'YouTube Linki (veya iframe)'}
             </label>
             <input
               style={{ ...s.input, opacity: file ? 0.4 : 1 }}
@@ -252,7 +281,9 @@ export function EditModal() {
               placeholder={
                 activeTab === 'image'
                   ? 'https://example.com/image.jpg'
-                  : 'https://example.com/video.mp4'
+                  : activeTab === 'video'
+                  ? 'https://example.com/video.mp4'
+                  : 'https://youtube.com/watch?v=... veya <iframe...>'
               }
               disabled={!!file}
             />
@@ -260,17 +291,19 @@ export function EditModal() {
           </div>
 
           {/* File input */}
-          <div style={s.inputGroup}>
-            <label style={s.label}>
-              {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
-            </label>
-            <input
-              style={s.fileInput}
-              type="file"
-              accept={activeTab === 'image' ? 'image/*' : 'video/*'}
-              onChange={handleFileChange}
-            />
-          </div>
+          {activeTab !== 'youtube' && (
+            <div style={s.inputGroup}>
+              <label style={s.label}>
+                {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
+              </label>
+              <input
+                style={s.fileInput}
+                type="file"
+                accept={activeTab === 'image' ? 'image/*' : 'video/*'}
+                onChange={handleFileChange}
+              />
+            </div>
+          )}
 
           {/* Size inputs */}
           <div style={s.row}>
