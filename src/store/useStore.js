@@ -6,14 +6,21 @@ export const useStore = create((set) => ({
   hoveredTile: null,  // { id, position, rotation }
   worldMedia: [],
   roomModal: false,
+  menuModal: true,    // uygulama açılışında menü göster
   hiddenWalls: [],    // gizli duvar instanceId'leri (kapılar)
   floorTexture: 'zemin.png',
+  currentRoomId: 'default',
+  currentRoomName: 'Varsayılan Oda',
+  rooms: [],
 
   openModal: (tile) => set({ activeModal: true, selectedTile: tile }),
   closeModal: () => set({ activeModal: false, selectedTile: null }),
 
   openRoomModal: () => set({ roomModal: true }),
   closeRoomModal: () => set({ roomModal: false }),
+
+  openMenuModal:  () => set({ menuModal: true }),
+  closeMenuModal: () => set({ menuModal: false }),
 
   setHoveredTile: (tile) => set({ hoveredTile: tile }),
   setWorldMedia: (media) => set({ worldMedia: media }),
@@ -25,4 +32,7 @@ export const useStore = create((set) => ({
   setHiddenWalls: (ids) => set({ hiddenWalls: ids }),
   addDoor: (ids) => set((state) => ({ hiddenWalls: [...new Set([...state.hiddenWalls, ...ids])] })),
   removeDoor: (ids) => set((state) => ({ hiddenWalls: state.hiddenWalls.filter(id => !ids.includes(id)) })),
+
+  setCurrentRoom: (id, name) => set({ currentRoomId: id, currentRoomName: name }),
+  setRooms: (rooms) => set({ rooms }),
 }))
