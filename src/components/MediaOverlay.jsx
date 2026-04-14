@@ -59,8 +59,8 @@ function YoutubeMesh({ url, width, height }) {
   const h = parseFloat(height)
 
   // Chromium iframe render boyutunu koruyup viewport'u hileleyen referans genişliği
-  const pxWidth = 600
-  const pxHeight = Math.round(600 * (h / w))
+  const pxWidth = 1920
+  const pxHeight = Math.round(1920 * (h / w))
   // Plan A: drei Html transform modunda f=400/distanceFactor=40 faktörü XY ölçeğini büyütür.
   // Bu faktör hesaba katılmadan scale w/pxWidth olarak bırakılırsa iframe 40x küçük görünür.
   const scaleFactor = w * 40 / pxWidth

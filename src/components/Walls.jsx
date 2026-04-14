@@ -10,12 +10,35 @@ const TILE_SIZE = 1
 const COUNT = GRID_SIZE * WALL_HEIGHT * 4
 const DEFAULT_COLOR = new THREE.Color('#cccccc')
 const HOVER_COLOR = new THREE.Color('#00f2ff')
+const OFFSET = (GRID_SIZE / 2) * TILE_SIZE
+
+// Verilen instanceId için konumu ve rotasyonu hesaplar
+function applyInstanceTransform(id, tempObj, scale = 1) {
+  const h    = Math.floor(id / (GRID_SIZE * 4))
+  const j    = Math.floor((id % (GRID_SIZE * 4)) / 4)
+  const face = id % 4
+  const y    = h * TILE_SIZE + TILE_SIZE / 2
+  const pos  = j * TILE_SIZE - OFFSET + TILE_SIZE / 2
+
+  tempObj.scale.set(scale, scale, scale)
+
+  switch (face) {
+    case 0: tempObj.position.set(pos,    y, -OFFSET); tempObj.rotation.set(0, 0,            0); break
+    case 1: tempObj.position.set(pos,    y,  OFFSET); tempObj.rotation.set(0, Math.PI,      0); break
+    case 2: tempObj.position.set(-OFFSET, y, pos);    tempObj.rotation.set(0, Math.PI / 2,  0); break
+    case 3: tempObj.position.set( OFFSET, y, pos);    tempObj.rotation.set(0, -Math.PI / 2, 0); break
+    default: break
+  }
+  tempObj.updateMatrix()
+}
 
 export function Walls() {
-  const { setHoveredTile } = useStore()
+  const { setHoveredTile, hiddenWalls } = useStore()
   const meshRef = useRef()
   const hoveredRef = useRef(-1)
+  const readyRef = useRef(false)
   const [ready, setReady] = useState(false)
+  const hiddenSet = useMemo(() => new Set(hiddenWalls), [hiddenWalls])
 
   const texture = useTexture('/textures/duvar.png')
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping
@@ -23,58 +46,91 @@ export function Walls() {
 
   const tempObj = useMemo(() => new THREE.Object3D(), [])
 
+  // Tek seferlik kurulum: tüm tile'ları yerleştir
   useEffect(() => {
     const mesh = meshRef.current
     if (!mesh) return
 
     let i = 0
-    const offset = (GRID_SIZE / 2) * TILE_SIZE
-
-    const place = (x, y, z, rotY) => {
-      if (i >= mesh.count) return
-      tempObj.position.set(x, y, z)
-      tempObj.rotation.set(0, rotY, 0)
-      tempObj.updateMatrix()
-      mesh.setMatrixAt(i, tempObj.matrix)
-      mesh.setColorAt(i, DEFAULT_COLOR)
-      i++
-    }
 
     for (let h = 0; h < WALL_HEIGHT; h++) {
       const y = h * TILE_SIZE + TILE_SIZE / 2
       for (let j = 0; j < GRID_SIZE; j++) {
-        const pos = j * TILE_SIZE - offset + TILE_SIZE / 2
-        place(pos,     y, -offset, 0)            // Front
-        place(pos,     y,  offset, Math.PI)       // Back
-        place(-offset, y,  pos,    Math.PI / 2)   // Left
-        place( offset, y,  pos,   -Math.PI / 2)   // Right
+        const pos = j * TILE_SIZE - OFFSET + TILE_SIZE / 2
+        const placements = [
+          [pos,     y, -OFFSET, 0],
+          [pos,     y,  OFFSET, Math.PI],
+          [-OFFSET, y,  pos,    Math.PI / 2],
+          [ OFFSET, y,  pos,   -Math.PI / 2],
+        ]
+        for (const [x, py, z, rotY] of placements) {
+          tempObj.position.set(x, py, z)
+          tempObj.rotation.set(0, rotY, 0)
+          tempObj.scale.set(1, 1, 1)
+          tempObj.updateMatrix()
+          mesh.setMatrixAt(i, tempObj.matrix)
+          mesh.setColorAt(i, DEFAULT_COLOR)
+          i++
+        }
       }
     }
 
     mesh.instanceMatrix.needsUpdate = true
-    mesh.instanceColor.needsUpdate = true
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
     mesh.computeBoundingSphere()
+    readyRef.current = true
     setReady(true)
   }, [tempObj])
 
+  // Kapı güncellemesi: hiddenWalls değiştiğinde sadece ilgili tile'ları güncelle
+  useEffect(() => {
+    if (!readyRef.current) return
+    const mesh = meshRef.current
+    if (!mesh) return
+
+    // Önceki gizli tile'ları geri getir (tüm tile'lar için gereksiz yapmamak adına
+    // sadece count aralığındaki tüm ID'leri normalize ederek yeniden uygula)
+    // En basit yol: hiddenWalls içinde olmayan ve önceden gizlenmiş olabilecek ID'leri bulmak yerine
+    // tüm ID'leri restore edip sonra yeni gizlenecekleri hide etmek.
+    for (let id = 0; id < COUNT; id++) {
+      applyInstanceTransform(id, tempObj, 1)
+      mesh.setMatrixAt(id, tempObj.matrix)
+    }
+
+    // Kapı tile'larını gizle
+    hiddenWalls.forEach(id => {
+      if (id < 0 || id >= COUNT) return
+      tempObj.position.set(0, -9999, 0)
+      tempObj.scale.set(0, 0, 0)
+      tempObj.rotation.set(0, 0, 0)
+      tempObj.updateMatrix()
+      mesh.setMatrixAt(id, tempObj.matrix)
+    })
+
+    mesh.instanceMatrix.needsUpdate = true
+    mesh.computeBoundingSphere()
+  }, [hiddenWalls, tempObj])
+
   useFrame((state) => {
     const mesh = meshRef.current
-    if (!mesh || !ready) return
+    if (!mesh || !readyRef.current) return
 
     state.raycaster.setFromCamera({ x: 0, y: 0 }, state.camera)
     const intersects = state.raycaster.intersectObject(mesh)
-    const hit = intersects.length > 0 ? intersects[0].instanceId : -1
+    const rawHit = intersects.length > 0 ? intersects[0].instanceId : -1
+    // Gizli (kapı) tile'larını hover'dan dışla
+    const hit = rawHit >= 0 && hiddenSet.has(rawHit) ? -1 : rawHit
 
     if (hoveredRef.current === hit) return
 
     // Reset previously hovered wall
-    if (hoveredRef.current >= 0) {
+    if (hoveredRef.current >= 0 && mesh.instanceColor) {
       mesh.setColorAt(hoveredRef.current, DEFAULT_COLOR)
     }
 
     // Apply to newly hovered wall
     if (hit >= 0) {
-      mesh.setColorAt(hit, HOVER_COLOR)
+      if (mesh.instanceColor) mesh.setColorAt(hit, HOVER_COLOR)
 
       const mat = new THREE.Matrix4()
       mesh.getMatrixAt(hit, mat)
@@ -99,7 +155,7 @@ export function Walls() {
     }
 
     hoveredRef.current = hit
-    mesh.instanceColor.needsUpdate = true
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
   })
 
   return (

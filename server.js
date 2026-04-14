@@ -34,7 +34,50 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-const DATA_PATH = 'public/data/media.json';
+const DATA_PATH = 'public/data/media.json'
+const DOORS_PATH = 'public/data/doors.json';
+const FLOOR_PATH = 'public/data/floor.json';
+
+app.get('/api/floor', (req, res) => {
+  if (!fs.existsSync(FLOOR_PATH)) fs.writeFileSync(FLOOR_PATH, JSON.stringify({ texture: 'zemin.png' }))
+  res.json(JSON.parse(fs.readFileSync(FLOOR_PATH, 'utf8')))
+})
+
+app.post('/api/floor', (req, res) => {
+  const { texture } = req.body
+  fs.writeFileSync(FLOOR_PATH, JSON.stringify({ texture }))
+  res.json({ texture })
+})
+
+app.get('/api/floor-textures', (req, res) => {
+  const dir = 'public/textures'
+  const files = fs.readdirSync(dir)
+    .filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f) && f !== 'duvar.png')
+  res.json(files)
+})
+
+app.get('/api/doors', (req, res) => {
+  if (!fs.existsSync(DOORS_PATH)) fs.writeFileSync(DOORS_PATH, '[]')
+  res.json(JSON.parse(fs.readFileSync(DOORS_PATH, 'utf8')))
+})
+
+app.post('/api/doors', (req, res) => {
+  const { ids } = req.body
+  if (!fs.existsSync(DOORS_PATH)) fs.writeFileSync(DOORS_PATH, '[]')
+  const data = JSON.parse(fs.readFileSync(DOORS_PATH, 'utf8'))
+  const updated = [...new Set([...data, ...ids])]
+  fs.writeFileSync(DOORS_PATH, JSON.stringify(updated))
+  res.json(updated)
+})
+
+app.delete('/api/doors', (req, res) => {
+  const { ids } = req.body
+  if (!fs.existsSync(DOORS_PATH)) return res.json([])
+  const data = JSON.parse(fs.readFileSync(DOORS_PATH, 'utf8'))
+  const updated = data.filter(id => !ids.includes(id))
+  fs.writeFileSync(DOORS_PATH, JSON.stringify(updated))
+  res.json(updated)
+})
 
 app.get('/api/media', (req, res) => {
   if (!fs.existsSync(DATA_PATH)) {

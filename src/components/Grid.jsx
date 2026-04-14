@@ -4,6 +4,22 @@ import { useTexture } from '@react-three/drei'
 import { useStore } from '../store/useStore'
 import * as THREE from 'three'
 
+const OUTDOOR_SIZE = 400
+
+export function OutdoorFloor() {
+  const texture = useTexture('/textures/grass.png', (t) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.repeat.set(OUTDOOR_SIZE / 4, OUTDOOR_SIZE / 4)
+    t.anisotropy = 16
+  })
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
+      <planeGeometry args={[OUTDOOR_SIZE, OUTDOOR_SIZE]} />
+      <meshStandardMaterial map={texture} />
+    </mesh>
+  )
+}
+
 const GRID_SIZE = 20
 const TILE_SIZE = 1
 const COUNT = GRID_SIZE * GRID_SIZE
@@ -12,13 +28,15 @@ const HOVER_COLOR = new THREE.Color('#00f2ff')
 
 export function Grid() {
   const setHoveredTile = useStore((state) => state.setHoveredTile)
+  const floorTexture  = useStore((state) => state.floorTexture)
   const meshRef = useRef()
   const hoveredRef = useRef(-1) // -1 = nothing hovered, avoids pre-init false positives
   const [ready, setReady] = useState(false)
 
-  const texture = useTexture('/textures/zemin.png')
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
-  texture.anisotropy = 16
+  const texture = useTexture(`/textures/${floorTexture}`, (t) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.anisotropy = 16
+  })
 
   const tempObj = useMemo(() => new THREE.Object3D(), [])
 

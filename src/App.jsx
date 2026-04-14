@@ -1,18 +1,21 @@
 import { useEffect, Suspense } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Sky, KeyboardControls, Stars } from '@react-three/drei'
-import { Grid } from './components/Grid'
+import { Grid, OutdoorFloor } from './components/Grid'
 import { Walls } from './components/Walls'
 import { Player } from './components/Player'
 import { Crosshair } from './components/Crosshair'
 import { EditModal } from './components/EditModal'
+import { RoomModal } from './components/RoomModal'
 import { MediaManager } from './components/MediaManager'
 import { KeyHandler } from './components/KeyHandler'
 import { useStore } from './store/useStore'
 import './App.css'
 
 function App() {
-  const setWorldMedia = useStore((state) => state.setWorldMedia)
+  const setWorldMedia   = useStore((state) => state.setWorldMedia)
+  const setHiddenWalls  = useStore((state) => state.setHiddenWalls)
+  const setFloorTexture = useStore((state) => state.setFloorTexture)
 
   useEffect(() => {
     fetch('/api/media')
@@ -20,6 +23,20 @@ function App() {
       .then(data => setWorldMedia(data))
       .catch(err => console.error('Media load error:', err))
   }, [setWorldMedia])
+
+  useEffect(() => {
+    fetch('/api/doors')
+      .then(res => res.json())
+      .then(data => setHiddenWalls(data))
+      .catch(err => console.error('Doors load error:', err))
+  }, [setHiddenWalls])
+
+  useEffect(() => {
+    fetch('/api/floor')
+      .then(res => res.json())
+      .then(data => setFloorTexture(data.texture))
+      .catch(err => console.error('Floor load error:', err))
+  }, [setFloorTexture])
 
   return (
     <KeyboardControls
@@ -29,12 +46,13 @@ function App() {
         { name: 'left', keys: ['ArrowLeft', 'a', 'A'] },
         { name: 'right', keys: ['ArrowRight', 'd', 'D'] },
         { name: 'edit', keys: ['e', 'E'] },
+        { name: 'room', keys: ['r', 'R'] },
       ]}
     >
       <div style={{ width: '100vw', height: '100vh' }}>
         <Canvas
           shadows
-          camera={{ fov: 75, position: [0, 2, 5] }}
+          camera={{ fov: 75, position: [0, 2.5, 5] }}
           gl={{ antialias: true }}
         >
           <color attach="background" args={['#050505']} />
@@ -54,6 +72,7 @@ function App() {
           />
 
           <Suspense fallback={null}>
+            <OutdoorFloor />
             <Grid />
             <Walls />
             <Player />
@@ -67,6 +86,7 @@ function App() {
         </Canvas>
         <Crosshair />
         <EditModal />
+        <RoomModal />
       </div>
     </KeyboardControls>
   )
