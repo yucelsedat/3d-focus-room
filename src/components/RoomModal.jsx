@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 
-const GRID_SIZE = 20
+const GRID_SIZE = 40
 
 function getDoorIds(instanceId) {
   const face = instanceId % 4
