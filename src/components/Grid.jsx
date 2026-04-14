@@ -20,7 +20,7 @@ export function OutdoorFloor() {
   )
 }
 
-const GRID_SIZE = 20
+const GRID_SIZE = 40
 const TILE_SIZE = 1
 const COUNT = GRID_SIZE * GRID_SIZE
 const DEFAULT_COLOR = new THREE.Color('#cccccc')

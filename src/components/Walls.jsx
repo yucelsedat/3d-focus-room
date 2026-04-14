@@ -4,7 +4,7 @@ import { useTexture } from '@react-three/drei'
 import { useStore } from '../store/useStore'
 import * as THREE from 'three'
 
-const GRID_SIZE = 20
+const GRID_SIZE = 40
 const WALL_HEIGHT = 5
 const TILE_SIZE = 1
 const COUNT = GRID_SIZE * WALL_HEIGHT * 4

@@ -5,9 +5,9 @@ import { useStore } from '../store/useStore'
 import * as THREE from 'three'
 
 const MOVE_SPEED = 5
-const GRID_SIZE  = 20
-const WALL_OFFSET = GRID_SIZE / 2          // 10 — wall plane position
-const OUTER_LIMIT = WALL_OFFSET + 20       // 30 — max range outside the room
+const GRID_SIZE  = 40
+const WALL_OFFSET = GRID_SIZE / 2          // 20 — wall plane position
+const OUTER_LIMIT = WALL_OFFSET + 40       // 60 — max range outside the room
 
 // Returns true if the player can cross face at the given position along the wall.
 // posAlongWall: world-space x (for front/back walls) or z (for left/right walls).
