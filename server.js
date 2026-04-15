@@ -297,7 +297,7 @@ app.post('/api/add-text', (req, res) => {
 
 app.put('/api/media/:id', (req, res) => {
   const id = parseInt(req.params.id)
-  const { width, height } = req.body
+  const { width, height, content } = req.body
   const data = JSON.parse(fs.readFileSync(DATA_PATH(), 'utf8') || '[]')
   const itemIndex = data.findIndex(m => m.id === id)
 
@@ -305,6 +305,7 @@ app.put('/api/media/:id', (req, res) => {
 
   if (width !== undefined) data[itemIndex].width = parseFloat(width) || data[itemIndex].width;
   if (height !== undefined) data[itemIndex].height = parseFloat(height) || data[itemIndex].height;
+  if (content !== undefined) data[itemIndex].content = content;
 
   fs.writeFileSync(DATA_PATH(), JSON.stringify(data, null, 2))
   res.json(data[itemIndex])

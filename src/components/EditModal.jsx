@@ -13,6 +13,10 @@ export function EditModal() {
   const [loadingStep, setLoadingStep] = useState('')
   const [naturalRatio, setNaturalRatio] = useState(null) // ratio = width / height
   const [markdownContent, setMarkdownContent] = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [editingContent, setEditingContent] = useState('')
+  const [copiedId, setCopiedId] = useState(null)
+  const [pastePreview, setPastePreview] = useState(null)
   const mdMeasureRef = useRef(null)
 
   // Markdown: h=5 sabit, içerik ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*2
@@ -87,7 +91,19 @@ export function EditModal() {
   const handleFileChange = (e) => {
     const f = e.target.files[0] || null
     setFile(f)
-    if (f) setUrl('')
+    if (f) { setUrl(''); setPastePreview(null) }
+  }
+
+  const handlePasteZone = (e) => {
+    const items = Array.from(e.clipboardData?.items || [])
+    const imgItem = items.find(i => i.type.startsWith('image/'))
+    if (!imgItem) return
+    e.preventDefault()
+    const blob = imgItem.getAsFile()
+    const previewUrl = URL.createObjectURL(blob)
+    setFile(blob)
+    setUrl('')
+    setPastePreview(previewUrl)
   }
 
   const handleWidthChange = (val) => {
@@ -229,6 +245,23 @@ export function EditModal() {
     }
   }
 
+  const handleSaveContent = async (id) => {
+    try {
+      const r = await fetch(`/api/media/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editingContent })
+      })
+      if (!r.ok) throw new Error('Güncelleme başarısız')
+      const updated = await r.json()
+      useStore.getState().updateMedia(updated)
+      setEditingId(null)
+    } catch (err) {
+      console.error(err)
+      alert(err.message)
+    }
+  }
+
   const handleUpdateSize = async (id, newWidth, newHeight) => {
     try {
       const r = await fetch(`/api/media/${id}`, {
@@ -278,37 +311,91 @@ export function EditModal() {
           <div style={s.existingSection}>
             <p style={s.sectionLabel}>Bu tile'daki medyalar</p>
             {tileMedia.map((m) => (
-              <div key={m.id} style={s.mediaItem}>
-                <div style={{ flex: 1, marginRight: '10px' }}>
-                  <span style={s.mediaItemLabel}>
-                    {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : '🖼'} {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : (m.url || '').split('/').pop()}
-                  </span>
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
-                     <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
-                       G:
-                       <input 
-                         type="number" 
-                         defaultValue={m.width} 
-                         step="0.1"
-                         style={{ width: '45px', marginLeft: '4px', background: '#222', border: '1px solid #444', color: '#fff', borderRadius: '4px', fontSize: '11px', padding: '3px' }}
-                         onBlur={e => handleUpdateSize(m.id, e.target.value, m.height)}
-                       />
-                     </label>
-                     <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
-                       Y:
-                       <input 
-                         type="number" 
-                         defaultValue={m.height} 
-                         step="0.1"
-                         style={{ width: '45px', marginLeft: '4px', background: '#222', border: '1px solid #444', color: '#fff', borderRadius: '4px', fontSize: '11px', padding: '3px' }}
-                         onBlur={e => handleUpdateSize(m.id, m.width, e.target.value)}
-                       />
-                     </label>
-                   </div>
+              <div key={m.id} style={{ borderBottom: '1px solid #1e1e1e' }}>
+                <div style={s.mediaItem}>
+                  <div style={{ flex: 1, marginRight: '10px' }}>
+                    <span style={s.mediaItemLabel}>
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : (m.url || '').split('/').pop()}
+                    </span>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+                      <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
+                        G:
+                        <input
+                          type="number"
+                          defaultValue={m.width}
+                          step="0.1"
+                          style={{ width: '45px', marginLeft: '4px', background: '#222', border: '1px solid #444', color: '#fff', borderRadius: '4px', fontSize: '11px', padding: '3px' }}
+                          onBlur={e => handleUpdateSize(m.id, e.target.value, m.height)}
+                        />
+                      </label>
+                      <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
+                        Y:
+                        <input
+                          type="number"
+                          defaultValue={m.height}
+                          step="0.1"
+                          style={{ width: '45px', marginLeft: '4px', background: '#222', border: '1px solid #444', color: '#fff', borderRadius: '4px', fontSize: '11px', padding: '3px' }}
+                          onBlur={e => handleUpdateSize(m.id, m.width, e.target.value)}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', flexShrink: 0, alignItems: 'center' }}>
+                    {m.type === 'youtube' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#0d0d0d', border: '1px solid #2a2a2a', borderRadius: '6px', padding: '3px 8px', maxWidth: '200px' }}>
+                        <span style={{ fontSize: '11px', color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                          {m.url}
+                        </span>
+                        <button
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0', color: copiedId === m.id ? '#4ade80' : '#888', fontSize: '14px', flexShrink: 0 }}
+                          title="Linki kopyala"
+                          onClick={() => {
+                            navigator.clipboard.writeText(m.url)
+                            setCopiedId(m.id)
+                            setTimeout(() => setCopiedId(null), 2000)
+                          }}
+                        >
+                          {copiedId === m.id ? '✓' : '⧉'}
+                        </button>
+                      </div>
+                    )}
+                    {m.type === 'markdown' && (
+                      <button
+                        style={s.editBtn}
+                        onClick={() => {
+                          if (editingId === m.id) {
+                            setEditingId(null)
+                          } else {
+                            setEditingId(m.id)
+                            setEditingContent(m.content || '')
+                          }
+                        }}
+                      >
+                        {editingId === m.id ? 'Kapat' : 'Düzenle'}
+                      </button>
+                    )}
+                    <button style={s.deleteBtn} onClick={() => handleDelete(m.id)}>
+                      Sil
+                    </button>
+                  </div>
                 </div>
-                <button style={s.deleteBtn} onClick={() => handleDelete(m.id)}>
-                  Sil
-                </button>
+
+                {/* Inline markdown editör */}
+                {editingId === m.id && (
+                  <div style={s.inlineEditor}>
+                    <textarea
+                      style={s.inlineTextarea}
+                      value={editingContent}
+                      onChange={e => setEditingContent(e.target.value)}
+                      autoFocus
+                    />
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                      <button style={s.cancelBtn} onClick={() => setEditingId(null)}>İptal</button>
+                      <button style={s.applyBtn} onClick={() => handleSaveContent(m.id)}>Kaydet</button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -350,7 +437,7 @@ export function EditModal() {
             <div style={s.inputGroup}>
               <label style={s.label}>Markdown İçerik</label>
               <textarea
-                style={{ ...s.input, height: '140px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.5' }}
+                style={{ ...s.input, height: '260px', resize: 'vertical', fontFamily: 'monospace', fontSize: '13px', lineHeight: '1.6' }}
                 value={markdownContent}
                 onChange={e => setMarkdownContent(e.target.value)}
                 placeholder={'# Başlık\n\nMetin buraya...\n\n**kalın**, _italik_'}
@@ -394,6 +481,38 @@ export function EditModal() {
                 accept={activeTab === 'image' ? 'image/*' : 'video/*'}
                 onChange={handleFileChange}
               />
+            </div>
+          )}
+
+          {/* Paste zone — sadece resim tabında */}
+          {activeTab === 'image' && (
+            <div style={s.inputGroup}>
+              <label style={s.label}>veya Panodan Yapıştır</label>
+              <div
+                style={{
+                  ...s.pasteZone,
+                  ...(pastePreview ? s.pasteZoneActive : {}),
+                }}
+                tabIndex={0}
+                onPaste={handlePasteZone}
+                onClick={e => e.currentTarget.focus()}
+              >
+                {pastePreview ? (
+                  <div style={{ position: 'relative', display: 'inline-block' }}>
+                    <img src={pastePreview} alt="yapıştırılan resim" style={{ maxWidth: '100%', maxHeight: '160px', borderRadius: '6px', display: 'block' }} />
+                    <button
+                      style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.7)', border: 'none', color: '#fff', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', padding: '2px 6px' }}
+                      onClick={e => { e.stopPropagation(); setFile(null); setPastePreview(null) }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <span style={{ fontSize: '13px', color: '#555' }}>
+                    Tıkla ve <kbd style={{ background: '#222', border: '1px solid #444', borderRadius: '3px', padding: '1px 5px', fontSize: '11px', color: '#aaa' }}>Ctrl+V</kbd> ile yapıştır
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -460,8 +579,8 @@ const s = {
     color: '#fff',
     padding: '28px',
     borderRadius: '16px',
-    width: '460px',
-    maxHeight: '88vh',
+    width: '720px',
+    maxHeight: '92vh',
     overflowY: 'auto',
     boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
     border: '1px solid #2a2a2a',
@@ -522,6 +641,52 @@ const s = {
     cursor: 'pointer',
     fontSize: '12px',
     flexShrink: 0,
+  },
+  editBtn: {
+    padding: '3px 10px',
+    backgroundColor: 'transparent',
+    border: '1px solid #2a4a6b',
+    color: '#60a5fa',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    flexShrink: 0,
+  },
+  inlineEditor: {
+    padding: '10px 0 12px',
+  },
+  pasteZone: {
+    width: '100%',
+    minHeight: '80px',
+    border: '2px dashed #2a2a2a',
+    borderRadius: '8px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    padding: '16px',
+    boxSizing: 'border-box',
+    outline: 'none',
+    transition: 'border-color 0.15s',
+  },
+  pasteZoneActive: {
+    border: '2px dashed #3a5a3a',
+    backgroundColor: '#0a120a',
+  },
+  inlineTextarea: {
+    width: '100%',
+    height: '300px',
+    padding: '10px 12px',
+    backgroundColor: '#0a0a0a',
+    border: '1px solid #2a2a2a',
+    borderRadius: '8px',
+    color: '#fff',
+    fontSize: '13px',
+    fontFamily: 'monospace',
+    lineHeight: '1.6',
+    resize: 'vertical',
+    outline: 'none',
+    boxSizing: 'border-box',
   },
   tabs: {
     display: 'flex',
