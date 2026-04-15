@@ -46,7 +46,7 @@ export function EditModal() {
 
   React.useEffect(() => {
     const probeAspectRatio = (sourceUrl, type) => {
-      if (type === 'youtube') {
+      if (type === 'youtube' || type === 'embed') {
         setNaturalRatio(16/9)
         setHeight(w => Number((w / (16/9)).toFixed(2)))
         return
@@ -79,7 +79,7 @@ export function EditModal() {
       const objectUrl = URL.createObjectURL(file)
       probeAspectRatio(objectUrl, activeTab)
       return () => URL.revokeObjectURL(objectUrl)
-    } else if (activeTab === 'youtube') {
+    } else if (activeTab === 'youtube' || activeTab === 'embed') {
       probeAspectRatio(url, activeTab)
     } else if (url && url.length > 5 && url.startsWith('http')) {
       probeAspectRatio(url, activeTab)
@@ -189,7 +189,7 @@ export function EditModal() {
       }
 
       // Download external URL server-side to avoid CORS
-      if (!file && resolvedUrl && resolvedType !== 'youtube') {
+      if (!file && resolvedUrl && resolvedType !== 'youtube' && resolvedType !== 'embed') {
         const r = await fetch('/api/fetch-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -342,7 +342,7 @@ export function EditModal() {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '6px', flexShrink: 0, alignItems: 'center' }}>
-                    {m.type === 'youtube' && (
+                    {(m.type === 'youtube' || m.type === 'embed') && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#0d0d0d', border: '1px solid #2a2a2a', borderRadius: '6px', padding: '3px 8px', maxWidth: '200px' }}>
                         <span style={{ fontSize: '11px', color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                           {m.url}
@@ -427,6 +427,12 @@ export function EditModal() {
           >
             📝 Metin
           </button>
+          <button
+            style={activeTab === 'embed' ? s.activeTab : s.tab}
+            onClick={() => setActiveTab('embed')}
+          >
+            🌐 Site
+          </button>
         </div>
 
         {/* Form */}
@@ -449,7 +455,7 @@ export function EditModal() {
           {activeTab !== 'markdown' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
-              {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : 'YouTube Linki (veya iframe)'}
+              {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
             </label>
             <input
               style={{ ...s.input, opacity: file ? 0.4 : 1 }}
@@ -461,16 +467,21 @@ export function EditModal() {
                   ? 'https://example.com/image.jpg'
                   : activeTab === 'video'
                   ? 'https://example.com/video.mp4'
+                  : activeTab === 'embed'
+                  ? 'https://example.com'
                   : 'https://youtube.com/watch?v=... veya <iframe...>'
               }
               disabled={!!file}
             />
+            {activeTab === 'embed' && (
+              <p style={s.note}>⚠ Bazı siteler iframe'e izin vermez (Google, Twitter vb.)</p>
+            )}
             {file && <p style={s.note}>URL devre dışı — dosya seçildi</p>}
           </div>
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
