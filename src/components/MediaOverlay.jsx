@@ -108,6 +108,36 @@ function YoutubeMesh({ url, width, height }) {
   )
 }
 
+function EmbedMesh({ url, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+  const pxWidth = 1920
+  const pxHeight = Math.round(1920 * (h / w))
+  const scaleFactor = w * 40 / pxWidth
+
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0.1} color="blue" depthWrite={false} side={THREE.DoubleSide} />
+      <Html
+        key={`embed-${w}-${h}`}
+        transform
+        position={[0, 0, 0.01]}
+        scale={scaleFactor}
+        style={{ pointerEvents: 'none' }}
+      >
+        <div style={{ width: `${pxWidth}px`, height: `${pxHeight}px`, backgroundColor: '#111' }}>
+          <iframe
+            src={url}
+            style={{ width: '100%', height: '100%', border: 'none', display: 'block', pointerEvents: 'auto' }}
+            allowFullScreen
+          />
+        </div>
+      </Html>
+    </mesh>
+  )
+}
+
 // 200 px = 1 Three.js birim. Her sütun 600px × 1000px → 3×5 birim.
 const MD_PX_PER_UNIT = 200
 const MD_COL_PX_W = 600
@@ -197,8 +227,9 @@ export function MediaOverlay({ type, url, width, height, position, rotation, con
   const isVideo = type === 'video'
   const isYoutube = type === 'youtube'
   const isMarkdown = type === 'markdown'
+  const isEmbed = type === 'embed'
   // Proxy might append query params, so we cleanly check if format is likely GIF
-  const isGif = !isVideo && !isYoutube && !isMarkdown && typeof url === 'string' && url.toLowerCase().includes('.gif')
+  const isGif = !isVideo && !isYoutube && !isMarkdown && !isEmbed && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   // Tile'ın sol alt köşesine sabitlemek için gereken yerel eksen kaydırması
   const offsetX = (width - 1) / 2
@@ -210,13 +241,15 @@ export function MediaOverlay({ type, url, width, height, position, rotation, con
       <group position={[offsetX, offsetY, 0]}>
         {isMarkdown ? (
           <MarkdownMesh content={content} width={width} height={height} />
+        ) : isYoutube ? (
+          <YoutubeMesh url={url} width={width} height={height} />
+        ) : isEmbed ? (
+          <EmbedMesh url={url} width={width} height={height} />
         ) : (
           <TextureErrorBoundary width={width} height={height}>
             <Suspense fallback={<LoadingMesh width={width} height={height} />}>
               {isVideo ? (
                 <VideoMesh url={url} width={width} height={height} />
-              ) : isYoutube ? (
-                <YoutubeMesh url={url} width={width} height={height} />
               ) : isGif ? (
                 <GifMesh url={url} width={width} height={height} />
               ) : (

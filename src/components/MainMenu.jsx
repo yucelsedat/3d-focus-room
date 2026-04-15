@@ -246,9 +246,25 @@ export function MainMenu() {
           </div>
         )}
 
-        {/* Hint */}
+        {/* Klavye kılavuzu */}
         {view === 'main' && (
-          <div style={s.hint}>Q tuşu ile menüyü aç/kapat</div>
+          <div style={s.keysBox}>
+            <div style={s.keysTitle}>Klavye Kısayolları</div>
+            <div style={s.keysGrid}>
+              {[
+                ['W A S D', 'Hareket et'],
+                ['Mouse', 'Etrafına bak'],
+                ['E', 'Tile\'a medya ekle / düzenle'],
+                ['R', 'Kapı aç/kapat · Zemin değiştir'],
+                ['Q', 'Bu menüyü aç / kapat'],
+              ].map(([key, desc]) => (
+                <div key={key} style={s.keyRow}>
+                  <span style={s.keyBadge}>{key}</span>
+                  <span style={s.keyDesc}>{desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -272,7 +288,7 @@ const s = {
     color: '#fff',
     padding: '36px',
     borderRadius: '20px',
-    width: '400px',
+    width: '580px',
     border: '1px solid #2a2a2a',
     boxShadow: '0 24px 60px rgba(0,0,0,0.7)',
     fontFamily: 'Inter, system-ui, sans-serif',
@@ -443,11 +459,45 @@ const s = {
     textAlign: 'center',
     padding: '20px 0',
   },
-  hint: {
-    marginTop: '20px',
-    textAlign: 'center',
+  keysBox: {
+    marginTop: '24px',
+    padding: '16px',
+    background: '#0d0d0d',
+    border: '1px solid #222',
+    borderRadius: '12px',
+  },
+  keysTitle: {
     fontSize: '11px',
-    color: '#444',
-    letterSpacing: '0.5px',
+    color: '#555',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    marginBottom: '12px',
+  },
+  keysGrid: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  keyRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  keyBadge: {
+    display: 'inline-block',
+    minWidth: '80px',
+    padding: '3px 8px',
+    background: '#1a1a1a',
+    border: '1px solid #333',
+    borderRadius: '5px',
+    fontSize: '11px',
+    color: '#ccc',
+    fontFamily: 'monospace',
+    textAlign: 'center',
+    flexShrink: 0,
+  },
+  keyDesc: {
+    fontSize: '12px',
+    color: '#666',
   },
 }
