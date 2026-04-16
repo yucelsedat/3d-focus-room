@@ -7,6 +7,7 @@ import { Player } from './components/Player'
 import { Crosshair } from './components/Crosshair'
 import { EditModal } from './components/EditModal'
 import { RoomModal } from './components/RoomModal'
+import { OuterWalls } from './components/OuterWalls'
 import { MainMenu } from './components/MainMenu'
 import { MediaManager } from './components/MediaManager'
 import { KeyHandler } from './components/KeyHandler'
@@ -85,6 +86,7 @@ function App() {
             <OutdoorFloor />
             <Grid />
             <Walls />
+            <OuterWalls />
             <Player />
             <KeyHandler />
           </Suspense>
