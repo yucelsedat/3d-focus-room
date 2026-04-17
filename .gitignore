@@ -26,3 +26,8 @@ dist-ssr
 # User Media
 public/uploads/*
 public/data/media.json
+
+# SQLite journal files (dev.db itself is kept for data persistence)
+prisma/*.db-journal
+prisma/*.db-shm
+prisma/*.db-wal

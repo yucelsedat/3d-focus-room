@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Room {
+  id        String   @id
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  media     Media[]
+  doors     Door[]
+  floor     Floor?
+}
+
+model Media {
+  id       BigInt  @id
+  roomId   String
+  tileId   String
+  type     String
+  url      String?
+  content  String?
+  width    Float
+  height   Float
+  posX     Float
+  posY     Float
+  posZ     Float
+  rotX     Float
+  rotY     Float
+  rotZ     Float
+  rotOrder String  @default("XYZ")
+  room     Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+}
+
+model Door {
+  id     Int    @id @default(autoincrement())
+  roomId String
+  doorId Int
+  room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, doorId])
+}
+
+model Floor {
+  roomId  String @id
+  texture String @default("zemin.png")
+  room    Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+}

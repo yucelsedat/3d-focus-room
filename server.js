@@ -4,61 +4,70 @@ import path from 'path';
 import fs from 'fs';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
+import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
+import { PrismaClient } from '@prisma/client';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename).replace('/src/server', '');
 
+// ─── Prisma ───────────────────────────────────────────────────────────────────
+const DB_PATH = path.join(__dirname, 'prisma/dev.db');
+const adapter = new PrismaBetterSqlite3({ url: 'file:' + DB_PATH });
+const prisma = new PrismaClient({ adapter });
+
+// Serialize media row → frontend shape (position/rotation arrays, id as number)
+function serializeMedia(m) {
+  return {
+    id: Number(m.id),
+    tileId: m.tileId,
+    type: m.type,
+    url: m.url ?? undefined,
+    content: m.content ?? undefined,
+    width: m.width,
+    height: m.height,
+    position: [m.posX, m.posY, m.posZ],
+    rotation: [m.rotX, m.rotY, m.rotZ, m.rotOrder],
+  };
+}
+
+// ─── Express setup ────────────────────────────────────────────────────────────
 const app = express();
 const port = 5001;
 
 app.use(cors());
 app.use(express.json());
 
-// ─── Directory helpers ────────────────────────────────────────────────────────
+// Ensure upload dirs exist
 const ensureDir = (dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 };
 ensureDir('public/uploads/images');
 ensureDir('public/uploads/videos');
-ensureDir('public/data');
-ensureDir('public/data/rooms');
-
-// ─── Boot-time migration ──────────────────────────────────────────────────────
-// If the flat files still exist at public/data/{media,doors,floor}.json,
-// move them into the default room folder so the old data is preserved.
-const ROOMS_META = 'public/data/rooms.json';
-const DEFAULT_ROOM_DIR = 'public/data/rooms/default';
-
-if (!fs.existsSync(ROOMS_META)) {
-  ensureDir(DEFAULT_ROOM_DIR);
-
-  const legacyMedia = 'public/data/media.json';
-  const legacyDoors = 'public/data/doors.json';
-  const legacyFloor = 'public/data/floor.json';
-
-  if (fs.existsSync(legacyMedia)) fs.renameSync(legacyMedia, `${DEFAULT_ROOM_DIR}/media.json`);
-  else fs.writeFileSync(`${DEFAULT_ROOM_DIR}/media.json`, '[]');
-
-  if (fs.existsSync(legacyDoors)) fs.renameSync(legacyDoors, `${DEFAULT_ROOM_DIR}/doors.json`);
-  else fs.writeFileSync(`${DEFAULT_ROOM_DIR}/doors.json`, '[]');
-
-  if (fs.existsSync(legacyFloor)) fs.renameSync(legacyFloor, `${DEFAULT_ROOM_DIR}/floor.json`);
-  else fs.writeFileSync(`${DEFAULT_ROOM_DIR}/floor.json`, JSON.stringify({ texture: 'zemin.png' }));
-
-  const now = new Date().toISOString();
-  fs.writeFileSync(ROOMS_META, JSON.stringify([
-    { id: 'default', name: 'Varsayılan Oda', createdAt: now, updatedAt: now }
-  ], null, 2));
-
-  console.log('[server] Migrated legacy data → rooms/default/');
-}
 
 // ─── Active room ──────────────────────────────────────────────────────────────
 let activeRoomId = 'default';
 
-const DATA_PATH  = () => `public/data/rooms/${activeRoomId}/media.json`;
-const DOORS_PATH = () => `public/data/rooms/${activeRoomId}/doors.json`;
-const FLOOR_PATH = () => `public/data/rooms/${activeRoomId}/floor.json`;
+// ─── Boot-time: auto-migrate JSON → SQLite if DB is empty ────────────────────
+async function bootMigrate() {
+  const count = await prisma.room.count();
+  if (count === 0) {
+    const ROOMS_META = path.join(__dirname, 'public/data/rooms.json');
+    if (fs.existsSync(ROOMS_META)) {
+      console.log('[server] DB empty, running JSON→SQLite migration...');
+      const { default: migrate } = await import('./prisma/migrate.js');
+      await migrate();
+    } else {
+      // Fresh start: create default room
+      await prisma.room.create({
+        data: { id: 'default', name: 'Varsayılan Oda' },
+      });
+      await prisma.floor.create({
+        data: { roomId: 'default', texture: 'zemin.png' },
+      });
+      console.log('[server] Created default room in DB');
+    }
+  }
+}
 
 // ─── Multer ───────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
@@ -70,41 +79,31 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${file.originalname}`);
   }
 });
-
 const upload = multer({ storage });
 
 // ─── Rooms API ────────────────────────────────────────────────────────────────
 
-app.get('/api/rooms', (req, res) => {
-  const rooms = JSON.parse(fs.readFileSync(ROOMS_META, 'utf8'));
+app.get('/api/rooms', async (req, res) => {
+  const rooms = await prisma.room.findMany({ orderBy: { createdAt: 'asc' } });
   res.json(rooms);
 });
 
-app.post('/api/rooms', (req, res) => {
+app.post('/api/rooms', async (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'İsim gerekli' });
 
   const id = `room-${Date.now()}`;
-  const now = new Date().toISOString();
-  const newRoom = { id, name: name.trim(), createdAt: now, updatedAt: now };
+  const room = await prisma.room.create({
+    data: { id, name: name.trim() },
+  });
+  await prisma.floor.create({ data: { roomId: id, texture: 'zemin.png' } });
 
-  const dir = `public/data/rooms/${id}`;
-  ensureDir(dir);
-  fs.writeFileSync(`${dir}/media.json`, '[]');
-  fs.writeFileSync(`${dir}/doors.json`, '[]');
-  fs.writeFileSync(`${dir}/floor.json`, JSON.stringify({ texture: 'zemin.png' }));
-
-  const rooms = JSON.parse(fs.readFileSync(ROOMS_META, 'utf8'));
-  rooms.push(newRoom);
-  fs.writeFileSync(ROOMS_META, JSON.stringify(rooms, null, 2));
-
-  res.json(newRoom);
+  res.json(room);
 });
 
-app.post('/api/rooms/:id/activate', (req, res) => {
+app.post('/api/rooms/:id/activate', async (req, res) => {
   const { id } = req.params;
-  const rooms = JSON.parse(fs.readFileSync(ROOMS_META, 'utf8'));
-  const room = rooms.find(r => r.id === id);
+  const room = await prisma.room.findUnique({ where: { id } });
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
 
   activeRoomId = id;
@@ -112,98 +111,108 @@ app.post('/api/rooms/:id/activate', (req, res) => {
   res.json({ ok: true, room });
 });
 
-app.put('/api/rooms/:id/name', (req, res) => {
+app.put('/api/rooms/:id/name', async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'İsim gerekli' });
 
-  const rooms = JSON.parse(fs.readFileSync(ROOMS_META, 'utf8'));
-  const room = rooms.find(r => r.id === id);
+  const room = await prisma.room.findUnique({ where: { id } });
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
 
-  room.name = name.trim();
-  room.updatedAt = new Date().toISOString();
-  fs.writeFileSync(ROOMS_META, JSON.stringify(rooms, null, 2));
-  res.json(room);
+  const updated = await prisma.room.update({
+    where: { id },
+    data: { name: name.trim() },
+  });
+  res.json(updated);
 });
 
-app.delete('/api/rooms/:id', (req, res) => {
+app.delete('/api/rooms/:id', async (req, res) => {
   const { id } = req.params;
   if (id === 'default') return res.status(400).json({ error: 'Varsayılan oda silinemez' });
 
-  const rooms = JSON.parse(fs.readFileSync(ROOMS_META, 'utf8'));
-  const idx = rooms.findIndex(r => r.id === id);
-  if (idx === -1) return res.status(404).json({ error: 'Oda bulunamadı' });
+  const room = await prisma.room.findUnique({ where: { id } });
+  if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
 
-  // Remove room directory
-  const dir = `public/data/rooms/${id}`;
-  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+  // Delete uploaded files for this room's media
+  const mediaItems = await prisma.media.findMany({ where: { roomId: id } });
+  for (const m of mediaItems) {
+    if (m.url && m.url.startsWith('/uploads/')) {
+      const filePath = path.join(__dirname, 'public', m.url);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+  }
 
-  rooms.splice(idx, 1);
-  fs.writeFileSync(ROOMS_META, JSON.stringify(rooms, null, 2));
+  // onDelete: Cascade removes media/doors/floor automatically
+  await prisma.room.delete({ where: { id } });
 
-  // If this was the active room, fall back to default
   if (activeRoomId === id) activeRoomId = 'default';
-
   res.json({ ok: true });
 });
 
 // ─── Floor API ────────────────────────────────────────────────────────────────
 
-app.get('/api/floor', (req, res) => {
-  if (!fs.existsSync(FLOOR_PATH())) fs.writeFileSync(FLOOR_PATH(), JSON.stringify({ texture: 'zemin.png' }))
-  res.json(JSON.parse(fs.readFileSync(FLOOR_PATH(), 'utf8')))
-})
+app.get('/api/floor', async (req, res) => {
+  let floor = await prisma.floor.findUnique({ where: { roomId: activeRoomId } });
+  if (!floor) {
+    floor = await prisma.floor.create({ data: { roomId: activeRoomId, texture: 'zemin.png' } });
+  }
+  res.json({ texture: floor.texture });
+});
 
-app.post('/api/floor', (req, res) => {
-  const { texture } = req.body
-  fs.writeFileSync(FLOOR_PATH(), JSON.stringify({ texture }))
-  res.json({ texture })
-})
+app.post('/api/floor', async (req, res) => {
+  const { texture } = req.body;
+  const floor = await prisma.floor.upsert({
+    where: { roomId: activeRoomId },
+    update: { texture },
+    create: { roomId: activeRoomId, texture },
+  });
+  res.json({ texture: floor.texture });
+});
 
 app.get('/api/floor-textures', (req, res) => {
-  const dir = 'public/textures'
+  const dir = 'public/textures';
   const files = fs.readdirSync(dir)
-    .filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f) && f !== 'duvar.png')
-  res.json(files)
-})
+    .filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f) && f !== 'duvar.png');
+  res.json(files);
+});
 
 // ─── Doors API ────────────────────────────────────────────────────────────────
 
-app.get('/api/doors', (req, res) => {
-  if (!fs.existsSync(DOORS_PATH())) fs.writeFileSync(DOORS_PATH(), '[]')
-  res.json(JSON.parse(fs.readFileSync(DOORS_PATH(), 'utf8')))
-})
+app.get('/api/doors', async (req, res) => {
+  const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
+  res.json(doors.map(d => d.doorId));
+});
 
-app.post('/api/doors', (req, res) => {
-  const { ids } = req.body
-  if (!fs.existsSync(DOORS_PATH())) fs.writeFileSync(DOORS_PATH(), '[]')
-  const data = JSON.parse(fs.readFileSync(DOORS_PATH(), 'utf8'))
-  const updated = [...new Set([...data, ...ids])]
-  fs.writeFileSync(DOORS_PATH(), JSON.stringify(updated))
-  res.json(updated)
-})
+app.post('/api/doors', async (req, res) => {
+  const { ids } = req.body;
+  for (const doorId of ids) {
+    await prisma.door.upsert({
+      where: { roomId_doorId: { roomId: activeRoomId, doorId: parseInt(doorId) } },
+      update: {},
+      create: { roomId: activeRoomId, doorId: parseInt(doorId) },
+    });
+  }
+  const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
+  res.json(doors.map(d => d.doorId));
+});
 
-app.delete('/api/doors', (req, res) => {
-  const { ids } = req.body
-  if (!fs.existsSync(DOORS_PATH())) return res.json([])
-  const data = JSON.parse(fs.readFileSync(DOORS_PATH(), 'utf8'))
-  const updated = data.filter(id => !ids.includes(id))
-  fs.writeFileSync(DOORS_PATH(), JSON.stringify(updated))
-  res.json(updated)
-})
+app.delete('/api/doors', async (req, res) => {
+  const { ids } = req.body;
+  await prisma.door.deleteMany({
+    where: { roomId: activeRoomId, doorId: { in: ids.map(Number) } },
+  });
+  const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
+  res.json(doors.map(d => d.doorId));
+});
 
 // ─── Media API ────────────────────────────────────────────────────────────────
 
-app.get('/api/media', (req, res) => {
-  if (!fs.existsSync(DATA_PATH())) {
-    fs.writeFileSync(DATA_PATH(), '[]');
-  }
-  const data = fs.readFileSync(DATA_PATH(), 'utf8');
-  res.json(JSON.parse(data));
+app.get('/api/media', async (req, res) => {
+  const media = await prisma.media.findMany({ where: { roomId: activeRoomId } });
+  res.json(media.map(serializeMedia));
 });
 
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', upload.single('file'), async (req, res) => {
   const { tileId, type, width, height, position, rotation, url } = req.body;
 
   let mediaUrl = url;
@@ -212,25 +221,32 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     mediaUrl = `/uploads/${folder}/${req.file.filename}`;
   }
 
-  const newItem = {
-    id: Date.now(),
-    tileId,
-    type,
-    url: mediaUrl,
-    width: parseFloat(width) || 1,
-    height: parseFloat(height) || 1,
-    position: JSON.parse(position),
-    rotation: JSON.parse(rotation)
-  };
+  const pos = JSON.parse(position);
+  const rot = JSON.parse(rotation);
+  const id = BigInt(Date.now());
 
-  const data = JSON.parse(fs.readFileSync(DATA_PATH(), 'utf8') || '[]');
-  data.push(newItem);
-  fs.writeFileSync(DATA_PATH(), JSON.stringify(data, null, 2));
+  const media = await prisma.media.create({
+    data: {
+      id,
+      roomId: activeRoomId,
+      tileId,
+      type,
+      url: mediaUrl || null,
+      width: parseFloat(width) || 1,
+      height: parseFloat(height) || 1,
+      posX: parseFloat(pos[0]) || 0,
+      posY: parseFloat(pos[1]) || 0,
+      posZ: parseFloat(pos[2]) || 0,
+      rotX: parseFloat(rot[0]) || 0,
+      rotY: parseFloat(rot[1]) || 0,
+      rotZ: parseFloat(rot[2]) || 0,
+      rotOrder: String(rot[3] || 'XYZ'),
+    },
+  });
 
-  res.json(newItem);
+  res.json(serializeMedia(media));
 });
 
-// Proxy-download: fetches an external URL server-side and saves it locally.
 app.post('/api/fetch-url', async (req, res) => {
   const { url } = req.body;
   if (!url || !url.startsWith('http')) {
@@ -277,57 +293,66 @@ app.post('/api/fetch-url', async (req, res) => {
   }
 });
 
-app.post('/api/add-text', (req, res) => {
-  const { tileId, content, width, height, position, rotation } = req.body
-  const newItem = {
-    id: Date.now(),
-    tileId,
-    type: 'markdown',
-    content,
-    width: parseFloat(width) || 1,
-    height: parseFloat(height) || 1,
-    position: JSON.parse(position),
-    rotation: JSON.parse(rotation)
-  }
-  const data = JSON.parse(fs.readFileSync(DATA_PATH(), 'utf8') || '[]')
-  data.push(newItem)
-  fs.writeFileSync(DATA_PATH(), JSON.stringify(data, null, 2))
-  res.json(newItem)
-})
+app.post('/api/add-text', async (req, res) => {
+  const { tileId, content, width, height, position, rotation } = req.body;
+  const pos = JSON.parse(position);
+  const rot = JSON.parse(rotation);
+  const id = BigInt(Date.now());
 
-app.put('/api/media/:id', (req, res) => {
-  const id = parseInt(req.params.id)
-  const { width, height, content } = req.body
-  const data = JSON.parse(fs.readFileSync(DATA_PATH(), 'utf8') || '[]')
-  const itemIndex = data.findIndex(m => m.id === id)
+  const media = await prisma.media.create({
+    data: {
+      id,
+      roomId: activeRoomId,
+      tileId,
+      type: 'markdown',
+      content,
+      width: parseFloat(width) || 1,
+      height: parseFloat(height) || 1,
+      posX: parseFloat(pos[0]) || 0,
+      posY: parseFloat(pos[1]) || 0,
+      posZ: parseFloat(pos[2]) || 0,
+      rotX: parseFloat(rot[0]) || 0,
+      rotY: parseFloat(rot[1]) || 0,
+      rotZ: parseFloat(rot[2]) || 0,
+      rotOrder: String(rot[3] || 'XYZ'),
+    },
+  });
 
-  if (itemIndex === -1) return res.status(404).json({ error: 'Not found' })
+  res.json(serializeMedia(media));
+});
 
-  if (width !== undefined) data[itemIndex].width = parseFloat(width) || data[itemIndex].width;
-  if (height !== undefined) data[itemIndex].height = parseFloat(height) || data[itemIndex].height;
-  if (content !== undefined) data[itemIndex].content = content;
+app.put('/api/media/:id', async (req, res) => {
+  const id = BigInt(req.params.id);
+  const { width, height, content } = req.body;
 
-  fs.writeFileSync(DATA_PATH(), JSON.stringify(data, null, 2))
-  res.json(data[itemIndex])
-})
+  const existing = await prisma.media.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: 'Not found' });
 
-app.delete('/api/media/:id', (req, res) => {
-  const id = parseInt(req.params.id)
-  const data = JSON.parse(fs.readFileSync(DATA_PATH(), 'utf8') || '[]')
-  const item = data.find((m) => m.id === id)
+  const data = {};
+  if (width !== undefined) data.width = parseFloat(width) || existing.width;
+  if (height !== undefined) data.height = parseFloat(height) || existing.height;
+  if (content !== undefined) data.content = content;
 
-  if (!item) return res.status(404).json({ error: 'Not found' })
+  const updated = await prisma.media.update({ where: { id }, data });
+  res.json(serializeMedia(updated));
+});
+
+app.delete('/api/media/:id', async (req, res) => {
+  const id = BigInt(req.params.id);
+  const item = await prisma.media.findUnique({ where: { id } });
+  if (!item) return res.status(404).json({ error: 'Not found' });
 
   if (item.url && item.url.startsWith('/uploads/')) {
-    const filePath = path.join(__dirname, 'public', item.url)
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    const filePath = path.join(__dirname, 'public', item.url);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 
-  const updated = data.filter((m) => m.id !== id)
-  fs.writeFileSync(DATA_PATH(), JSON.stringify(updated, null, 2))
-  res.json({ success: true })
-})
+  await prisma.media.delete({ where: { id } });
+  res.json({ success: true });
+});
 
+// ─── Start ────────────────────────────────────────────────────────────────────
+await bootMigrate();
 app.listen(port, () => {
   console.log(`Backend server running at http://localhost:${port}`);
 });
