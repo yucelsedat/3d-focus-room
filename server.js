@@ -93,10 +93,10 @@ app.post('/api/rooms', async (req, res) => {
   if (!name || !name.trim()) return res.status(400).json({ error: 'İsim gerekli' });
 
   const id = `room-${Date.now()}`;
-  const room = await prisma.room.create({
-    data: { id, name: name.trim() },
-  });
-  await prisma.floor.create({ data: { roomId: id, texture: 'zemin.png' } });
+  const [room] = await prisma.$transaction([
+    prisma.room.create({ data: { id, name: name.trim() } }),
+    prisma.floor.create({ data: { roomId: id, texture: 'zemin.png' } }),
+  ]);
 
   res.json(room);
 });
@@ -322,7 +322,8 @@ app.post('/api/add-text', async (req, res) => {
 });
 
 app.put('/api/media/:id', async (req, res) => {
-  const id = BigInt(req.params.id);
+  let id;
+  try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
   const { width, height, content } = req.body;
 
   const existing = await prisma.media.findUnique({ where: { id } });
@@ -338,7 +339,8 @@ app.put('/api/media/:id', async (req, res) => {
 });
 
 app.delete('/api/media/:id', async (req, res) => {
-  const id = BigInt(req.params.id);
+  let id;
+  try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
   const item = await prisma.media.findUnique({ where: { id } });
   if (!item) return res.status(404).json({ error: 'Not found' });
 
