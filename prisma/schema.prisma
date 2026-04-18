@@ -8,17 +8,19 @@ datasource db {
 }
 
 model Room {
-  id         String         @id
-  name       String
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
-  parentId   String?
-  doors      Door[]
-  floor      Floor?
-  media      Media[]
-  parent     Room?          @relation("RoomTree", fields: [parentId], references: [id])
-  children   Room[]         @relation("RoomTree")
-  categories RoomCategory[]
+  id           String         @id
+  name         String
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  parentId     String?
+  doors        Door[]
+  floor        Floor?
+  media        Media[]
+  parent       Room?          @relation("RoomTree", fields: [parentId], references: [id])
+  children     Room[]         @relation("RoomTree")
+  categories   RoomCategory[]
+  specialDoors SpecialDoor[]  @relation("SpecialDoorSource")
+  targetedBy   SpecialDoor[]  @relation("SpecialDoorTarget")
 }
 
 model Media {
@@ -68,4 +70,15 @@ model RoomCategory {
   room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@id([roomId, categoryId])
+}
+
+model SpecialDoor {
+  id           Int    @id @default(autoincrement())
+  roomId       String
+  anchorId     Int
+  targetRoomId String
+  room         Room   @relation("SpecialDoorSource", fields: [roomId], references: [id], onDelete: Cascade)
+  target       Room   @relation("SpecialDoorTarget", fields: [targetRoomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, anchorId])
 }

@@ -12,6 +12,7 @@ export const useStore = create((set) => ({
   currentRoomId: 'default',
   currentRoomName: 'Varsayılan Oda',
   rooms: [],
+  specialDoors: [],
 
   openModal: (tile) => set({ activeModal: true, selectedTile: tile }),
   closeModal: () => set({ activeModal: false, selectedTile: null }),
@@ -35,4 +36,5 @@ export const useStore = create((set) => ({
 
   setCurrentRoom: (id, name) => set({ currentRoomId: id, currentRoomName: name }),
   setRooms: (rooms) => set({ rooms }),
+  setSpecialDoors: (specialDoors) => set({ specialDoors }),
 }))

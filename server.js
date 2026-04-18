@@ -81,6 +81,31 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// ─── Special door helpers ─────────────────────────────────────────────────────
+
+const GRID_SIZE_SRV = 40;
+
+function getSpecialDoorInstanceIds(anchorId) {
+  const face = anchorId % 4;
+  const j    = Math.floor((anchorId % (GRID_SIZE_SRV * 4)) / 4);
+  const ids  = [];
+  for (let dh = 0; dh < 3; dh++) {
+    for (let dj = 0; dj < 2; dj++) {
+      const jj = j + dj;
+      if (jj >= GRID_SIZE_SRV) continue;
+      ids.push((dh * GRID_SIZE_SRV * 4) + (jj * 4) + face);
+    }
+  }
+  return ids;
+}
+
+function getReturnAnchorId(anchorId) {
+  const face = anchorId % 4;
+  const j    = Math.floor((anchorId % (GRID_SIZE_SRV * 4)) / 4);
+  const oppositeFace = face === 0 ? 1 : face === 1 ? 0 : face === 2 ? 3 : 2;
+  return j * 4 + oppositeFace;
+}
+
 // ─── Rooms API ────────────────────────────────────────────────────────────────
 
 function serializeRoom(r) {
@@ -300,6 +325,62 @@ app.delete('/api/doors', async (req, res) => {
   });
   const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
   res.json(doors.map(d => d.doorId));
+});
+
+// ─── Special Doors API ───────────────────────────────────────────────────────
+
+function serializeSpecialDoor(sd) {
+  return {
+    id: sd.id,
+    anchorId: sd.anchorId,
+    targetRoomId: sd.targetRoomId,
+    targetRoomName: sd.target.name,
+    instanceIds: getSpecialDoorInstanceIds(sd.anchorId),
+  };
+}
+
+app.get('/api/special-doors', async (req, res) => {
+  const doors = await prisma.specialDoor.findMany({
+    where: { roomId: activeRoomId },
+    include: { target: { select: { id: true, name: true } } },
+  });
+  res.json(doors.map(serializeSpecialDoor));
+});
+
+app.post('/api/special-doors', async (req, res) => {
+  const { anchorId, childRoomName } = req.body;
+  if (!childRoomName?.trim()) return res.status(400).json({ error: 'Oda adı gerekli' });
+
+  const childId = `room-${Date.now()}`;
+  const returnAnchorId = getReturnAnchorId(anchorId);
+
+  await prisma.$transaction([
+    prisma.room.create({ data: { id: childId, name: childRoomName.trim(), parentId: activeRoomId } }),
+    prisma.floor.create({ data: { roomId: childId, texture: 'zemin.png' } }),
+    prisma.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId: childId } }),
+    prisma.specialDoor.create({ data: { roomId: childId, anchorId: returnAnchorId, targetRoomId: activeRoomId } }),
+  ]);
+
+  const child = await prisma.room.findUnique({ where: { id: childId }, include: roomInclude });
+  const parentSpecialDoors = await prisma.specialDoor.findMany({
+    where: { roomId: activeRoomId },
+    include: { target: { select: { id: true, name: true } } },
+  });
+  res.json({
+    childRoom: serializeRoom(child),
+    specialDoors: parentSpecialDoors.map(serializeSpecialDoor),
+  });
+});
+
+app.delete('/api/special-doors/:id', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const door = await prisma.specialDoor.findUnique({ where: { id } });
+  if (!door) return res.status(404).json({ error: 'Bulunamadı' });
+  const returnAnchorId = getReturnAnchorId(door.anchorId);
+  await prisma.specialDoor.deleteMany({
+    where: { OR: [{ id }, { roomId: door.targetRoomId, anchorId: returnAnchorId }] },
+  });
+  res.json({ success: true });
 });
 
 // ─── Media API ────────────────────────────────────────────────────────────────

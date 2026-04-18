@@ -11,14 +11,13 @@ import { OuterWalls } from './components/OuterWalls'
 import { MainMenu } from './components/MainMenu'
 import { MediaManager } from './components/MediaManager'
 import { KeyHandler } from './components/KeyHandler'
+import { BlueDoors } from './components/BlueDoor'
 import { useStore } from './store/useStore'
+import { loadRoom } from './utils/loadRoom'
 import './App.css'
 
 function App() {
-  const setWorldMedia   = useStore((state) => state.setWorldMedia)
-  const setHiddenWalls  = useStore((state) => state.setHiddenWalls)
-  const setFloorTexture = useStore((state) => state.setFloorTexture)
-  const setRooms        = useStore((state) => state.setRooms)
+  const setRooms = useStore((state) => state.setRooms)
 
   useEffect(() => {
     fetch('/api/rooms')
@@ -28,25 +27,8 @@ function App() {
   }, [setRooms])
 
   useEffect(() => {
-    fetch('/api/media')
-      .then(res => res.json())
-      .then(data => setWorldMedia(data))
-      .catch(err => console.error('Media load error:', err))
-  }, [setWorldMedia])
-
-  useEffect(() => {
-    fetch('/api/doors')
-      .then(res => res.json())
-      .then(data => setHiddenWalls(data))
-      .catch(err => console.error('Doors load error:', err))
-  }, [setHiddenWalls])
-
-  useEffect(() => {
-    fetch('/api/floor')
-      .then(res => res.json())
-      .then(data => setFloorTexture(data.texture))
-      .catch(err => console.error('Floor load error:', err))
-  }, [setFloorTexture])
+    loadRoom('default', 'Varsayılan Oda').catch(err => console.error('Initial room load error:', err))
+  }, [])
 
   return (
     <KeyboardControls
@@ -87,6 +69,7 @@ function App() {
             <Grid />
             <Walls />
             <OuterWalls />
+            <BlueDoors />
             <Player />
             <KeyHandler />
           </Suspense>
