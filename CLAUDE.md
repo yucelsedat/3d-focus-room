@@ -1,0 +1,1 @@
+git push, merge olaylarını bana sormadan sakın yapma bypass permission da bile bana sor 

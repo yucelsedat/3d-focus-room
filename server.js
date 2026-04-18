@@ -83,32 +83,60 @@ const upload = multer({ storage });
 
 // ─── Rooms API ────────────────────────────────────────────────────────────────
 
+function serializeRoom(r) {
+  return {
+    id: r.id,
+    name: r.name,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    categories: (r.categories ?? []).map(rc => rc.category),
+    parent: r.parent ? { id: r.parent.id, name: r.parent.name } : null,
+    children: (r.children ?? []).map(c => ({ id: c.id, name: c.name })),
+  };
+}
+
+const roomInclude = {
+  categories: { include: { category: true } },
+  parent: true,
+  children: true,
+};
+
 app.get('/api/rooms', async (req, res) => {
-  const rooms = await prisma.room.findMany({ orderBy: { createdAt: 'asc' } });
-  res.json(rooms);
+  const rooms = await prisma.room.findMany({
+    orderBy: { createdAt: 'asc' },
+    include: roomInclude,
+  });
+  res.json(rooms.map(serializeRoom));
 });
 
 app.post('/api/rooms', async (req, res) => {
-  const { name } = req.body;
+  const { name, categoryNames = [], parentId = null } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'İsim gerekli' });
 
   const id = `room-${Date.now()}`;
-  const [room] = await prisma.$transaction([
-    prisma.room.create({ data: { id, name: name.trim() } }),
+
+  const categories = await Promise.all(
+    categoryNames.map(n => prisma.category.upsert({ where: { name: n }, update: {}, create: { name: n } }))
+  );
+
+  await prisma.$transaction([
+    prisma.room.create({ data: { id, name: name.trim(), parentId: parentId || null } }),
     prisma.floor.create({ data: { roomId: id, texture: 'zemin.png' } }),
+    ...categories.map(c => prisma.roomCategory.create({ data: { roomId: id, categoryId: c.id } })),
   ]);
 
-  res.json(room);
+  const room = await prisma.room.findUnique({ where: { id }, include: roomInclude });
+  res.json(serializeRoom(room));
 });
 
 app.post('/api/rooms/:id/activate', async (req, res) => {
   const { id } = req.params;
-  const room = await prisma.room.findUnique({ where: { id } });
+  const room = await prisma.room.findUnique({ where: { id }, include: roomInclude });
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
 
   activeRoomId = id;
   console.log(`[server] Active room → ${id} (${room.name})`);
-  res.json({ ok: true, room });
+  res.json({ ok: true, room: serializeRoom(room) });
 });
 
 app.put('/api/rooms/:id/name', async (req, res) => {
@@ -147,6 +175,75 @@ app.delete('/api/rooms/:id', async (req, res) => {
 
   if (activeRoomId === id) activeRoomId = 'default';
   res.json({ ok: true });
+});
+
+app.get('/api/rooms/:id/details', async (req, res) => {
+  const room = await prisma.room.findUnique({
+    where: { id: req.params.id },
+    include: roomInclude,
+  });
+  if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
+  res.json(serializeRoom(room));
+});
+
+// ─── helper: collect all ancestor IDs ────────────────────────────────────────
+async function getAllAncestors(roomId, visited = new Set()) {
+  const room = await prisma.room.findUnique({ where: { id: roomId }, select: { parentId: true } });
+  if (room?.parentId && !visited.has(room.parentId)) {
+    visited.add(room.parentId);
+    await getAllAncestors(room.parentId, visited);
+  }
+  return visited;
+}
+
+app.put('/api/rooms/:id/settings', async (req, res) => {
+  const { id } = req.params;
+  const { name, categoryNames, parentId } = req.body;
+
+  const room = await prisma.room.findUnique({ where: { id } });
+  if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
+
+  if (parentId) {
+    if (parentId === id) return res.status(400).json({ error: "Oda kendisinin parent'ı olamaz" });
+    const ancestors = await getAllAncestors(parentId);
+    if (ancestors.has(id)) return res.status(400).json({ error: "Dairesel ilişki: bu oda zaten seçilen odanın atası" });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const data = {};
+    if (name && name.trim()) data.name = name.trim();
+    if (parentId !== undefined) data.parentId = parentId || null;
+    if (Object.keys(data).length) await tx.room.update({ where: { id }, data });
+
+    if (Array.isArray(categoryNames)) {
+      await tx.roomCategory.deleteMany({ where: { roomId: id } });
+      const cats = await Promise.all(
+        categoryNames.map(n => tx.category.upsert({ where: { name: n }, update: {}, create: { name: n } }))
+      );
+      for (const c of cats) await tx.roomCategory.create({ data: { roomId: id, categoryId: c.id } });
+    }
+  });
+
+  const updated = await prisma.room.findUnique({ where: { id }, include: roomInclude });
+  res.json(serializeRoom(updated));
+});
+
+// ─── Categories API ───────────────────────────────────────────────────────────
+
+app.get('/api/categories', async (req, res) => {
+  const cats = await prisma.category.findMany({ orderBy: { name: 'asc' } });
+  res.json(cats);
+});
+
+app.post('/api/categories', async (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'İsim gerekli' });
+  const cat = await prisma.category.upsert({
+    where: { name: name.trim() },
+    update: {},
+    create: { name: name.trim() },
+  });
+  res.json(cat);
 });
 
 // ─── Floor API ────────────────────────────────────────────────────────────────
