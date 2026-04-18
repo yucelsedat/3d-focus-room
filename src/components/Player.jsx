@@ -135,37 +135,37 @@ export function Player() {
       // Front wall (face=0, z=-20): walking inside→outside
       if (face === 0 && prev.z > -WALL_OFFSET && nz <= -WALL_OFFSET) {
         const pj = Math.floor(nx + WALL_OFFSET)
-        if (pj === j - 1 || pj === j) {
+        if (pj === j || pj === j + 1) {
           crossed = true
-          spawnX = j - WALL_OFFSET
+          spawnX = j - WALL_OFFSET + TILE_SIZE
           spawnZ = WALL_OFFSET - 2
         }
       }
       // Back wall (face=1, z=+20): walking inside→outside
       if (face === 1 && prev.z < WALL_OFFSET && nz >= WALL_OFFSET) {
         const pj = Math.floor(nx + WALL_OFFSET)
-        if (pj === j - 1 || pj === j) {
+        if (pj === j || pj === j + 1) {
           crossed = true
-          spawnX = j - WALL_OFFSET
+          spawnX = j - WALL_OFFSET + TILE_SIZE
           spawnZ = -(WALL_OFFSET - 2)
         }
       }
       // Left wall (face=2, x=-20): walking inside→outside
       if (face === 2 && prev.x > -WALL_OFFSET && nx <= -WALL_OFFSET) {
         const pj = Math.floor(nz + WALL_OFFSET)
-        if (pj === j - 1 || pj === j) {
+        if (pj === j || pj === j + 1) {
           crossed = true
           spawnX = WALL_OFFSET - 2
-          spawnZ = j - WALL_OFFSET
+          spawnZ = j - WALL_OFFSET + TILE_SIZE
         }
       }
       // Right wall (face=3, x=+20): walking inside→outside
       if (face === 3 && prev.x < WALL_OFFSET && nx >= WALL_OFFSET) {
         const pj = Math.floor(nz + WALL_OFFSET)
-        if (pj === j - 1 || pj === j) {
+        if (pj === j || pj === j + 1) {
           crossed = true
           spawnX = -(WALL_OFFSET - 2)
-          spawnZ = j - WALL_OFFSET
+          spawnZ = j - WALL_OFFSET + TILE_SIZE
         }
       }
 
