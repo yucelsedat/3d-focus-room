@@ -5,6 +5,11 @@ import { useStore } from '../store/useStore'
 import { loadRoom } from '../utils/loadRoom'
 import * as THREE from 'three'
 
+function isTyping() {
+  const el = document.activeElement
+  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+}
+
 const MOVE_SPEED  = 5
 const GRID_SIZE   = 40
 const TILE_SIZE   = 1
@@ -42,7 +47,7 @@ export function Player() {
   const specialDoorsRef  = useRef([])
 
   useFrame((state, delta) => {
-    if (teleporting.current) return
+    if (teleporting.current || isTyping()) return
 
     // Keep refs in sync without re-creating each frame
     hiddenSetRef.current   = new Set(hiddenWalls)
@@ -130,37 +135,37 @@ export function Player() {
       // Front wall (face=0, z=-20): walking inside→outside
       if (face === 0 && prev.z > -WALL_OFFSET && nz <= -WALL_OFFSET) {
         const pj = Math.floor(nx + WALL_OFFSET)
-        if (pj === j || pj === j + 1) {
+        if (pj === j - 1 || pj === j) {
           crossed = true
-          spawnX = j - WALL_OFFSET + TILE_SIZE
+          spawnX = j - WALL_OFFSET
           spawnZ = WALL_OFFSET - 2
         }
       }
       // Back wall (face=1, z=+20): walking inside→outside
       if (face === 1 && prev.z < WALL_OFFSET && nz >= WALL_OFFSET) {
         const pj = Math.floor(nx + WALL_OFFSET)
-        if (pj === j || pj === j + 1) {
+        if (pj === j - 1 || pj === j) {
           crossed = true
-          spawnX = j - WALL_OFFSET + TILE_SIZE
+          spawnX = j - WALL_OFFSET
           spawnZ = -(WALL_OFFSET - 2)
         }
       }
       // Left wall (face=2, x=-20): walking inside→outside
       if (face === 2 && prev.x > -WALL_OFFSET && nx <= -WALL_OFFSET) {
         const pj = Math.floor(nz + WALL_OFFSET)
-        if (pj === j || pj === j + 1) {
+        if (pj === j - 1 || pj === j) {
           crossed = true
           spawnX = WALL_OFFSET - 2
-          spawnZ = j - WALL_OFFSET + TILE_SIZE
+          spawnZ = j - WALL_OFFSET
         }
       }
       // Right wall (face=3, x=+20): walking inside→outside
       if (face === 3 && prev.x < WALL_OFFSET && nx >= WALL_OFFSET) {
         const pj = Math.floor(nz + WALL_OFFSET)
-        if (pj === j || pj === j + 1) {
+        if (pj === j - 1 || pj === j) {
           crossed = true
           spawnX = -(WALL_OFFSET - 2)
-          spawnZ = j - WALL_OFFSET + TILE_SIZE
+          spawnZ = j - WALL_OFFSET
         }
       }
 

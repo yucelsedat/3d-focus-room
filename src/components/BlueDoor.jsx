@@ -7,8 +7,9 @@ const TILE_SIZE  = 1
 function doorWorldPos(anchorId) {
   const face = anchorId % 4
   const j    = Math.floor((anchorId % (GRID_SIZE * 4)) / 4)
-  // 2-tile-wide door center: j*1 - 20 + 0.5 + 0.5 = j - 19
-  const pos  = j - WALL_OFFSET + TILE_SIZE
+  // 2-tile-wide door: tile j-1 and tile j (anchor = right tile)
+  // tile j-1 center = j - 20.5, tile j center = j - 19.5, door center = j - 20
+  const pos  = j - WALL_OFFSET
   const y    = 1.5  // center of 3-tile-tall door (h=0,1,2 at y=0.5,1.5,2.5)
   switch (face) {
     case 0: return { position: [pos, y, -WALL_OFFSET], rotation: [0, 0, 0] }

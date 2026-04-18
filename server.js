@@ -90,9 +90,9 @@ function getSpecialDoorInstanceIds(anchorId) {
   const j    = Math.floor((anchorId % (GRID_SIZE_SRV * 4)) / 4);
   const ids  = [];
   for (let dh = 0; dh < 3; dh++) {
-    for (let dj = 0; dj < 2; dj++) {
+    for (let dj = -1; dj < 1; dj++) {
       const jj = j + dj;
-      if (jj >= GRID_SIZE_SRV) continue;
+      if (jj < 0 || jj >= GRID_SIZE_SRV) continue;
       ids.push((dh * GRID_SIZE_SRV * 4) + (jj * 4) + face);
     }
   }
