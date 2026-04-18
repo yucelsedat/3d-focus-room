@@ -8,13 +8,17 @@ datasource db {
 }
 
 model Room {
-  id        String   @id
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  media     Media[]
-  doors     Door[]
-  floor     Floor?
+  id         String         @id
+  name       String
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  parentId   String?
+  doors      Door[]
+  floor      Floor?
+  media      Media[]
+  parent     Room?          @relation("RoomTree", fields: [parentId], references: [id])
+  children   Room[]         @relation("RoomTree")
+  categories RoomCategory[]
 }
 
 model Media {
@@ -49,4 +53,19 @@ model Floor {
   roomId  String @id
   texture String @default("zemin.png")
   room    Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+}
+
+model Category {
+  id    Int            @id @default(autoincrement())
+  name  String         @unique
+  rooms RoomCategory[]
+}
+
+model RoomCategory {
+  roomId     String
+  categoryId Int
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@id([roomId, categoryId])
 }
