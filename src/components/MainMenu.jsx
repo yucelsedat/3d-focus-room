@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
+import { loadRoom as loadRoomUtil } from '../utils/loadRoom'
 
 export function MainMenu() {
   const {
     menuModal, closeMenuModal,
-    currentRoomId, currentRoomName, setCurrentRoom,
+    currentRoomId, currentRoomName,
     rooms, setRooms,
-    setWorldMedia, setHiddenWalls, setFloorTexture,
   } = useStore()
 
   const [view, setView] = useState('main')
@@ -64,15 +64,7 @@ export function MainMenu() {
   async function loadRoom(id, name) {
     setLoading(true); setError('')
     try {
-      const actRes = await fetch(`/api/rooms/${id}/activate`, { method: 'POST' })
-      if (!actRes.ok) throw new Error('Oda aktifleştirilemedi')
-      const [media, doors, floor] = await Promise.all([
-        fetch('/api/media').then(r => r.json()),
-        fetch('/api/doors').then(r => r.json()),
-        fetch('/api/floor').then(r => r.json()),
-      ])
-      setWorldMedia(media); setHiddenWalls(doors); setFloorTexture(floor.texture)
-      setCurrentRoom(id, name)
+      await loadRoomUtil(id, name)
       closeMenuModal()
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }

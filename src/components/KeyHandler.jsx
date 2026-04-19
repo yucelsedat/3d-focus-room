@@ -2,6 +2,11 @@ import { useEffect } from 'react'
 import { useKeyboardControls } from '@react-three/drei'
 import { useStore } from '../store/useStore'
 
+function isTyping() {
+  const el = document.activeElement
+  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+}
+
 export function KeyHandler() {
   const [subscribeKeys] = useKeyboardControls()
   const {
@@ -22,7 +27,7 @@ export function KeyHandler() {
     return subscribeKeys(
       (state) => state.edit,
       (pressed) => {
-        if (pressed && hoveredTile && !activeModal && !roomModal && !menuModal) {
+        if (pressed && !isTyping() && hoveredTile && !activeModal && !roomModal && !menuModal) {
           openModal(hoveredTile)
         }
       }
@@ -34,7 +39,7 @@ export function KeyHandler() {
     return subscribeKeys(
       (state) => state.room,
       (pressed) => {
-        if (pressed && !activeModal && !menuModal) {
+        if (pressed && !isTyping() && !activeModal && !menuModal) {
           roomModal ? closeRoomModal() : openRoomModal()
         }
       }
@@ -46,7 +51,7 @@ export function KeyHandler() {
     return subscribeKeys(
       (state) => state.menu,
       (pressed) => {
-        if (pressed && !activeModal && !roomModal) {
+        if (pressed && !isTyping() && !activeModal && !roomModal) {
           menuModal ? closeMenuModal() : openMenuModal()
         }
       }

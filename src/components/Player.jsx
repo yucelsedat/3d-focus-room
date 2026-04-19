@@ -2,10 +2,17 @@ import { useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { PointerLockControls, useKeyboardControls } from '@react-three/drei'
 import { useStore } from '../store/useStore'
+import { loadRoom } from '../utils/loadRoom'
 import * as THREE from 'three'
 
-const MOVE_SPEED = 5
-const GRID_SIZE  = 40
+function isTyping() {
+  const el = document.activeElement
+  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+}
+
+const MOVE_SPEED  = 5
+const GRID_SIZE   = 40
+const TILE_SIZE   = 1
 const WALL_OFFSET = GRID_SIZE / 2          // 20 — wall plane position
 const OUTER_LIMIT = WALL_OFFSET + 40       // 60 — max range outside the room
 
@@ -28,17 +35,23 @@ function canPassThrough(hiddenWallsSet, face, posAlongWall) {
 }
 
 export function Player() {
-  const activeModal = useStore((state) => state.activeModal)
-  const hiddenWalls = useStore((state) => state.hiddenWalls)
+  const activeModal    = useStore((state) => state.activeModal)
+  const hiddenWalls    = useStore((state) => state.hiddenWalls)
+  const specialDoors   = useStore((state) => state.specialDoors)
   const [, getKeys] = useKeyboardControls()
-  const forward   = useRef(new THREE.Vector3())
-  const side      = useRef(new THREE.Vector3())
-  const direction = useRef(new THREE.Vector3())
-  const hiddenSetRef = useRef(new Set())
+  const forward    = useRef(new THREE.Vector3())
+  const side       = useRef(new THREE.Vector3())
+  const direction  = useRef(new THREE.Vector3())
+  const hiddenSetRef     = useRef(new Set())
+  const teleporting      = useRef(false)
+  const specialDoorsRef  = useRef([])
 
   useFrame((state, delta) => {
-    // Keep the Set in sync with hiddenWalls without re-creating each frame
-    hiddenSetRef.current = new Set(hiddenWalls)
+    if (teleporting.current || isTyping()) return
+
+    // Keep refs in sync without re-creating each frame
+    hiddenSetRef.current   = new Set(hiddenWalls)
+    specialDoorsRef.current = specialDoors
 
     const { forward: moveForward, backward, left, right } = getKeys()
 
@@ -69,13 +82,10 @@ export function Player() {
     const hs = hiddenSetRef.current
 
     // --- Wall collision ---
-    // Each wall only blocks when the player is within that wall's "corridor"
-    // (i.e. within the building's span along the wall's axis).
-    // This prevents corner-blocking when the player is already outside a perpendicular wall.
-    const inXSpan = nx > -WALL_OFFSET && nx < WALL_OFFSET  // within building width
-    const inZSpan = nz > -WALL_OFFSET && nz < WALL_OFFSET  // within building depth
+    const inXSpan = nx > -WALL_OFFSET && nx < WALL_OFFSET
+    const inZSpan = nz > -WALL_OFFSET && nz < WALL_OFFSET
 
-    // Front wall (face=0, z = -WALL_OFFSET): only relevant when player is within x span
+    // Front wall (face=0, z = -WALL_OFFSET)
     if (inXSpan) {
       if (prev.z > -WALL_OFFSET && nz <= -WALL_OFFSET) {
         if (!canPassThrough(hs, 0, nx)) nz = -WALL_OFFSET + 0.01
@@ -85,7 +95,7 @@ export function Player() {
       }
     }
 
-    // Back wall (face=1, z = +WALL_OFFSET): only relevant when player is within x span
+    // Back wall (face=1, z = +WALL_OFFSET)
     if (inXSpan) {
       if (prev.z < WALL_OFFSET && nz >= WALL_OFFSET) {
         if (!canPassThrough(hs, 1, nx)) nz = WALL_OFFSET - 0.01
@@ -95,7 +105,7 @@ export function Player() {
       }
     }
 
-    // Left wall (face=2, x = -WALL_OFFSET): only relevant when player is within z span
+    // Left wall (face=2, x = -WALL_OFFSET)
     if (inZSpan) {
       if (prev.x > -WALL_OFFSET && nx <= -WALL_OFFSET) {
         if (!canPassThrough(hs, 2, nz)) nx = -WALL_OFFSET + 0.01
@@ -105,13 +115,70 @@ export function Player() {
       }
     }
 
-    // Right wall (face=3, x = +WALL_OFFSET): only relevant when player is within z span
+    // Right wall (face=3, x = +WALL_OFFSET)
     if (inZSpan) {
       if (prev.x < WALL_OFFSET && nx >= WALL_OFFSET) {
         if (!canPassThrough(hs, 3, nz)) nx = WALL_OFFSET - 0.01
       }
       if (prev.x > WALL_OFFSET && nx <= WALL_OFFSET) {
         if (!canPassThrough(hs, 3, nz)) nx = WALL_OFFSET + 0.01
+      }
+    }
+
+    // --- Special door crossing detection ---
+    for (const sd of specialDoorsRef.current) {
+      const face = sd.anchorId % 4
+      const j    = Math.floor((sd.anchorId % (GRID_SIZE * 4)) / 4)
+      let crossed = false
+      let spawnX = 0, spawnZ = 0
+
+      // Front wall (face=0, z=-20): walking inside→outside
+      if (face === 0 && prev.z > -WALL_OFFSET && nz <= -WALL_OFFSET) {
+        const pj = Math.floor(nx + WALL_OFFSET)
+        if (pj === j || pj === j + 1) {
+          crossed = true
+          spawnX = j - WALL_OFFSET + TILE_SIZE
+          spawnZ = WALL_OFFSET - 2
+        }
+      }
+      // Back wall (face=1, z=+20): walking inside→outside
+      if (face === 1 && prev.z < WALL_OFFSET && nz >= WALL_OFFSET) {
+        const pj = Math.floor(nx + WALL_OFFSET)
+        if (pj === j || pj === j + 1) {
+          crossed = true
+          spawnX = j - WALL_OFFSET + TILE_SIZE
+          spawnZ = -(WALL_OFFSET - 2)
+        }
+      }
+      // Left wall (face=2, x=-20): walking inside→outside
+      if (face === 2 && prev.x > -WALL_OFFSET && nx <= -WALL_OFFSET) {
+        const pj = Math.floor(nz + WALL_OFFSET)
+        if (pj === j || pj === j + 1) {
+          crossed = true
+          spawnX = WALL_OFFSET - 2
+          spawnZ = j - WALL_OFFSET + TILE_SIZE
+        }
+      }
+      // Right wall (face=3, x=+20): walking inside→outside
+      if (face === 3 && prev.x < WALL_OFFSET && nx >= WALL_OFFSET) {
+        const pj = Math.floor(nz + WALL_OFFSET)
+        if (pj === j || pj === j + 1) {
+          crossed = true
+          spawnX = -(WALL_OFFSET - 2)
+          spawnZ = j - WALL_OFFSET + TILE_SIZE
+        }
+      }
+
+      if (crossed) {
+        teleporting.current = true
+        loadRoom(sd.targetRoomId, sd.targetRoomName).then(() => {
+          state.camera.position.set(spawnX, 2.5, spawnZ)
+          teleporting.current = false
+        }).catch(err => {
+          console.error('Teleport failed:', err)
+          teleporting.current = false
+        })
+        return
       }
     }
 
