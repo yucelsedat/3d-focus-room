@@ -152,7 +152,7 @@ function MarkdownMesh({ content, width, height }) {
   const nCols = Math.max(1, Math.round(pxWidth / MD_COL_PX_W))
   const scaleFactor = w * 40 / pxWidth  // = 40/300 sabit
 
-  const html = marked(content || '')
+  const html = marked(content || '').replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
 
   return (
     <mesh position={[0, 0, 0.02]}>
@@ -180,6 +180,8 @@ function MarkdownMesh({ content, width, height }) {
           columnGap: '0px',
           columnFill: 'auto',
           padding: '24px',
+          pointerEvents: 'auto',
+          cursor: 'auto',
         }}
           dangerouslySetInnerHTML={{ __html: html }}
         />
