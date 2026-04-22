@@ -6,7 +6,7 @@ export function MainMenu() {
   const {
     menuModal, closeMenuModal,
     currentRoomId, currentRoomName,
-    rooms, setRooms,
+    rooms, setRooms, setCurrentRoom,
   } = useStore()
 
   const [view, setView] = useState('main')
