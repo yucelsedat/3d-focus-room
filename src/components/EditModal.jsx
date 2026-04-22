@@ -48,7 +48,8 @@ export function EditModal() {
     const probeAspectRatio = (sourceUrl, type) => {
       if (type === 'youtube' || type === 'embed') {
         setNaturalRatio(16/9)
-        setHeight(w => Number((w / (16/9)).toFixed(2)))
+        setHeight(5)
+        setWidth(Number((5 * 16/9).toFixed(2)))
         return
       }
       if (!sourceUrl) return
@@ -58,7 +59,8 @@ export function EditModal() {
            if (vid.videoWidth) {
              const ratio = vid.videoWidth / vid.videoHeight
              setNaturalRatio(ratio)
-             setHeight(w => Number((w / ratio).toFixed(2)))
+             setHeight(5)
+             setWidth(Number((5 * ratio).toFixed(2)))
            }
          }
          vid.src = sourceUrl
@@ -68,7 +70,8 @@ export function EditModal() {
            if (img.width) {
              const ratio = img.width / img.height
              setNaturalRatio(ratio)
-             setHeight(w => Number((w / ratio).toFixed(2)))
+             setHeight(5)
+             setWidth(Number((5 * ratio).toFixed(2)))
            }
          }
          img.src = sourceUrl
