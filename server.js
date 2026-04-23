@@ -383,6 +383,28 @@ app.delete('/api/special-doors/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/special-doors/link', async (req, res) => {
+  const { anchorId, targetRoomId, linkType } = req.body;
+  if (!targetRoomId) return res.status(400).json({ error: 'Oda seçilmedi' });
+
+  await prisma.$transaction(async (tx) => {
+    if (linkType === 'child') {
+      await tx.room.update({ where: { id: targetRoomId }, data: { parentId: activeRoomId } });
+    }
+    await tx.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId } });
+  });
+
+  const updatedDoors = await prisma.specialDoor.findMany({
+    where: { roomId: activeRoomId },
+    include: { target: { select: { id: true, name: true } } },
+  });
+  const allRooms = await prisma.room.findMany({ include: roomInclude });
+  res.json({
+    specialDoors: updatedDoors.map(serializeSpecialDoor),
+    rooms: allRooms.map(serializeRoom),
+  });
+});
+
 // ─── Media API ────────────────────────────────────────────────────────────────
 
 app.get('/api/media', async (req, res) => {

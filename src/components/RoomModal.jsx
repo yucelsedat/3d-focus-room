@@ -20,7 +20,7 @@ function getDoorIds(instanceId) {
 export function RoomModal() {
   const {
     roomModal, closeRoomModal, hoveredTile, addDoor, removeDoor, hiddenWalls, setFloorTexture,
-    specialDoors, setSpecialDoors, rooms, setRooms,
+    specialDoors, setSpecialDoors, rooms, setRooms, currentRoomId,
   } = useStore()
   const [activeTab, setActiveTab]   = useState('door')
   const [preview, setPreview]       = useState([])
@@ -28,6 +28,10 @@ export function RoomModal() {
   const [selectedTex, setSelectedTex] = useState('')
   const [childRoomName, setChildRoomName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [createMode, setCreateMode] = useState('new')
+  const [linkType, setLinkType]     = useState('child')
+  const [linkSearch, setLinkSearch] = useState('')
+  const [linkTargetId, setLinkTargetId] = useState(null)
 
   // Aktif sekmeyi hover tipine göre belirle
   useEffect(() => {
@@ -35,6 +39,9 @@ export function RoomModal() {
     if (typeof hoveredTile?.id === 'number') setActiveTab('floor')
     else setActiveTab('door')
     setChildRoomName('')
+    setCreateMode('new')
+    setLinkSearch('')
+    setLinkTargetId(null)
   }, [roomModal])
 
   // Zemin tab açılınca texture listesini çek
@@ -146,6 +153,36 @@ export function RoomModal() {
     }
   }
 
+  const handleLinkRoom = async () => {
+    if (!linkTargetId) return
+    try {
+      const r = await fetch('/api/special-doors/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ anchorId, targetRoomId: linkTargetId, linkType }),
+      })
+      if (!r.ok) { const e = await r.json(); alert(e.error); return }
+      const { specialDoors: updatedDoors, rooms: updatedRooms } = await r.json()
+      setRooms(updatedRooms)
+      setSpecialDoors(updatedDoors)
+      const newIds = updatedDoors.find(sd => sd.anchorId === anchorId)?.instanceIds ?? []
+      addDoor(newIds)
+      setLinkSearch('')
+      setLinkTargetId(null)
+      closeRoomModal()
+    } catch (err) {
+      alert(err.message)
+    }
+  }
+
+  const currentRoom = rooms.find(r => r.id === currentRoomId)
+  const linkableRooms = linkType === 'parent'
+    ? rooms.filter(r => r.id === currentRoom?.parent?.id)
+    : rooms.filter(r => r.id !== currentRoomId)
+  const filteredLinkRooms = linkableRooms.filter(r =>
+    r.name.toLowerCase().includes(linkSearch.toLowerCase())
+  )
+
   if (!roomModal) return null
 
   return (
@@ -218,35 +255,110 @@ export function RoomModal() {
 
             {isWall && !existingSpecialDoor && (
               <>
-                <div style={s.infoBox}>
-                  <div style={s.infoRow}>
-                    <span style={s.infoLabel}>Kapı boyutu</span>
-                    <span style={s.infoValue}>2 × 3 tile (mavi)</span>
-                  </div>
-                  <div style={s.infoRow}>
-                    <span style={s.infoLabel}>Açıklama</span>
-                    <span style={s.infoValue}>Yeni child oda oluşturur</span>
-                  </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    style={createMode === 'new' ? s.activeTab : s.tab}
+                    onClick={() => setCreateMode('new')}
+                  >
+                    ✨ Yeni Oda
+                  </button>
+                  <button
+                    style={createMode === 'link' ? s.activeTab : s.tab}
+                    onClick={() => { setCreateMode('link'); setLinkSearch(''); setLinkTargetId(null) }}
+                  >
+                    🔗 Mevcut Odayı Bağla
+                  </button>
                 </div>
-                <input
-                  style={s.input}
-                  placeholder="Yeni oda adı..."
-                  value={childRoomName}
-                  onChange={e => setChildRoomName(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && childRoomName.trim() && !creating) handleCreateSpecialDoor() }}
-                  autoFocus
-                />
-                <button
-                  style={{
-                    ...s.applyBtn,
-                    background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-                    opacity: childRoomName.trim() ? 1 : 0.4,
-                  }}
-                  disabled={!childRoomName.trim() || creating}
-                  onClick={handleCreateSpecialDoor}
-                >
-                  🔵 {creating ? '...' : 'Özel Kapı Aç'}
-                </button>
+
+                {createMode === 'new' && (
+                  <>
+                    <input
+                      style={s.input}
+                      placeholder="Yeni oda adı..."
+                      value={childRoomName}
+                      onChange={e => setChildRoomName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && childRoomName.trim() && !creating) handleCreateSpecialDoor() }}
+                      autoFocus
+                    />
+                    <button
+                      style={{
+                        ...s.applyBtn,
+                        background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+                        opacity: childRoomName.trim() ? 1 : 0.4,
+                      }}
+                      disabled={!childRoomName.trim() || creating}
+                      onClick={handleCreateSpecialDoor}
+                    >
+                      🔵 {creating ? '...' : 'Özel Kapı Aç'}
+                    </button>
+                  </>
+                )}
+
+                {createMode === 'link' && (
+                  <>
+                    <div style={{ display: 'flex', gap: '16px', padding: '4px 0' }}>
+                      <label style={{ fontSize: '13px', color: '#ccc', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <input
+                          type="radio"
+                          checked={linkType === 'child'}
+                          onChange={() => { setLinkType('child'); setLinkTargetId(null); setLinkSearch('') }}
+                        />
+                        child bağla
+                      </label>
+                      <label style={{ fontSize: '13px', color: '#ccc', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <input
+                          type="radio"
+                          checked={linkType === 'parent'}
+                          onChange={() => { setLinkType('parent'); setLinkTargetId(null); setLinkSearch('') }}
+                        />
+                        parent bağla
+                      </label>
+                    </div>
+
+                    {linkType === 'parent' && !currentRoom?.parent && (
+                      <p style={s.hint}>Bu odanın henüz bir parent odası yok.</p>
+                    )}
+
+                    {(linkType === 'child' || currentRoom?.parent) && (
+                      <input
+                        style={s.input}
+                        placeholder="Oda ara..."
+                        value={linkSearch}
+                        onChange={e => { setLinkSearch(e.target.value); setLinkTargetId(null) }}
+                      />
+                    )}
+
+                    {filteredLinkRooms.length > 0 && linkSearch.length > 0 && (
+                      <div style={{ background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', overflow: 'hidden' }}>
+                        {filteredLinkRooms.slice(0, 6).map(r => (
+                          <div
+                            key={r.id}
+                            onClick={() => { setLinkTargetId(r.id); setLinkSearch(r.name) }}
+                            style={{
+                              padding: '8px 12px', cursor: 'pointer', fontSize: '13px',
+                              color: linkTargetId === r.id ? '#fff' : '#aaa',
+                              background: linkTargetId === r.id ? '#1a1a1a' : 'transparent',
+                            }}
+                          >
+                            {r.name}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <button
+                      style={{
+                        ...s.applyBtn,
+                        background: 'linear-gradient(135deg, #7c3aed, #4c1d95)',
+                        opacity: linkTargetId ? 1 : 0.4,
+                      }}
+                      disabled={!linkTargetId}
+                      onClick={handleLinkRoom}
+                    >
+                      🔗 Bağla
+                    </button>
+                  </>
+                )}
               </>
             )}
 
@@ -335,7 +447,7 @@ const s = {
     color: '#fff',
     padding: '28px',
     borderRadius: '16px',
-    width: '420px',
+    width: '460px',
     boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
     border: '1px solid #2a2a2a',
     fontFamily: 'Inter, system-ui, sans-serif',
