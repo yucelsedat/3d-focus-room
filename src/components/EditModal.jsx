@@ -1,6 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { marked } from 'marked'
 import { useStore } from '../store/useStore'
+import { useSpeechToText } from '../hooks/useSpeechToText'
+
+const micPulseStyle = `@keyframes micPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`
+
+function MicButton({ listening, onToggle, supported }) {
+  if (!supported) return null
+  return (
+    <>
+      <style>{micPulseStyle}</style>
+      <button
+        type="button"
+        onClick={onToggle}
+        title={listening ? 'Kaydı durdur' : 'Sesle yaz'}
+        style={{
+          background: listening ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.06)',
+          border: `1px solid ${listening ? '#ef4444' : '#333'}`,
+          borderRadius: '6px',
+          padding: '2px 8px',
+          cursor: 'pointer',
+          fontSize: '13px',
+          color: listening ? '#ef4444' : '#666',
+          transition: 'all 0.2s',
+          animation: listening ? 'micPulse 1.2s ease-in-out infinite' : 'none',
+          lineHeight: 1,
+        }}
+      >
+        🎤
+      </button>
+    </>
+  )
+}
 
 export function EditModal() {
   const { activeModal, selectedTile, worldMedia, closeModal, addMedia, removeMedia } = useStore()
@@ -18,6 +49,8 @@ export function EditModal() {
   const [copiedId, setCopiedId] = useState(null)
   const [pastePreview, setPastePreview] = useState(null)
   const mdMeasureRef = useRef(null)
+  const speech1 = useSpeechToText()
+  const speech2 = useSpeechToText()
 
   // Markdown: h=5 sabit, içerik ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*2
   const MD_COL_PX_W = 600   // her sütunun CSS piksel genişliği
@@ -387,8 +420,20 @@ export function EditModal() {
                 {/* Inline markdown editör */}
                 {editingId === m.id && (
                   <div style={s.inlineEditor}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '12px', color: '#555' }}>Markdown düzenle</span>
+                      <MicButton
+                        listening={speech2.listening}
+                        supported={speech2.supported}
+                        onToggle={() =>
+                          speech2.listening
+                            ? speech2.stop()
+                            : speech2.start(editingContent, setEditingContent)
+                        }
+                      />
+                    </div>
                     <textarea
-                      style={s.inlineTextarea}
+                      style={{ ...s.inlineTextarea, borderColor: speech2.listening ? '#ef4444' : undefined }}
                       value={editingContent}
                       onChange={e => setEditingContent(e.target.value)}
                       autoFocus
@@ -444,9 +489,20 @@ export function EditModal() {
           {/* Markdown textarea */}
           {activeTab === 'markdown' && (
             <div style={s.inputGroup}>
-              <label style={s.label}>Markdown İçerik</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ ...s.label, marginBottom: 0 }}>Markdown İçerik</label>
+                <MicButton
+                  listening={speech1.listening}
+                  supported={speech1.supported}
+                  onToggle={() =>
+                    speech1.listening
+                      ? speech1.stop()
+                      : speech1.start(markdownContent, setMarkdownContent)
+                  }
+                />
+              </div>
               <textarea
-                style={{ ...s.input, height: '260px', resize: 'vertical', fontFamily: 'monospace', fontSize: '13px', lineHeight: '1.6' }}
+                style={{ ...s.input, height: '260px', resize: 'vertical', fontFamily: 'monospace', fontSize: '13px', lineHeight: '1.6', borderColor: speech1.listening ? '#ef4444' : undefined }}
                 value={markdownContent}
                 onChange={e => setMarkdownContent(e.target.value)}
                 placeholder={'# Başlık\n\nMetin buraya...\n\n**kalın**, _italik_'}
