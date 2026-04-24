@@ -1,40 +1,55 @@
 import { useStore } from '../store/useStore'
 
-const GRID_SIZE  = 40
-const WALL_OFFSET = 20
-const TILE_SIZE  = 1
+const TILE_SIZE = 1
 
-function doorWorldPos(anchorId) {
+function doorWorldPos(anchorId, isOuter = false) {
+  const gridSize   = isOuter ? 120 : 40
+  const wallOffset = isOuter ? 60  : 20
   const face = anchorId % 4
-  const j    = Math.floor((anchorId % (GRID_SIZE * 4)) / 4)
-  // 2-tile-wide door: tile j and tile j+1 (anchor = left tile)
-  // tile j center = j - 19.5, tile j+1 center = j - 18.5, door center = j - 19
-  const pos  = j - WALL_OFFSET + TILE_SIZE / 2 + TILE_SIZE / 2
-  const y    = 1.5  // center of 3-tile-tall door (h=0,1,2 at y=0.5,1.5,2.5)
+  const j    = Math.floor((anchorId % (gridSize * 4)) / 4)
+  const pos  = j - wallOffset + TILE_SIZE / 2 + TILE_SIZE / 2
+  const y    = 1.5
   switch (face) {
-    case 0: return { position: [pos, y, -WALL_OFFSET], rotation: [0, 0, 0] }
-    case 1: return { position: [pos, y,  WALL_OFFSET], rotation: [0, Math.PI, 0] }
-    case 2: return { position: [-WALL_OFFSET, y, pos], rotation: [0, Math.PI / 2, 0] }
-    case 3: return { position: [ WALL_OFFSET, y, pos], rotation: [0, -Math.PI / 2, 0] }
+    case 0: return { position: [pos, y, -wallOffset], rotation: [0, 0,            0] }
+    case 1: return { position: [pos, y,  wallOffset], rotation: [0, Math.PI,      0] }
+    case 2: return { position: [-wallOffset, y, pos], rotation: [0, Math.PI / 2,  0] }
+    case 3: return { position: [ wallOffset, y, pos], rotation: [0,-Math.PI / 2,  0] }
     default: return { position: [0, y, 0], rotation: [0, 0, 0] }
   }
 }
 
 export function BlueDoors() {
-  const specialDoors = useStore(s => s.specialDoors)
+  const specialDoors      = useStore(s => s.specialDoors)
+  const outerSpecialDoors = useStore(s => s.outerSpecialDoors)
 
   return (
     <>
       {specialDoors.map(sd => {
-        const { position, rotation } = doorWorldPos(sd.anchorId)
+        const { position, rotation } = doorWorldPos(sd.anchorId, false)
         return (
-          <mesh key={sd.id} position={position} rotation={rotation}>
+          <mesh key={`inner-${sd.id}`} position={position} rotation={rotation}>
             <planeGeometry args={[2, 3]} />
             <meshStandardMaterial
               color="#3b82f6"
               transparent
               opacity={0.55}
               emissive="#1d4ed8"
+              emissiveIntensity={0.4}
+              side={2}
+            />
+          </mesh>
+        )
+      })}
+      {outerSpecialDoors.map(sd => {
+        const { position, rotation } = doorWorldPos(sd.anchorId, true)
+        return (
+          <mesh key={`outer-${sd.id}`} position={position} rotation={rotation}>
+            <planeGeometry args={[2, 3]} />
+            <meshStandardMaterial
+              color="#8b5cf6"
+              transparent
+              opacity={0.55}
+              emissive="#6d28d9"
               emissiveIntensity={0.4}
               side={2}
             />

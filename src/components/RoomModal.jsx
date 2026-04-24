@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 
-const GRID_SIZE = 40
+const INNER_GRID_SIZE = 40
+const OUTER_GRID_SIZE = 120
 
-function getDoorIds(instanceId) {
+function getDoorIds(instanceId, gridSize) {
   const face = instanceId % 4
-  const j    = Math.floor((instanceId % (GRID_SIZE * 4)) / 4)
+  const j    = Math.floor((instanceId % (gridSize * 4)) / 4)
   const ids  = []
   for (let dh = 0; dh < 3; dh++) {
     for (let dj = 0; dj < 2; dj++) {
       const jj = j + dj
-      if (jj >= GRID_SIZE) continue
-      ids.push((dh * GRID_SIZE * 4) + (jj * 4) + face)
+      if (jj >= gridSize) continue
+      ids.push((dh * gridSize * 4) + (jj * 4) + face)
     }
   }
   return ids
@@ -19,8 +20,13 @@ function getDoorIds(instanceId) {
 
 export function RoomModal() {
   const {
-    roomModal, closeRoomModal, hoveredTile, addDoor, removeDoor, hiddenWalls, setFloorTexture,
-    specialDoors, setSpecialDoors, rooms, setRooms, currentRoomId,
+    roomModal, closeRoomModal, hoveredTile,
+    addDoor, removeDoor, hiddenWalls,
+    addOuterDoor, removeOuterDoor, hiddenOuterWalls,
+    setFloorTexture,
+    specialDoors, setSpecialDoors,
+    outerSpecialDoors, setOuterSpecialDoors,
+    rooms, setRooms, currentRoomId,
   } = useStore()
   const [activeTab, setActiveTab]   = useState('door')
   const [preview, setPreview]       = useState([])
@@ -56,21 +62,29 @@ export function RoomModal() {
   // Kapı preview hesapla
   useEffect(() => {
     const id = hoveredTile?.id
-    if (typeof id !== 'string' || !id.startsWith('wall-')) {
-      setPreview([])
-      return
-    }
-    const instanceId = parseInt(id.replace('wall-', ''))
-    setPreview(getDoorIds(instanceId))
+    if (typeof id !== 'string') { setPreview([]); return }
+    if (!id.startsWith('wall-') && !id.startsWith('outer-')) { setPreview([]); return }
+    const isOuter = id.startsWith('outer-')
+    const gridSize = isOuter ? OUTER_GRID_SIZE : INNER_GRID_SIZE
+    const instanceId = parseInt(id.replace(isOuter ? 'outer-' : 'wall-', ''))
+    setPreview(getDoorIds(instanceId, gridSize))
   }, [hoveredTile])
 
-  const isDoorOpen = preview.length > 0 && preview.every(id => hiddenWalls.includes(id))
-  const isWall = typeof hoveredTile?.id === 'string' && hoveredTile.id.startsWith('wall-')
+  const isInnerWall = typeof hoveredTile?.id === 'string' && hoveredTile.id.startsWith('wall-')
+  const isOuterWall = typeof hoveredTile?.id === 'string' && hoveredTile.id.startsWith('outer-')
+  const isWall      = isInnerWall || isOuterWall
+
+  const activeHiddenWalls  = isOuterWall ? hiddenOuterWalls : hiddenWalls
+  const activeSpecialDoors = isOuterWall ? outerSpecialDoors : specialDoors
+
+  const isDoorOpen = preview.length > 0 && preview.every(id => activeHiddenWalls.includes(id))
 
   // Özel kapı tespiti
-  const anchorId = isWall ? parseInt(hoveredTile.id.replace('wall-', '')) : null
+  const anchorId = isWall
+    ? parseInt(hoveredTile.id.replace(isOuterWall ? 'outer-' : 'wall-', ''))
+    : null
   const existingSpecialDoor = anchorId !== null
-    ? specialDoors.find(sd => sd.instanceIds.includes(anchorId))
+    ? activeSpecialDoors.find(sd => sd.instanceIds.includes(anchorId))
     : null
 
   const handleAddDoor = async () => {
@@ -78,10 +92,11 @@ export function RoomModal() {
       const r = await fetch('/api/doors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: preview })
+        body: JSON.stringify({ ids: preview, isOuter: isOuterWall })
       })
       if (!r.ok) throw new Error('Sunucu hatası')
-      addDoor(preview)
+      if (isOuterWall) addOuterDoor(preview)
+      else addDoor(preview)
       closeRoomModal()
     } catch (err) {
       alert(err.message)
@@ -93,10 +108,11 @@ export function RoomModal() {
       const r = await fetch('/api/doors', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: preview })
+        body: JSON.stringify({ ids: preview, isOuter: isOuterWall })
       })
       if (!r.ok) throw new Error('Sunucu hatası')
-      removeDoor(preview)
+      if (isOuterWall) removeOuterDoor(preview)
+      else removeDoor(preview)
       closeRoomModal()
     } catch (err) {
       alert(err.message)
@@ -124,14 +140,19 @@ export function RoomModal() {
       const r = await fetch('/api/special-doors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ anchorId, childRoomName }),
+        body: JSON.stringify({ anchorId, childRoomName, isOuter: isOuterWall }),
       })
       if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Sunucu hatası') }
       const { childRoom, specialDoors: updatedDoors } = await r.json()
       setRooms([...rooms, childRoom])
-      setSpecialDoors(updatedDoors)
-      const newIds = updatedDoors.find(sd => sd.anchorId === anchorId)?.instanceIds ?? []
-      addDoor(newIds)
+      const innerD = updatedDoors.filter(sd => !sd.isOuter)
+      const outerD = updatedDoors.filter(sd =>  sd.isOuter)
+      setSpecialDoors(innerD)
+      setOuterSpecialDoors(outerD)
+      const targetList = isOuterWall ? outerD : innerD
+      const newIds = targetList.find(sd => sd.anchorId === anchorId)?.instanceIds ?? []
+      if (isOuterWall) addOuterDoor(newIds)
+      else addDoor(newIds)
       setChildRoomName('')
       closeRoomModal()
     } catch (err) {
@@ -144,9 +165,10 @@ export function RoomModal() {
   const handleRemoveSpecialDoor = async (id) => {
     try {
       await fetch(`/api/special-doors/${id}`, { method: 'DELETE' })
-      const removed = specialDoors.find(sd => sd.id === id)
-      if (removed) removeDoor(removed.instanceIds)
-      setSpecialDoors(specialDoors.filter(sd => sd.id !== id))
+      const removedInner = specialDoors.find(sd => sd.id === id)
+      const removedOuter = outerSpecialDoors.find(sd => sd.id === id)
+      if (removedInner) { removeDoor(removedInner.instanceIds); setSpecialDoors(specialDoors.filter(sd => sd.id !== id)) }
+      if (removedOuter) { removeOuterDoor(removedOuter.instanceIds); setOuterSpecialDoors(outerSpecialDoors.filter(sd => sd.id !== id)) }
       closeRoomModal()
     } catch (err) {
       alert(err.message)
@@ -159,14 +181,19 @@ export function RoomModal() {
       const r = await fetch('/api/special-doors/link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ anchorId, targetRoomId: linkTargetId, linkType }),
+        body: JSON.stringify({ anchorId, targetRoomId: linkTargetId, linkType, isOuter: isOuterWall }),
       })
       if (!r.ok) { const e = await r.json(); alert(e.error); return }
       const { specialDoors: updatedDoors, rooms: updatedRooms } = await r.json()
       setRooms(updatedRooms)
-      setSpecialDoors(updatedDoors)
-      const newIds = updatedDoors.find(sd => sd.anchorId === anchorId)?.instanceIds ?? []
-      addDoor(newIds)
+      const innerD = updatedDoors.filter(sd => !sd.isOuter)
+      const outerD = updatedDoors.filter(sd =>  sd.isOuter)
+      setSpecialDoors(innerD)
+      setOuterSpecialDoors(outerD)
+      const targetList = isOuterWall ? outerD : innerD
+      const newIds = targetList.find(sd => sd.anchorId === anchorId)?.instanceIds ?? []
+      if (isOuterWall) addOuterDoor(newIds)
+      else addDoor(newIds)
       setLinkSearch('')
       setLinkTargetId(null)
       closeRoomModal()

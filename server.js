@@ -83,25 +83,26 @@ const upload = multer({ storage });
 
 // ─── Special door helpers ─────────────────────────────────────────────────────
 
-const GRID_SIZE_SRV = 40;
+const GRID_SIZE_SRV       = 40;
+const OUTER_GRID_SIZE_SRV = 120;
 
-function getSpecialDoorInstanceIds(anchorId) {
+function getSpecialDoorInstanceIds(anchorId, gridSize = GRID_SIZE_SRV) {
   const face = anchorId % 4;
-  const j    = Math.floor((anchorId % (GRID_SIZE_SRV * 4)) / 4);
+  const j    = Math.floor((anchorId % (gridSize * 4)) / 4);
   const ids  = [];
   for (let dh = 0; dh < 3; dh++) {
     for (let dj = 0; dj < 2; dj++) {
       const jj = j + dj;
-      if (jj >= GRID_SIZE_SRV) continue;
-      ids.push((dh * GRID_SIZE_SRV * 4) + (jj * 4) + face);
+      if (jj >= gridSize) continue;
+      ids.push((dh * gridSize * 4) + (jj * 4) + face);
     }
   }
   return ids;
 }
 
-function getReturnAnchorId(anchorId) {
+function getReturnAnchorId(anchorId, gridSize = GRID_SIZE_SRV) {
   const face = anchorId % 4;
-  const j    = Math.floor((anchorId % (GRID_SIZE_SRV * 4)) / 4);
+  const j    = Math.floor((anchorId % (gridSize * 4)) / 4);
   const oppositeFace = face === 0 ? 1 : face === 1 ? 0 : face === 2 ? 3 : 2;
   return j * 4 + oppositeFace;
 }
@@ -302,40 +303,42 @@ app.get('/api/floor-textures', (req, res) => {
 
 app.get('/api/doors', async (req, res) => {
   const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
-  res.json(doors.map(d => d.doorId));
+  res.json(doors.map(d => ({ id: d.doorId, isOuter: d.isOuter })));
 });
 
 app.post('/api/doors', async (req, res) => {
-  const { ids } = req.body;
+  const { ids, isOuter = false } = req.body;
   for (const doorId of ids) {
     await prisma.door.upsert({
-      where: { roomId_doorId: { roomId: activeRoomId, doorId: parseInt(doorId) } },
+      where: { roomId_doorId_isOuter: { roomId: activeRoomId, doorId: parseInt(doorId), isOuter } },
       update: {},
-      create: { roomId: activeRoomId, doorId: parseInt(doorId) },
+      create: { roomId: activeRoomId, doorId: parseInt(doorId), isOuter },
     });
   }
   const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
-  res.json(doors.map(d => d.doorId));
+  res.json(doors.map(d => ({ id: d.doorId, isOuter: d.isOuter })));
 });
 
 app.delete('/api/doors', async (req, res) => {
-  const { ids } = req.body;
+  const { ids, isOuter = false } = req.body;
   await prisma.door.deleteMany({
-    where: { roomId: activeRoomId, doorId: { in: ids.map(Number) } },
+    where: { roomId: activeRoomId, doorId: { in: ids.map(Number) }, isOuter },
   });
   const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
-  res.json(doors.map(d => d.doorId));
+  res.json(doors.map(d => ({ id: d.doorId, isOuter: d.isOuter })));
 });
 
 // ─── Special Doors API ───────────────────────────────────────────────────────
 
 function serializeSpecialDoor(sd) {
+  const gridSize = sd.isOuter ? OUTER_GRID_SIZE_SRV : GRID_SIZE_SRV;
   return {
     id: sd.id,
     anchorId: sd.anchorId,
     targetRoomId: sd.targetRoomId,
     targetRoomName: sd.target.name,
-    instanceIds: getSpecialDoorInstanceIds(sd.anchorId),
+    isOuter: sd.isOuter,
+    instanceIds: getSpecialDoorInstanceIds(sd.anchorId, gridSize),
   };
 }
 
@@ -348,17 +351,19 @@ app.get('/api/special-doors', async (req, res) => {
 });
 
 app.post('/api/special-doors', async (req, res) => {
-  const { anchorId, childRoomName } = req.body;
+  const { anchorId, childRoomName, isOuter = false } = req.body;
   if (!childRoomName?.trim()) return res.status(400).json({ error: 'Oda adı gerekli' });
 
   const childId = `room-${Date.now()}`;
-  const returnAnchorId = getReturnAnchorId(anchorId);
+  const gridSize = isOuter ? OUTER_GRID_SIZE_SRV : GRID_SIZE_SRV;
+  const returnAnchorId = getReturnAnchorId(anchorId, gridSize);
 
   await prisma.$transaction([
     prisma.room.create({ data: { id: childId, name: childRoomName.trim(), parentId: activeRoomId } }),
     prisma.floor.create({ data: { roomId: childId, texture: 'zemin.png' } }),
-    prisma.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId: childId } }),
-    prisma.specialDoor.create({ data: { roomId: childId, anchorId: returnAnchorId, targetRoomId: activeRoomId } }),
+    prisma.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId: childId, isOuter } }),
+    // Geri kapı her zaman inner wall'da açılır (child odanın iç duvarı)
+    prisma.specialDoor.create({ data: { roomId: childId, anchorId: returnAnchorId, targetRoomId: activeRoomId, isOuter: false } }),
   ]);
 
   const child = await prisma.room.findUnique({ where: { id: childId }, include: roomInclude });
@@ -376,22 +381,23 @@ app.delete('/api/special-doors/:id', async (req, res) => {
   const id = parseInt(req.params.id);
   const door = await prisma.specialDoor.findUnique({ where: { id } });
   if (!door) return res.status(404).json({ error: 'Bulunamadı' });
-  const returnAnchorId = getReturnAnchorId(door.anchorId);
+  const gridSize = door.isOuter ? OUTER_GRID_SIZE_SRV : GRID_SIZE_SRV;
+  const returnAnchorId = getReturnAnchorId(door.anchorId, gridSize);
   await prisma.specialDoor.deleteMany({
-    where: { OR: [{ id }, { roomId: door.targetRoomId, anchorId: returnAnchorId }] },
+    where: { OR: [{ id }, { roomId: door.targetRoomId, anchorId: returnAnchorId, isOuter: false }] },
   });
   res.json({ success: true });
 });
 
 app.post('/api/special-doors/link', async (req, res) => {
-  const { anchorId, targetRoomId, linkType } = req.body;
+  const { anchorId, targetRoomId, linkType, isOuter = false } = req.body;
   if (!targetRoomId) return res.status(400).json({ error: 'Oda seçilmedi' });
 
   await prisma.$transaction(async (tx) => {
     if (linkType === 'child') {
       await tx.room.update({ where: { id: targetRoomId }, data: { parentId: activeRoomId } });
     }
-    await tx.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId } });
+    await tx.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId, isOuter } });
   });
 
   const updatedDoors = await prisma.specialDoor.findMany({

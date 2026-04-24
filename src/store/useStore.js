@@ -7,12 +7,14 @@ export const useStore = create((set) => ({
   worldMedia: [],
   roomModal: false,
   menuModal: true,    // uygulama açılışında menü göster
-  hiddenWalls: [],    // gizli duvar instanceId'leri (kapılar)
+  hiddenWalls: [],       // iç duvar gizli tile ID'leri
+  hiddenOuterWalls: [],  // dış sınır duvarı gizli tile ID'leri
   floorTexture: 'zemin.png',
   currentRoomId: 'default',
   currentRoomName: 'Varsayılan Oda',
   rooms: [],
   specialDoors: [],
+  outerSpecialDoors: [],
 
   openModal: (tile) => set({ activeModal: true, selectedTile: tile }),
   closeModal: () => set({ activeModal: false, selectedTile: null }),
@@ -34,7 +36,12 @@ export const useStore = create((set) => ({
   addDoor: (ids) => set((state) => ({ hiddenWalls: [...new Set([...state.hiddenWalls, ...ids])] })),
   removeDoor: (ids) => set((state) => ({ hiddenWalls: state.hiddenWalls.filter(id => !ids.includes(id)) })),
 
+  setHiddenOuterWalls: (ids) => set({ hiddenOuterWalls: ids }),
+  addOuterDoor: (ids) => set((state) => ({ hiddenOuterWalls: [...new Set([...state.hiddenOuterWalls, ...ids])] })),
+  removeOuterDoor: (ids) => set((state) => ({ hiddenOuterWalls: state.hiddenOuterWalls.filter(id => !ids.includes(id)) })),
+
   setCurrentRoom: (id, name) => set({ currentRoomId: id, currentRoomName: name }),
   setRooms: (rooms) => set({ rooms }),
   setSpecialDoors: (specialDoors) => set({ specialDoors }),
+  setOuterSpecialDoors: (outerSpecialDoors) => set({ outerSpecialDoors }),
 }))
