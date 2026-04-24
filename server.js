@@ -419,38 +419,43 @@ app.get('/api/media', async (req, res) => {
 });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
-  const { tileId, type, width, height, position, rotation, url } = req.body;
+  try {
+    const { tileId, type, width, height, position, rotation, url } = req.body;
 
-  let mediaUrl = url;
-  if (req.file) {
-    const folder = req.file.mimetype.startsWith('video/') ? 'videos' : 'images';
-    mediaUrl = `/uploads/${folder}/${req.file.filename}`;
+    let mediaUrl = url;
+    if (req.file) {
+      const folder = req.file.mimetype.startsWith('video/') ? 'videos' : 'images';
+      mediaUrl = `/uploads/${folder}/${req.file.filename}`;
+    }
+
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const id = BigInt(Date.now());
+
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId,
+        type,
+        url: mediaUrl || null,
+        width: parseFloat(width) || 1,
+        height: parseFloat(height) || 1,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+      },
+    });
+
+    res.json(serializeMedia(media));
+  } catch (err) {
+    console.error('[upload] error:', err.message);
+    res.status(500).json({ error: err.message });
   }
-
-  const pos = JSON.parse(position);
-  const rot = JSON.parse(rotation);
-  const id = BigInt(Date.now());
-
-  const media = await prisma.media.create({
-    data: {
-      id,
-      roomId: activeRoomId,
-      tileId,
-      type,
-      url: mediaUrl || null,
-      width: parseFloat(width) || 1,
-      height: parseFloat(height) || 1,
-      posX: parseFloat(pos[0]) || 0,
-      posY: parseFloat(pos[1]) || 0,
-      posZ: parseFloat(pos[2]) || 0,
-      rotX: parseFloat(rot[0]) || 0,
-      rotY: parseFloat(rot[1]) || 0,
-      rotZ: parseFloat(rot[2]) || 0,
-      rotOrder: String(rot[3] || 'XYZ'),
-    },
-  });
-
-  res.json(serializeMedia(media));
 });
 
 app.post('/api/fetch-url', async (req, res) => {
