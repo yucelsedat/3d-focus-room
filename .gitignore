@@ -31,3 +31,7 @@ public/data/media.json
 prisma/*.db-journal
 prisma/*.db-shm
 prisma/*.db-wal
+
+# Graphify generated outputs (regeneratable artifacts)
+graphify-out/*
+!graphify-out/GRAPH_REPORT.md
