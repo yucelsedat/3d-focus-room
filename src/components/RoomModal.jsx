@@ -14,7 +14,7 @@ export function RoomModal() {
     outerSpecialDoors, setOuterSpecialDoors,
     rooms, setRooms, currentRoomId, currentRoomType,
   } = useStore()
-  const [activeTab, setActiveTab]   = useState('door')
+  const [activeTab, setActiveTab]   = useState('special-door')
   const [preview, setPreview]       = useState([])
   const [textures, setTextures]     = useState([])
   const [selectedTex, setSelectedTex] = useState('')
@@ -30,7 +30,7 @@ export function RoomModal() {
   useEffect(() => {
     if (!roomModal) return
     if (typeof hoveredTile?.id === 'number') setActiveTab('floor')
-    else setActiveTab('door')
+    else setActiveTab('special-door')
     setChildRoomName('')
     setChildRoomType('room')
     setCreateMode('new')
@@ -211,11 +211,11 @@ export function RoomModal() {
 
         {/* Tabs */}
         <div style={s.tabs}>
-          <button style={activeTab === 'door'  ? s.activeTab : s.tab} onClick={() => setActiveTab('door')}>
-            🚪 Kapı
-          </button>
           <button style={activeTab === 'special-door' ? s.activeTab : s.tab} onClick={() => setActiveTab('special-door')}>
             🔵 Özel Kapı
+          </button>
+          <button style={activeTab === 'door'  ? s.activeTab : s.tab} onClick={() => setActiveTab('door')}>
+            🚪 Kapı
           </button>
           <button style={activeTab === 'floor' ? s.activeTab : s.tab} onClick={() => setActiveTab('floor')}>
             ⬛ Zemin
