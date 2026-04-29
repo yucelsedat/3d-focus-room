@@ -37,7 +37,11 @@ function App() {
   }, [setRooms])
 
   useEffect(() => {
-    loadRoom('default', 'Varsayılan Oda').catch(err => console.error('Initial room load error:', err))
+    const lastId   = localStorage.getItem('lastRoomId')   || 'default'
+    const lastName = localStorage.getItem('lastRoomName') || 'Varsayılan Oda'
+    loadRoom(lastId, lastName).catch(() => {
+      loadRoom('default', 'Varsayılan Oda').catch(err => console.error('Initial room load error:', err))
+    })
   }, [])
 
   return (

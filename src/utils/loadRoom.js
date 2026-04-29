@@ -30,4 +30,7 @@ export async function loadRoom(id, name) {
   setSpecialDoors(innerSpecial)
   setOuterSpecialDoors(outerSpecial)
   setCurrentRoom(id, name, roomType)
+
+  localStorage.setItem('lastRoomId', id)
+  localStorage.setItem('lastRoomName', name)
 }
