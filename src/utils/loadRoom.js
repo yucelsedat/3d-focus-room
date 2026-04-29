@@ -6,7 +6,10 @@ export async function loadRoom(id, name) {
     setFloorTexture, setCurrentRoom, setSpecialDoors, setOuterSpecialDoors,
   } = useStore.getState()
 
-  await fetch(`/api/rooms/${id}/activate`, { method: 'POST' })
+  const activateRes = await fetch(`/api/rooms/${id}/activate`, { method: 'POST' })
+  const { room: activatedRoom } = await activateRes.json()
+  const roomType = activatedRoom?.roomType ?? 'room'
+
   const [media, doors, floor, specialDoors] = await Promise.all([
     fetch('/api/media').then(r => r.json()),
     fetch('/api/doors').then(r => r.json()),
@@ -26,5 +29,5 @@ export async function loadRoom(id, name) {
   setFloorTexture(floor.texture)
   setSpecialDoors(innerSpecial)
   setOuterSpecialDoors(outerSpecial)
-  setCurrentRoom(id, name)
+  setCurrentRoom(id, name, roomType)
 }

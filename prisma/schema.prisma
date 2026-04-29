@@ -10,6 +10,7 @@ datasource db {
 model Room {
   id           String         @id
   name         String
+  roomType     String         @default("room")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   parentId     String?

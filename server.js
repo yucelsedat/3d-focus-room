@@ -6,6 +6,7 @@ import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
+import { ROOM_CONFIGS, getDoorInstanceIds, getReturnAnchorId, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename).replace('/src/server', '');
@@ -45,7 +46,8 @@ ensureDir('public/uploads/images');
 ensureDir('public/uploads/videos');
 
 // ─── Active room ──────────────────────────────────────────────────────────────
-let activeRoomId = 'default';
+let activeRoomId   = 'default';
+let activeRoomType = 'room';
 
 // ─── Boot-time: auto-migrate JSON → SQLite if DB is empty ────────────────────
 async function bootMigrate() {
@@ -83,29 +85,8 @@ const upload = multer({ storage });
 
 // ─── Special door helpers ─────────────────────────────────────────────────────
 
-const GRID_SIZE_SRV       = 40;
 const OUTER_GRID_SIZE_SRV = 120;
-
-function getSpecialDoorInstanceIds(anchorId, gridSize = GRID_SIZE_SRV) {
-  const face = anchorId % 4;
-  const j    = Math.floor((anchorId % (gridSize * 4)) / 4);
-  const ids  = [];
-  for (let dh = 0; dh < 3; dh++) {
-    for (let dj = 0; dj < 2; dj++) {
-      const jj = j + dj;
-      if (jj >= gridSize) continue;
-      ids.push((dh * gridSize * 4) + (jj * 4) + face);
-    }
-  }
-  return ids;
-}
-
-function getReturnAnchorId(anchorId, gridSize = GRID_SIZE_SRV) {
-  const face = anchorId % 4;
-  const j    = Math.floor((anchorId % (gridSize * 4)) / 4);
-  const oppositeFace = face === 0 ? 1 : face === 1 ? 0 : face === 2 ? 3 : 2;
-  return j * 4 + oppositeFace;
-}
+const OUTER_CONFIG = { gx: OUTER_GRID_SIZE_SRV, gz: OUTER_GRID_SIZE_SRV, wh: 5 };
 
 // ─── Rooms API ────────────────────────────────────────────────────────────────
 
@@ -113,6 +94,7 @@ function serializeRoom(r) {
   return {
     id: r.id,
     name: r.name,
+    roomType: r.roomType ?? 'room',
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     categories: (r.categories ?? []).map(rc => rc.category),
@@ -136,18 +118,19 @@ app.get('/api/rooms', async (req, res) => {
 });
 
 app.post('/api/rooms', async (req, res) => {
-  const { name, categoryNames = [], parentId = null } = req.body;
+  const { name, categoryNames = [], parentId = null, roomType = 'room' } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'İsim gerekli' });
 
   const id = `room-${Date.now()}`;
+  const type = ROOM_CONFIGS[roomType] ? roomType : 'room';
 
   const categories = await Promise.all(
     categoryNames.map(n => prisma.category.upsert({ where: { name: n }, update: {}, create: { name: n } }))
   );
 
   await prisma.$transaction([
-    prisma.room.create({ data: { id, name: name.trim(), parentId: parentId || null } }),
-    prisma.floor.create({ data: { roomId: id, texture: 'zemin.png' } }),
+    prisma.room.create({ data: { id, name: name.trim(), parentId: parentId || null, roomType: type } }),
+    prisma.floor.create({ data: { roomId: id, texture: defaultFloorTexture(type) } }),
     ...categories.map(c => prisma.roomCategory.create({ data: { roomId: id, categoryId: c.id } })),
   ]);
 
@@ -160,8 +143,9 @@ app.post('/api/rooms/:id/activate', async (req, res) => {
   const room = await prisma.room.findUnique({ where: { id }, include: roomInclude });
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
 
-  activeRoomId = id;
-  console.log(`[server] Active room → ${id} (${room.name})`);
+  activeRoomId   = id;
+  activeRoomType = room.roomType ?? 'room';
+  console.log(`[server] Active room → ${id} (${room.name}) type=${activeRoomType}`);
   res.json({ ok: true, room: serializeRoom(room) });
 });
 
@@ -330,15 +314,15 @@ app.delete('/api/doors', async (req, res) => {
 
 // ─── Special Doors API ───────────────────────────────────────────────────────
 
-function serializeSpecialDoor(sd) {
-  const gridSize = sd.isOuter ? OUTER_GRID_SIZE_SRV : GRID_SIZE_SRV;
+function serializeSpecialDoor(sd, roomConfig) {
+  const config = sd.isOuter ? OUTER_CONFIG : (roomConfig ?? ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
   return {
     id: sd.id,
     anchorId: sd.anchorId,
     targetRoomId: sd.targetRoomId,
     targetRoomName: sd.target.name,
     isOuter: sd.isOuter,
-    instanceIds: getSpecialDoorInstanceIds(sd.anchorId, gridSize),
+    instanceIds: getDoorInstanceIds(sd.anchorId, config),
   };
 }
 
@@ -347,23 +331,30 @@ app.get('/api/special-doors', async (req, res) => {
     where: { roomId: activeRoomId },
     include: { target: { select: { id: true, name: true } } },
   });
-  res.json(doors.map(serializeSpecialDoor));
+  res.json(doors.map(sd => serializeSpecialDoor(sd)));
 });
 
 app.post('/api/special-doors', async (req, res) => {
-  const { anchorId, childRoomName, isOuter = false } = req.body;
+  const { anchorId, childRoomName, isOuter = false, roomType = 'room' } = req.body;
   if (!childRoomName?.trim()) return res.status(400).json({ error: 'Oda adı gerekli' });
 
   const childId = `room-${Date.now()}`;
-  const gridSize = isOuter ? OUTER_GRID_SIZE_SRV : GRID_SIZE_SRV;
-  const returnAnchorId = getReturnAnchorId(anchorId, gridSize);
+  const childType = ROOM_CONFIGS[roomType] ? roomType : 'room';
+  const parentConfig = isOuter ? OUTER_CONFIG : (ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
+  const childConfig  = ROOM_CONFIGS[childType];
+
+  // Back door: opposite face in child's coordinate system, j clamped to child face width
+  const { face: pFace, j: pJ } = decodeWallId(anchorId, parentConfig);
+  const oppFace = [1, 0, 3, 2][pFace];
+  const childFaceWidth = oppFace < 2 ? childConfig.gx : childConfig.gz;
+  const childJ = Math.min(pJ, childFaceWidth - 2);
+  const childReturnAnchorId = encodeWallId(0, oppFace, childJ, childConfig);
 
   await prisma.$transaction([
-    prisma.room.create({ data: { id: childId, name: childRoomName.trim(), parentId: activeRoomId } }),
-    prisma.floor.create({ data: { roomId: childId, texture: 'zemin.png' } }),
+    prisma.room.create({ data: { id: childId, name: childRoomName.trim(), parentId: activeRoomId, roomType: childType } }),
+    prisma.floor.create({ data: { roomId: childId, texture: defaultFloorTexture(childType) } }),
     prisma.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId: childId, isOuter } }),
-    // Geri kapı her zaman inner wall'da açılır (child odanın iç duvarı)
-    prisma.specialDoor.create({ data: { roomId: childId, anchorId: returnAnchorId, targetRoomId: activeRoomId, isOuter: false } }),
+    prisma.specialDoor.create({ data: { roomId: childId, anchorId: childReturnAnchorId, targetRoomId: activeRoomId, isOuter: false } }),
   ]);
 
   const child = await prisma.room.findUnique({ where: { id: childId }, include: roomInclude });
@@ -373,16 +364,25 @@ app.post('/api/special-doors', async (req, res) => {
   });
   res.json({
     childRoom: serializeRoom(child),
-    specialDoors: parentSpecialDoors.map(serializeSpecialDoor),
+    specialDoors: parentSpecialDoors.map(sd => serializeSpecialDoor(sd)),
   });
 });
 
 app.delete('/api/special-doors/:id', async (req, res) => {
   const id = parseInt(req.params.id);
-  const door = await prisma.specialDoor.findUnique({ where: { id } });
+  const door = await prisma.specialDoor.findUnique({
+    where: { id },
+    include: { target: { select: { roomType: true } } },
+  });
   if (!door) return res.status(404).json({ error: 'Bulunamadı' });
-  const gridSize = door.isOuter ? OUTER_GRID_SIZE_SRV : GRID_SIZE_SRV;
-  const returnAnchorId = getReturnAnchorId(door.anchorId, gridSize);
+  const config = door.isOuter ? OUTER_CONFIG : (ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
+  const targetType = door.target?.roomType ?? 'room';
+  const targetConfig = ROOM_CONFIGS[targetType] ?? ROOM_CONFIGS.room;
+  const { face: pFace, j: pJ } = decodeWallId(door.anchorId, config);
+  const oppFace = [1, 0, 3, 2][pFace];
+  const tFaceWidth = oppFace < 2 ? targetConfig.gx : targetConfig.gz;
+  const tJ = Math.min(pJ, tFaceWidth - 2);
+  const returnAnchorId = encodeWallId(0, oppFace, tJ, targetConfig);
   await prisma.specialDoor.deleteMany({
     where: { OR: [{ id }, { roomId: door.targetRoomId, anchorId: returnAnchorId, isOuter: false }] },
   });
@@ -406,7 +406,7 @@ app.post('/api/special-doors/link', async (req, res) => {
   });
   const allRooms = await prisma.room.findMany({ include: roomInclude });
   res.json({
-    specialDoors: updatedDoors.map(serializeSpecialDoor),
+    specialDoors: updatedDoors.map(sd => serializeSpecialDoor(sd)),
     rooms: allRooms.map(serializeRoom),
   });
 });

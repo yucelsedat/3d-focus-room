@@ -1,19 +1,22 @@
 import { useStore } from '../store/useStore'
+import { ROOM_CONFIGS, decodeWallId } from '../utils/roomConfig'
 
 const TILE_SIZE = 1
+const OUTER_CONFIG = { gx: 120, gz: 120, wh: 5 }
 
-function doorWorldPos(anchorId, isOuter = false) {
-  const gridSize   = isOuter ? 120 : 40
-  const wallOffset = isOuter ? 60  : 20
-  const face = anchorId % 4
-  const j    = Math.floor((anchorId % (gridSize * 4)) / 4)
-  const pos  = j - wallOffset + TILE_SIZE / 2 + TILE_SIZE / 2
-  const y    = 1.5
+function doorWorldPos(anchorId, config) {
+  const { gx, gz } = config
+  const { face, j } = decodeWallId(anchorId, config)
+  const offsetX = gx / 2
+  const offsetZ = gz / 2
+  const posAlongX = j - offsetX + TILE_SIZE
+  const posAlongZ = j - offsetZ + TILE_SIZE
+  const y = 1.5
   switch (face) {
-    case 0: return { position: [pos, y, -wallOffset], rotation: [0, 0,            0] }
-    case 1: return { position: [pos, y,  wallOffset], rotation: [0, Math.PI,      0] }
-    case 2: return { position: [-wallOffset, y, pos], rotation: [0, Math.PI / 2,  0] }
-    case 3: return { position: [ wallOffset, y, pos], rotation: [0,-Math.PI / 2,  0] }
+    case 0: return { position: [posAlongX, y, -offsetZ], rotation: [0, 0,           0] }
+    case 1: return { position: [posAlongX, y,  offsetZ], rotation: [0, Math.PI,     0] }
+    case 2: return { position: [-offsetX,  y, posAlongZ], rotation: [0, Math.PI / 2, 0] }
+    case 3: return { position: [ offsetX,  y, posAlongZ], rotation: [0,-Math.PI / 2, 0] }
     default: return { position: [0, y, 0], rotation: [0, 0, 0] }
   }
 }
@@ -21,11 +24,13 @@ function doorWorldPos(anchorId, isOuter = false) {
 export function BlueDoors() {
   const specialDoors      = useStore(s => s.specialDoors)
   const outerSpecialDoors = useStore(s => s.outerSpecialDoors)
+  const currentRoomType   = useStore(s => s.currentRoomType)
+  const innerConfig = ROOM_CONFIGS[currentRoomType] ?? ROOM_CONFIGS.room
 
   return (
     <>
       {specialDoors.map(sd => {
-        const { position, rotation } = doorWorldPos(sd.anchorId, false)
+        const { position, rotation } = doorWorldPos(sd.anchorId, innerConfig)
         return (
           <mesh key={`inner-${sd.id}`} position={position} rotation={rotation}>
             <planeGeometry args={[2, 3]} />
@@ -41,7 +46,7 @@ export function BlueDoors() {
         )
       })}
       {outerSpecialDoors.map(sd => {
-        const { position, rotation } = doorWorldPos(sd.anchorId, true)
+        const { position, rotation } = doorWorldPos(sd.anchorId, OUTER_CONFIG)
         return (
           <mesh key={`outer-${sd.id}`} position={position} rotation={rotation}>
             <planeGeometry args={[2, 3]} />

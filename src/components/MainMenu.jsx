@@ -19,6 +19,7 @@ export function MainMenu() {
 
   // ── New room form state ─────────────────────────────────────────────────────
   const [newName, setNewName] = useState('')
+  const [newRoomType, setNewRoomType] = useState('room')
   const [newCatInput, setNewCatInput] = useState('')
   const [newCategories, setNewCategories] = useState([])
   const [newHasParent, setNewHasParent] = useState(false)
@@ -82,6 +83,7 @@ export function MainMenu() {
           name: newName.trim(),
           categoryNames: newCategories,
           parentId: newParentId,
+          roomType: newRoomType,
         }),
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Oluşturulamadı') }
@@ -196,7 +198,7 @@ export function MainMenu() {
               <button style={s.continueBtn} onClick={closeMenuModal} disabled={loading}>
                 Devam Et
               </button>
-              <button style={s.otherBtn} onClick={() => { setNewName(''); setNewCategories([]); setNewParentId(null); setNewHasParent(false); setView('new-room'); setError('') }} disabled={loading}>
+              <button style={s.otherBtn} onClick={() => { setNewName(''); setNewRoomType('room'); setNewCategories([]); setNewParentId(null); setNewHasParent(false); setView('new-room'); setError('') }} disabled={loading}>
                 Yeni Oda
               </button>
               <button style={s.otherBtn} onClick={() => { setView('settings'); setError('') }} disabled={loading}>
@@ -276,6 +278,21 @@ export function MainMenu() {
         {view === 'new-room' && (
           <div style={s.subView}>
             <div style={s.subTitle}>Yeni Oda</div>
+
+            {/* Oda tipi seçici */}
+            <div>
+              <div style={s.fieldLabel}>Oda Tipi</div>
+              <div style={s.typeRow}>
+                <label style={{ ...s.typeOption, ...(newRoomType === 'room' ? s.typeActive : {}) }}>
+                  <input type="radio" name="newRoomType" value="room" checked={newRoomType === 'room'} onChange={() => setNewRoomType('room')} style={{ display: 'none' }} />
+                  🏠 Oda
+                </label>
+                <label style={{ ...s.typeOption, ...(newRoomType === 'cadde' ? s.typeActive : {}) }}>
+                  <input type="radio" name="newRoomType" value="cadde" checked={newRoomType === 'cadde'} onChange={() => setNewRoomType('cadde')} style={{ display: 'none' }} />
+                  🛣️ Cadde
+                </label>
+              </div>
+            </div>
 
             <input style={s.input} placeholder="Oda adı *" value={newName} onChange={e => setNewName(e.target.value)} autoFocus />
 
@@ -550,6 +567,16 @@ const s = {
   suggestion: {
     padding: '8px 12px', fontSize: '13px', color: '#bbb',
     cursor: 'pointer', borderBottom: '1px solid #1a1a1a',
+  },
+  // Room type selector
+  typeRow: { display: 'flex', gap: '8px' },
+  typeOption: {
+    flex: 1, padding: '10px', textAlign: 'center', borderRadius: '8px',
+    border: '1px solid #2a2a2a', background: '#0a0a0a', color: '#888',
+    fontSize: '13px', cursor: 'pointer', userSelect: 'none',
+  },
+  typeActive: {
+    border: '1px solid #ff9500', background: '#1a1000', color: '#ff9500', fontWeight: 600,
   },
   // Keys
   keysBox: { marginTop: '24px', padding: '16px', background: '#0d0d0d', border: '1px solid #222', borderRadius: '12px' },

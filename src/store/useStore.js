@@ -12,6 +12,7 @@ export const useStore = create((set) => ({
   floorTexture: 'zemin.png',
   currentRoomId: 'default',
   currentRoomName: 'Varsayılan Oda',
+  currentRoomType: 'room',
   rooms: [],
   specialDoors: [],
   outerSpecialDoors: [],
@@ -40,7 +41,7 @@ export const useStore = create((set) => ({
   addOuterDoor: (ids) => set((state) => ({ hiddenOuterWalls: [...new Set([...state.hiddenOuterWalls, ...ids])] })),
   removeOuterDoor: (ids) => set((state) => ({ hiddenOuterWalls: state.hiddenOuterWalls.filter(id => !ids.includes(id)) })),
 
-  setCurrentRoom: (id, name) => set({ currentRoomId: id, currentRoomName: name }),
+  setCurrentRoom: (id, name, type = 'room') => set({ currentRoomId: id, currentRoomName: name, currentRoomType: type }),
   setRooms: (rooms) => set({ rooms }),
   setSpecialDoors: (specialDoors) => set({ specialDoors }),
   setOuterSpecialDoors: (outerSpecialDoors) => set({ outerSpecialDoors }),

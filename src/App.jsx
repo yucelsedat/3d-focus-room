@@ -1,4 +1,4 @@
-import { useEffect, Suspense } from 'react'
+import { useEffect, Suspense, Component } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Sky, KeyboardControls, Stars } from '@react-three/drei'
 import { Grid, OutdoorFloor } from './components/Grid'
@@ -15,6 +15,16 @@ import { BlueDoors } from './components/BlueDoor'
 import { useStore } from './store/useStore'
 import { loadRoom } from './utils/loadRoom'
 import './App.css'
+
+class SceneErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null } }
+  static getDerivedStateFromError(e) { return { error: e } }
+  componentDidCatch(e) { console.error('[SceneErrorBoundary]', e) }
+  render() {
+    if (this.state.error) return null
+    return this.props.children
+  }
+}
 
 function App() {
   const setRooms = useStore((state) => state.setRooms)
@@ -64,15 +74,17 @@ function App() {
             castShadow
           />
 
-          <Suspense fallback={null}>
-            <OutdoorFloor />
-            <Grid />
-            <Walls />
-            <OuterWalls />
-            <BlueDoors />
-            <Player />
-            <KeyHandler />
-          </Suspense>
+          <SceneErrorBoundary>
+            <Suspense fallback={null}>
+              <OutdoorFloor />
+              <Grid />
+              <Walls />
+              <OuterWalls />
+              <BlueDoors />
+              <Player />
+              <KeyHandler />
+            </Suspense>
+          </SceneErrorBoundary>
 
           {/* MediaManager gets its own Suspense so texture failures cannot black-out the scene */}
           <Suspense fallback={null}>

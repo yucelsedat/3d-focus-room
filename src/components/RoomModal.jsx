@@ -1,22 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
+import { ROOM_CONFIGS, getDoorInstanceIds } from '../utils/roomConfig'
 
-const INNER_GRID_SIZE = 40
-const OUTER_GRID_SIZE = 120
-
-function getDoorIds(instanceId, gridSize) {
-  const face = instanceId % 4
-  const j    = Math.floor((instanceId % (gridSize * 4)) / 4)
-  const ids  = []
-  for (let dh = 0; dh < 3; dh++) {
-    for (let dj = 0; dj < 2; dj++) {
-      const jj = j + dj
-      if (jj >= gridSize) continue
-      ids.push((dh * gridSize * 4) + (jj * 4) + face)
-    }
-  }
-  return ids
-}
+const OUTER_CONFIG = { gx: 120, gz: 120, wh: 5 }
 
 export function RoomModal() {
   const {
@@ -26,13 +12,14 @@ export function RoomModal() {
     setFloorTexture,
     specialDoors, setSpecialDoors,
     outerSpecialDoors, setOuterSpecialDoors,
-    rooms, setRooms, currentRoomId,
+    rooms, setRooms, currentRoomId, currentRoomType,
   } = useStore()
   const [activeTab, setActiveTab]   = useState('door')
   const [preview, setPreview]       = useState([])
   const [textures, setTextures]     = useState([])
   const [selectedTex, setSelectedTex] = useState('')
   const [childRoomName, setChildRoomName] = useState('')
+  const [childRoomType, setChildRoomType] = useState('room')
   const [creating, setCreating] = useState(false)
   const [createMode, setCreateMode] = useState('new')
   const [linkType, setLinkType]     = useState('child')
@@ -45,6 +32,7 @@ export function RoomModal() {
     if (typeof hoveredTile?.id === 'number') setActiveTab('floor')
     else setActiveTab('door')
     setChildRoomName('')
+    setChildRoomType('room')
     setCreateMode('new')
     setLinkSearch('')
     setLinkTargetId(null)
@@ -65,10 +53,10 @@ export function RoomModal() {
     if (typeof id !== 'string') { setPreview([]); return }
     if (!id.startsWith('wall-') && !id.startsWith('outer-')) { setPreview([]); return }
     const isOuter = id.startsWith('outer-')
-    const gridSize = isOuter ? OUTER_GRID_SIZE : INNER_GRID_SIZE
+    const config = isOuter ? OUTER_CONFIG : (ROOM_CONFIGS[currentRoomType] ?? ROOM_CONFIGS.room)
     const instanceId = parseInt(id.replace(isOuter ? 'outer-' : 'wall-', ''))
-    setPreview(getDoorIds(instanceId, gridSize))
-  }, [hoveredTile])
+    setPreview(getDoorInstanceIds(instanceId, config))
+  }, [hoveredTile, currentRoomType])
 
   const isInnerWall = typeof hoveredTile?.id === 'string' && hoveredTile.id.startsWith('wall-')
   const isOuterWall = typeof hoveredTile?.id === 'string' && hoveredTile.id.startsWith('outer-')
@@ -140,7 +128,7 @@ export function RoomModal() {
       const r = await fetch('/api/special-doors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ anchorId, childRoomName, isOuter: isOuterWall }),
+        body: JSON.stringify({ anchorId, childRoomName, isOuter: isOuterWall, roomType: childRoomType }),
       })
       if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Sunucu hatası') }
       const { childRoom, specialDoors: updatedDoors } = await r.json()
@@ -299,6 +287,17 @@ export function RoomModal() {
 
                 {createMode === 'new' && (
                   <>
+                    {/* Oda tipi seçici */}
+                    <div style={s.typeRow}>
+                      <label style={{ ...s.typeOption, ...(childRoomType === 'room' ? s.typeActive : {}) }}>
+                        <input type="radio" checked={childRoomType === 'room'} onChange={() => setChildRoomType('room')} style={{ display: 'none' }} />
+                        🏠 Oda
+                      </label>
+                      <label style={{ ...s.typeOption, ...(childRoomType === 'cadde' ? s.typeActive : {}) }}>
+                        <input type="radio" checked={childRoomType === 'cadde'} onChange={() => setChildRoomType('cadde')} style={{ display: 'none' }} />
+                        🛣️ Cadde
+                      </label>
+                    </div>
                     <input
                       style={s.input}
                       placeholder="Yeni oda adı..."
@@ -555,6 +554,15 @@ const s = {
     fontSize: '11px',
     color: '#aaa',
     textAlign: 'center',
+  },
+  typeRow: { display: 'flex', gap: '6px' },
+  typeOption: {
+    flex: 1, padding: '8px', textAlign: 'center', borderRadius: '7px',
+    border: '1px solid #2a2a2a', background: '#0a0a0a', color: '#888',
+    fontSize: '12px', cursor: 'pointer', userSelect: 'none',
+  },
+  typeActive: {
+    border: '1px solid #3b82f6', background: '#0a1628', color: '#60a5fa', fontWeight: 600,
   },
   applyBtn: {
     padding: '11px',
