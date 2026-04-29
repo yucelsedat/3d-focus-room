@@ -195,8 +195,23 @@ export function Player() {
 
       if (crossed) {
         teleporting.current = true
+        const fromRoomId = useStore.getState().currentRoomId
         loadRoom(sd.targetRoomId, sd.targetRoomName).then(() => {
-          state.camera.position.set(spawnX, 2.5, spawnZ)
+          const { specialDoors: tDoors, outerSpecialDoors: tOuterDoors } = useStore.getState()
+          const returnDoor = [...tDoors, ...tOuterDoors].find(d => d.targetRoomId === fromRoomId)
+          if (returnDoor) {
+            const { face: rf, j: rj } = decodeWallId(returnDoor.anchorId, targetConfig)
+            const rx = targetConfig.gx / 2
+            const rz = targetConfig.gz / 2
+            let sx, sz
+            if      (rf === 0) { sx = rj - rx + 1; sz = -rz + 2 }
+            else if (rf === 1) { sx = rj - rx + 1; sz =  rz - 2 }
+            else if (rf === 2) { sx = -rx + 2;     sz = rj - rz + 1 }
+            else               { sx =  rx - 2;     sz = rj - rz + 1 }
+            state.camera.position.set(sx, 2.5, sz)
+          } else {
+            state.camera.position.set(spawnX, 2.5, spawnZ)
+          }
           teleporting.current = false
         }).catch(err => {
           console.error('Teleport failed:', err)
@@ -281,8 +296,23 @@ export function Player() {
 
       if (crossed) {
         teleporting.current = true
+        const fromRoomId = useStore.getState().currentRoomId
         loadRoom(sd.targetRoomId, sd.targetRoomName).then(() => {
-          state.camera.position.set(spawnX, 2.5, spawnZ)
+          const { specialDoors: tDoors, outerSpecialDoors: tOuterDoors } = useStore.getState()
+          const returnDoor = [...tDoors, ...tOuterDoors].find(d => d.targetRoomId === fromRoomId)
+          if (returnDoor) {
+            const { face: rf, j: rj } = decodeWallId(returnDoor.anchorId, targetConfig)
+            const rx = targetConfig.gx / 2
+            const rz = targetConfig.gz / 2
+            let sx, sz
+            if      (rf === 0) { sx = rj - rx + 1; sz = -rz + 2 }
+            else if (rf === 1) { sx = rj - rx + 1; sz =  rz - 2 }
+            else if (rf === 2) { sx = -rx + 2;     sz = rj - rz + 1 }
+            else               { sx =  rx - 2;     sz = rj - rz + 1 }
+            state.camera.position.set(sx, 2.5, sz)
+          } else {
+            state.camera.position.set(spawnX, 2.5, spawnZ)
+          }
           teleporting.current = false
         }).catch(err => {
           console.error('Outer teleport failed:', err)
