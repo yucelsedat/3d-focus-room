@@ -372,10 +372,14 @@ app.delete('/api/special-doors/:id', async (req, res) => {
   const id = parseInt(req.params.id);
   const door = await prisma.specialDoor.findUnique({
     where: { id },
-    include: { target: { select: { roomType: true } } },
+    include: {
+      room:   { select: { roomType: true } },
+      target: { select: { roomType: true } },
+    },
   });
   if (!door) return res.status(404).json({ error: 'Bulunamadı' });
-  const config = door.isOuter ? OUTER_CONFIG : (ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
+  const sourceType = door.room?.roomType ?? 'room';
+  const config = door.isOuter ? OUTER_CONFIG : (ROOM_CONFIGS[sourceType] ?? ROOM_CONFIGS.room);
   const targetType = door.target?.roomType ?? 'room';
   const targetConfig = ROOM_CONFIGS[targetType] ?? ROOM_CONFIGS.room;
   const { face: pFace, j: pJ } = decodeWallId(door.anchorId, config);
@@ -384,9 +388,25 @@ app.delete('/api/special-doors/:id', async (req, res) => {
   const tJ = Math.min(pJ, tFaceWidth - 2);
   const returnAnchorId = encodeWallId(0, oppFace, tJ, targetConfig);
   await prisma.specialDoor.deleteMany({
-    where: { OR: [{ id }, { roomId: door.targetRoomId, anchorId: returnAnchorId, isOuter: false }] },
+    where: {
+      OR: [
+        { id },
+        { roomId: door.targetRoomId, anchorId: returnAnchorId, isOuter: false },
+        { roomId: door.targetRoomId, targetRoomId: door.roomId },
+      ],
+    },
   });
-  res.json({ success: true });
+  await prisma.room.updateMany({
+    where: {
+      OR: [
+        { id: door.targetRoomId, parentId: door.roomId },
+        { id: door.roomId,       parentId: door.targetRoomId },
+      ],
+    },
+    data: { parentId: null },
+  });
+  const allRooms = await prisma.room.findMany({ include: roomInclude });
+  res.json({ success: true, rooms: allRooms.map(serializeRoom) });
 });
 
 app.post('/api/special-doors/link', async (req, res) => {

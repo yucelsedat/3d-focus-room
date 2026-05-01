@@ -33,6 +33,9 @@ export function MainMenu() {
   const [setParentSearch, setSetParentSearch] = useState('')
   const [setParentId, setSetParentId] = useState(null)
   const [setChildren, setSetChildren] = useState([])
+  const [settingsTab, setSettingsTab] = useState('genel')
+  const [connDoors, setConnDoors] = useState([])
+  const [connLoading, setConnLoading] = useState(false)
 
   // ── Global lists for autocomplete ───────────────────────────────────────────
   const [allCategories, setAllCategories] = useState([])
@@ -57,7 +60,20 @@ export function MainMenu() {
     setSetChildren(room.children || [])
     setSetCatInput('')
     setSetParentSearch('')
+    setSettingsTab('genel')
+    setConnDoors([])
   }, [view, currentRoomId, rooms])
+
+  // Fetch special doors when connections tab is active
+  useEffect(() => {
+    if (view !== 'settings' || settingsTab !== 'baglantilar') return
+    setConnLoading(true)
+    fetch('/api/special-doors')
+      .then(r => r.json())
+      .then(setConnDoors)
+      .catch(() => setConnDoors([]))
+      .finally(() => setConnLoading(false))
+  }, [view, settingsTab])
 
   if (!menuModal) return null
 
@@ -123,6 +139,34 @@ export function MainMenu() {
       closeMenuModal()
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
+  }
+
+  // ── Delete special door connection only ─────────────────────────────────────
+  async function deleteConnection(doorId) {
+    setConnLoading(true); setError('')
+    try {
+      const res = await fetch(`/api/special-doors/${doorId}`, { method: 'DELETE' })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Silinemedi') }
+      const data = await res.json()
+      if (data.rooms) setRooms(data.rooms)
+      const updated = await fetch('/api/special-doors').then(r => r.json())
+      setConnDoors(updated)
+    } catch (e) { setError(e.message) }
+    finally { setConnLoading(false) }
+  }
+
+  // ── Delete connected room entirely ──────────────────────────────────────────
+  async function deleteConnectedRoom(targetRoomId, targetRoomName) {
+    if (!window.confirm(`"${targetRoomName}" odası ve tüm içeriği silinecek. Emin misin?`)) return
+    setConnLoading(true); setError('')
+    try {
+      const res = await fetch(`/api/rooms/${targetRoomId}`, { method: 'DELETE' })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Silinemedi') }
+      setRooms(rooms.filter(r => r.id !== targetRoomId))
+      const updated = await fetch('/api/special-doors').then(r => r.json())
+      setConnDoors(updated)
+    } catch (e) { setError(e.message) }
+    finally { setConnLoading(false) }
   }
 
   // ── Delete room ─────────────────────────────────────────────────────────────
@@ -340,54 +384,117 @@ export function MainMenu() {
           <div style={s.subView}>
             <div style={s.subTitle}>Oda Ayarları — {currentRoomName}</div>
 
-            {/* Name */}
-            <div>
-              <div style={s.fieldLabel}>İsim</div>
-              <input style={s.input} value={setName} onChange={e => setSetName(e.target.value)} placeholder="Oda adı" />
+            {/* Tab bar */}
+            <div style={s.typeRow}>
+              <label style={{ ...s.typeOption, ...(settingsTab === 'genel' ? s.typeActive : {}) }} onClick={() => setSettingsTab('genel')}>
+                Genel Ayarlar
+              </label>
+              <label style={{ ...s.typeOption, ...(settingsTab === 'baglantilar' ? s.typeActive : {}) }} onClick={() => setSettingsTab('baglantilar')}>
+                Bağlantı Ayarları
+              </label>
             </div>
 
-            {/* Categories */}
-            <div>
-              <div style={s.fieldLabel}>Kategoriler</div>
-              <PillInput
-                input={setCatInput} setInput={setSetCatInput}
-                items={setCategories} onAdd={() => { if (setCatInput.trim() && !setCategories.includes(setCatInput.trim())) setSetCategories([...setCategories, setCatInput.trim()]); setSetCatInput('') }}
-                onRemove={v => removeItem(setCategories, setSetCategories, v)}
-                placeholder="Kategori, Enter"
-                suggestions={allCategories.map(c => c.name).filter(n => n.toLowerCase().includes(setCatInput.toLowerCase()) && !setCategories.includes(n))}
-                onSuggest={v => { if (!setCategories.includes(v)) setSetCategories([...setCategories, v]); setSetCatInput('') }}
-              />
-            </div>
-
-            {/* Parents */}
-            <div>
-              <div style={s.fieldLabel}>Parent Odalar</div>
-              <ParentPicker
-                search={setParentSearch} setSearch={setSetParentSearch}
-                selectedId={setParentId}
-                rooms={filteredParents(setParentSearch, currentRoomId, [])}
-                onToggle={id => toggleParent(setParentId, setSetParentId, id)}
-                allRooms={rooms}
-                currentRoomId={currentRoomId}
-              />
-            </div>
-
-            {/* Children (read-only) */}
-            {setChildren.length > 0 && (
-              <div>
-                <div style={s.fieldLabel}>Child Odalar (salt okunur)</div>
-                <div style={s.pillContainer}>
-                  {setChildren.map(c => <span key={c.id} style={s.pill}>{c.name}</span>)}
+            {/* ── Genel Ayarlar sekmesi ── */}
+            {settingsTab === 'genel' && (
+              <>
+                {/* Name */}
+                <div>
+                  <div style={s.fieldLabel}>İsim</div>
+                  <input style={s.input} value={setName} onChange={e => setSetName(e.target.value)} placeholder="Oda adı" />
                 </div>
-              </div>
+
+                {/* Categories */}
+                <div>
+                  <div style={s.fieldLabel}>Kategoriler</div>
+                  <PillInput
+                    input={setCatInput} setInput={setSetCatInput}
+                    items={setCategories} onAdd={() => { if (setCatInput.trim() && !setCategories.includes(setCatInput.trim())) setSetCategories([...setCategories, setCatInput.trim()]); setSetCatInput('') }}
+                    onRemove={v => removeItem(setCategories, setSetCategories, v)}
+                    placeholder="Kategori, Enter"
+                    suggestions={allCategories.map(c => c.name).filter(n => n.toLowerCase().includes(setCatInput.toLowerCase()) && !setCategories.includes(n))}
+                    onSuggest={v => { if (!setCategories.includes(v)) setSetCategories([...setCategories, v]); setSetCatInput('') }}
+                  />
+                </div>
+
+                {/* Parents */}
+                <div>
+                  <div style={s.fieldLabel}>Parent Odalar</div>
+                  <ParentPicker
+                    search={setParentSearch} setSearch={setSetParentSearch}
+                    selectedId={setParentId}
+                    rooms={filteredParents(setParentSearch, currentRoomId, [])}
+                    onToggle={id => toggleParent(setParentId, setSetParentId, id)}
+                    allRooms={rooms}
+                    currentRoomId={currentRoomId}
+                  />
+                </div>
+
+                {/* Children (read-only) */}
+                {setChildren.length > 0 && (
+                  <div>
+                    <div style={s.fieldLabel}>Child Odalar (salt okunur)</div>
+                    <div style={s.pillContainer}>
+                      {setChildren.map(c => <span key={c.id} style={s.pill}>{c.name}</span>)}
+                    </div>
+                  </div>
+                )}
+
+                <div style={s.row}>
+                  <button style={s.backBtn} onClick={() => { setView('main'); setError('') }} disabled={loading}>← Geri</button>
+                  <button style={s.actionBtn} onClick={saveSettings} disabled={loading}>
+                    {loading ? '...' : 'Kaydet'}
+                  </button>
+                </div>
+              </>
             )}
 
-            <div style={s.row}>
-              <button style={s.backBtn} onClick={() => { setView('main'); setError('') }} disabled={loading}>← Geri</button>
-              <button style={s.actionBtn} onClick={saveSettings} disabled={loading}>
-                {loading ? '...' : 'Kaydet'}
-              </button>
-            </div>
+            {/* ── Bağlantı Ayarları sekmesi ── */}
+            {settingsTab === 'baglantilar' && (
+              <>
+                {connLoading && <div style={{ color: '#666', fontSize: '13px' }}>Yükleniyor...</div>}
+                {!connLoading && connDoors.length === 0 && (
+                  <div style={s.emptyMsg}>Bu odanın hiç özel kapı bağlantısı yok.</div>
+                )}
+                {!connLoading && connDoors.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={s.fieldLabel}>Özel Kapı Bağlantıları</div>
+                    {connDoors.map(door => (
+                      <div key={door.id} style={s.connRow}>
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                          <span style={{ fontSize: '14px', color: '#ccc', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {door.targetRoomName || door.targetRoomId}
+                          </span>
+                          <span style={{ fontSize: '11px', color: '#555' }}>
+                            {door.isOuter ? 'Dış kapı' : 'İç kapı'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                          <button
+                            style={s.warnBtn}
+                            onClick={() => deleteConnection(door.id)}
+                            disabled={connLoading}
+                            title="Sadece özel kapıları sil, oda kalır"
+                          >
+                            Bağlantıyı Sil
+                          </button>
+                          <button
+                            style={s.dangerBtn}
+                            onClick={() => deleteConnectedRoom(door.targetRoomId, door.targetRoomName || door.targetRoomId)}
+                            disabled={connLoading}
+                            title="Bağlı odayı ve tüm içeriğini sil"
+                          >
+                            Odayı Sil
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={s.row}>
+                  <button style={s.backBtn} onClick={() => { setView('main'); setError('') }} disabled={connLoading}>← Geri</button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -577,6 +684,20 @@ const s = {
   },
   typeActive: {
     border: '1px solid #ff9500', background: '#1a1000', color: '#ff9500', fontWeight: 600,
+  },
+  // Connection rows
+  connRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    background: '#111', border: '1px solid #222', borderRadius: '8px',
+    padding: '10px 12px', gap: '8px',
+  },
+  warnBtn: {
+    background: 'transparent', color: '#d4a017', border: '1px solid #4a3800',
+    borderRadius: '6px', padding: '5px 10px', fontSize: '12px', cursor: 'pointer',
+  },
+  dangerBtn: {
+    background: 'transparent', color: '#c44', border: '1px solid #4a1a1a',
+    borderRadius: '6px', padding: '5px 10px', fontSize: '12px', cursor: 'pointer',
   },
   // Keys
   keysBox: { marginTop: '24px', padding: '16px', background: '#0d0d0d', border: '1px solid #222', borderRadius: '12px' },
