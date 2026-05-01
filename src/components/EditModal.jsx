@@ -314,6 +314,30 @@ export function EditModal() {
     }
   }
 
+  const handleCopyImage = async (m) => {
+    try {
+      const res = await fetch(m.url)
+      const blob = await res.blob()
+      if (['image/png', 'image/jpeg', 'image/webp'].includes(blob.type)) {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+      } else {
+        const img = new Image()
+        const objUrl = URL.createObjectURL(blob)
+        await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = objUrl })
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
+        canvas.getContext('2d').drawImage(img, 0, 0)
+        URL.revokeObjectURL(objUrl)
+        const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
+      }
+    } catch {
+      navigator.clipboard.writeText(window.location.origin + m.url)
+    }
+    setCopiedId(m.id)
+    setTimeout(() => setCopiedId(null), 2000)
+  }
+
   const loadingLabel =
     loadingStep === 'downloading' ? '⬇ İndiriliyor...' : '💾 Kaydediliyor...'
 
@@ -378,6 +402,15 @@ export function EditModal() {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '6px', flexShrink: 0, alignItems: 'center' }}>
+                    {m.type === 'image' && (
+                      <button
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: copiedId === m.id ? '#4ade80' : '#888', fontSize: '14px', flexShrink: 0 }}
+                        title="Resmi panoya kopyala"
+                        onClick={() => handleCopyImage(m)}
+                      >
+                        {copiedId === m.id ? '✓' : '⧉'}
+                      </button>
+                    )}
                     {(m.type === 'youtube' || m.type === 'embed') && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#0d0d0d', border: '1px solid #2a2a2a', borderRadius: '6px', padding: '3px 8px', maxWidth: '200px' }}>
                         <span style={{ fontSize: '11px', color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -397,19 +430,32 @@ export function EditModal() {
                       </div>
                     )}
                     {m.type === 'markdown' && (
-                      <button
-                        style={s.editBtn}
-                        onClick={() => {
-                          if (editingId === m.id) {
-                            setEditingId(null)
-                          } else {
-                            setEditingId(m.id)
-                            setEditingContent(m.content || '')
-                          }
-                        }}
-                      >
-                        {editingId === m.id ? 'Kapat' : 'Düzenle'}
-                      </button>
+                      <>
+                        <button
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: copiedId === m.id ? '#4ade80' : '#888', fontSize: '14px', flexShrink: 0 }}
+                          title="Metni panoya kopyala"
+                          onClick={() => {
+                            navigator.clipboard.writeText(m.content || '')
+                            setCopiedId(m.id)
+                            setTimeout(() => setCopiedId(null), 2000)
+                          }}
+                        >
+                          {copiedId === m.id ? '✓' : '⧉'}
+                        </button>
+                        <button
+                          style={s.editBtn}
+                          onClick={() => {
+                            if (editingId === m.id) {
+                              setEditingId(null)
+                            } else {
+                              setEditingId(m.id)
+                              setEditingContent(m.content || '')
+                            }
+                          }}
+                        >
+                          {editingId === m.id ? 'Kapat' : 'Düzenle'}
+                        </button>
+                      </>
                     )}
                     <button style={s.deleteBtn} onClick={() => handleDelete(m.id)}>
                       Sil
