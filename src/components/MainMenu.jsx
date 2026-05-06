@@ -300,6 +300,7 @@ export function MainMenu() {
                         <span style={{ ...s.roomName, ...(room.id === currentRoomId ? s.activeRoom : {}) }}>
                           {room.id === currentRoomId && <span style={s.activeDot}>● </span>}
                           {room.name}
+                          {room.parent && <span style={s.parentIcon}> ↑</span>}
                           {room.children?.length > 0 && <span style={s.childArrow}> ↳{room.children.length}</span>}
                         </span>
                       </div>
@@ -679,6 +680,7 @@ const s = {
   activeRoom: { color: '#fff', fontWeight: 600 },
   activeDot: { color: '#4caf50', fontSize: '10px' },
   childArrow: { color: '#555', fontSize: '11px' },
+  parentIcon: { color: '#555', fontSize: '11px' },
   roomActions: { display: 'flex', gap: '6px', flexShrink: 0, alignItems: 'center' },
   loadBtn: {
     background: 'transparent', color: '#aaa', border: '1px solid #333',
