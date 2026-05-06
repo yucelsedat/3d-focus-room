@@ -36,6 +36,7 @@ export function MainMenu() {
   const [settingsTab, setSettingsTab] = useState('genel')
   const [connDoors, setConnDoors] = useState([])
   const [connLoading, setConnLoading] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(null)
 
   // ── Global lists for autocomplete ───────────────────────────────────────────
   const [allCategories, setAllCategories] = useState([])
@@ -156,13 +157,15 @@ export function MainMenu() {
   }
 
   // ── Delete connected room entirely ──────────────────────────────────────────
-  async function deleteConnectedRoom(targetRoomId, targetRoomName) {
-    if (!window.confirm(`"${targetRoomName}" odası ve tüm içeriği silinecek. Emin misin?`)) return
-    setConnLoading(true); setError('')
+  async function deleteConnectedRoom(targetRoomId, cascade = false) {
+    setConnLoading(true); setError(''); setDeleteConfirm(null)
     try {
-      const res = await fetch(`/api/rooms/${targetRoomId}`, { method: 'DELETE' })
+      const url = `/api/rooms/${targetRoomId}${cascade ? '?cascade=true' : ''}`
+      const res = await fetch(url, { method: 'DELETE' })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Silinemedi') }
-      setRooms(rooms.filter(r => r.id !== targetRoomId))
+      const data = await res.json()
+      const deletedIds = data.deletedIds || [targetRoomId]
+      setRooms(rooms.filter(r => !deletedIds.includes(r.id)))
       const updated = await fetch('/api/special-doors').then(r => r.json())
       setConnDoors(updated)
     } catch (e) { setError(e.message) }
@@ -170,15 +173,18 @@ export function MainMenu() {
   }
 
   // ── Delete room ─────────────────────────────────────────────────────────────
-  async function deleteRoom(id) {
+  async function deleteRoom(id, cascade = false) {
     if (id === 'default') return
-    setLoading(true); setError('')
+    setLoading(true); setError(''); setDeleteConfirm(null)
     try {
-      const res = await fetch(`/api/rooms/${id}`, { method: 'DELETE' })
+      const url = `/api/rooms/${id}${cascade ? '?cascade=true' : ''}`
+      const res = await fetch(url, { method: 'DELETE' })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Silinemedi') }
-      const updated = rooms.filter(r => r.id !== id)
+      const data = await res.json()
+      const deletedIds = data.deletedIds || [id]
+      const updated = rooms.filter(r => !deletedIds.includes(r.id))
       setRooms(updated)
-      if (id === currentRoomId) {
+      if (deletedIds.includes(currentRoomId)) {
         const def = updated.find(r => r.id === 'default') || updated[0]
         if (def) await loadRoom(def.id, def.name)
       }
@@ -303,7 +309,7 @@ export function MainMenu() {
                         </button>
                         <button
                           style={{ ...s.deleteBtn, ...(room.id === 'default' ? s.disabledBtn : {}) }}
-                          onClick={() => deleteRoom(room.id)}
+                          onClick={() => setDeleteConfirm({ id: room.id, name: room.name, fromConn: false })}
                           disabled={loading || room.id === 'default'}
                           title={room.id === 'default' ? 'Varsayılan oda silinemez' : ''}
                         >✕</button>
@@ -479,7 +485,7 @@ export function MainMenu() {
                           </button>
                           <button
                             style={s.dangerBtn}
-                            onClick={() => deleteConnectedRoom(door.targetRoomId, door.targetRoomName || door.targetRoomId)}
+                            onClick={() => setDeleteConfirm({ id: door.targetRoomId, name: door.targetRoomName || door.targetRoomId, fromConn: true })}
                             disabled={connLoading}
                             title="Bağlı odayı ve tüm içeriğini sil"
                           >
@@ -498,6 +504,43 @@ export function MainMenu() {
           </div>
         )}
 
+      {deleteConfirm && (
+        <div style={s.overlay} onClick={() => setDeleteConfirm(null)}>
+          <div style={{ ...s.modal, width: 400, padding: '28px 28px 24px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 17 }}>Odayı Sil</div>
+            <div style={{ marginBottom: 24, color: '#aaa', fontSize: 14, lineHeight: 1.5 }}>
+              <span style={{ color: '#fff', fontWeight: 600 }}>"{deleteConfirm.name}"</span> adlı odayı silmek istiyorsunuz.
+              <br />Bu işlem geri alınamaz.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                style={{ ...s.dangerBtn, padding: '10px 0', borderRadius: 10, fontSize: 14, width: '100%' }}
+                onClick={() => deleteConfirm.fromConn
+                  ? deleteConnectedRoom(deleteConfirm.id, true)
+                  : deleteRoom(deleteConfirm.id, true)
+                }
+              >
+                Kökleriyle Birlikte Sil
+              </button>
+              <button
+                style={{ ...s.warnBtn, padding: '10px 0', borderRadius: 10, fontSize: 14, width: '100%' }}
+                onClick={() => deleteConfirm.fromConn
+                  ? deleteConnectedRoom(deleteConfirm.id, false)
+                  : deleteRoom(deleteConfirm.id, false)
+                }
+              >
+                Sadece Bu Odayı Sil
+              </button>
+              <button
+                style={{ ...s.otherBtn, padding: '10px 0', borderRadius: 10, fontSize: 14, width: '100%' }}
+                onClick={() => setDeleteConfirm(null)}
+              >
+                Vazgeç
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     </div>
   )
