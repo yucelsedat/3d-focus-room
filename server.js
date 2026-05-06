@@ -164,12 +164,38 @@ app.put('/api/rooms/:id/name', async (req, res) => {
   res.json(updated);
 });
 
+async function collectDescendants(rootId) {
+  const ids = [rootId];
+  const children = await prisma.room.findMany({ where: { parentId: rootId }, select: { id: true } });
+  for (const child of children) {
+    ids.push(...await collectDescendants(child.id));
+  }
+  return ids;
+}
+
 app.delete('/api/rooms/:id', async (req, res) => {
   const { id } = req.params;
+  const cascade = req.query.cascade === 'true';
   if (id === 'default') return res.status(400).json({ error: 'Varsayılan oda silinemez' });
 
   const room = await prisma.room.findUnique({ where: { id } });
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
+
+  if (cascade) {
+    const allIds = await collectDescendants(id);
+    for (const roomId of allIds) {
+      const mediaItems = await prisma.media.findMany({ where: { roomId } });
+      for (const m of mediaItems) {
+        if (m.url && m.url.startsWith('/uploads/')) {
+          const fp = path.join(__dirname, 'public', m.url);
+          if (fs.existsSync(fp)) fs.unlinkSync(fp);
+        }
+      }
+    }
+    await prisma.room.deleteMany({ where: { id: { in: allIds } } });
+    if (allIds.includes(activeRoomId)) activeRoomId = 'default';
+    return res.json({ ok: true, deletedIds: allIds });
+  }
 
   // Delete uploaded files for this room's media
   const mediaItems = await prisma.media.findMany({ where: { roomId: id } });
@@ -184,7 +210,7 @@ app.delete('/api/rooms/:id', async (req, res) => {
   await prisma.room.delete({ where: { id } });
 
   if (activeRoomId === id) activeRoomId = 'default';
-  res.json({ ok: true });
+  res.json({ ok: true, deletedIds: [id] });
 });
 
 app.get('/api/rooms/:id/details', async (req, res) => {
