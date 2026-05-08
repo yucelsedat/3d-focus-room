@@ -338,6 +338,24 @@ export function EditModal() {
     setTimeout(() => setCopiedId(null), 2000)
   }
 
+  const handleDownload = (m) => {
+    if (m.type === 'markdown') {
+      const blob = new Blob([m.content || ''], { type: 'text/markdown' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `metin-${m.id}.md`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } else if (m.url) {
+      const a = document.createElement('a')
+      a.href = m.url
+      a.download = m.url.split('/').pop()
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    }
+  }
+
   const loadingLabel =
     loadingStep === 'downloading' ? '⬇ İndiriliyor...' : '💾 Kaydediliyor...'
 
@@ -403,12 +421,30 @@ export function EditModal() {
                   </div>
                   <div style={{ display: 'flex', gap: '6px', flexShrink: 0, alignItems: 'center' }}>
                     {m.type === 'image' && (
+                      <>
+                        <button
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: copiedId === m.id ? '#4ade80' : '#888', fontSize: '14px', flexShrink: 0 }}
+                          title="Resmi panoya kopyala"
+                          onClick={() => handleCopyImage(m)}
+                        >
+                          {copiedId === m.id ? '✓' : '⧉'}
+                        </button>
+                        <button
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: '#888', fontSize: '14px', flexShrink: 0 }}
+                          title="Resmi indir"
+                          onClick={() => handleDownload(m)}
+                        >
+                          ↓
+                        </button>
+                      </>
+                    )}
+                    {m.type === 'video' && (
                       <button
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: copiedId === m.id ? '#4ade80' : '#888', fontSize: '14px', flexShrink: 0 }}
-                        title="Resmi panoya kopyala"
-                        onClick={() => handleCopyImage(m)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: '#888', fontSize: '14px', flexShrink: 0 }}
+                        title="Videoyu indir"
+                        onClick={() => handleDownload(m)}
                       >
-                        {copiedId === m.id ? '✓' : '⧉'}
+                        ↓
                       </button>
                     )}
                     {(m.type === 'youtube' || m.type === 'embed') && (
@@ -441,6 +477,13 @@ export function EditModal() {
                           }}
                         >
                           {copiedId === m.id ? '✓' : '⧉'}
+                        </button>
+                        <button
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: '#888', fontSize: '14px', flexShrink: 0 }}
+                          title="Metni indir"
+                          onClick={() => handleDownload(m)}
+                        >
+                          ↓
                         </button>
                         <button
                           style={s.editBtn}
