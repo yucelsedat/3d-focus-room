@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useEffect } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { PointerLockControls, useKeyboardControls } from '@react-three/drei'
 import { useStore } from '../store/useStore'
@@ -12,6 +12,9 @@ function isTyping() {
 }
 
 const MOVE_SPEED      = 5
+const FOV_NORMAL      = 75
+const FOV_ZOOM        = 20
+const FOV_SPEED       = 8
 const TILE_SIZE       = 1
 const OUTER_CONFIG    = { gx: 120, gz: 120, wh: 5 }
 const OUTER_OFFSET    = 60
@@ -51,6 +54,19 @@ export function Player() {
   const rooms              = useStore((state) => state.rooms)
 
   const [, getKeys] = useKeyboardControls()
+  const zoomActive  = useRef(false)
+
+  useEffect(() => {
+    const onDown = (e) => { if (e.code === 'KeyC') zoomActive.current = true }
+    const onUp   = (e) => { if (e.code === 'KeyC') zoomActive.current = false }
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup',   onUp)
+    return () => {
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup',   onUp)
+    }
+  }, [])
+
   const forward    = useRef(new THREE.Vector3())
   const side       = useRef(new THREE.Vector3())
   const direction  = useRef(new THREE.Vector3())
@@ -74,6 +90,10 @@ export function Player() {
     roomsRef.current            = rooms
 
     const { forward: moveForward, backward, left, right } = getKeys()
+
+    const targetFov = zoomActive.current ? FOV_ZOOM : FOV_NORMAL
+    state.camera.fov += (targetFov - state.camera.fov) * Math.min(FOV_SPEED * delta, 1)
+    state.camera.updateProjectionMatrix()
 
     state.camera.getWorldDirection(forward.current)
     forward.current.y = 0

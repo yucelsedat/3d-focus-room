@@ -267,6 +267,7 @@ export function MainMenu() {
                   ['E', "Tile'a medya ekle / düzenle"],
                   ['R', 'Kapı aç/kapat · Zemin değiştir'],
                   ['Q', 'Bu menüyü aç / kapat'],
+                  ['C', 'Zoom (basılı tut)'],
                 ].map(([key, desc]) => (
                   <div key={key} style={s.keyRow}>
                     <span style={s.keyBadge}>{key}</span>
