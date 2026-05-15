@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore'
 import { loadRoom as loadRoomUtil } from '../utils/loadRoom'
 
@@ -9,6 +10,7 @@ export function MainMenu() {
     rooms, setRooms, setCurrentRoom,
   } = useStore()
 
+  const navigate = useNavigate()
   const [view, setView] = useState('main')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -256,6 +258,9 @@ export function MainMenu() {
               </button>
               <button style={s.otherBtn} onClick={() => { setView('rooms'); setError('') }} disabled={loading}>
                 Odalar
+              </button>
+              <button style={s.exitBtn} onClick={() => navigate('/')}>
+                ← Ana Menüye Çık
               </button>
             </div>
             <div style={s.keysBox}>
@@ -643,6 +648,11 @@ const s = {
     background: 'transparent', color: '#ccc', border: '1px solid #333',
     borderRadius: '10px', padding: '12px', width: '100%',
     fontSize: '14px', cursor: 'pointer',
+  },
+  exitBtn: {
+    background: 'transparent', color: '#666', border: '1px solid #222',
+    borderRadius: '10px', padding: '12px', width: '100%',
+    fontSize: '13px', cursor: 'pointer', marginTop: '4px',
   },
   subView: { display: 'flex', flexDirection: 'column', gap: '14px' },
   subTitle: { fontSize: '14px', color: '#888', fontWeight: 500, marginBottom: '2px' },
