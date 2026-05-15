@@ -30,6 +30,11 @@ function App() {
   const setRooms = useStore((state) => state.setRooms)
 
   useEffect(() => {
+    document.body.classList.add('game-mode')
+    return () => document.body.classList.remove('game-mode')
+  }, [])
+
+  useEffect(() => {
     fetch('/api/rooms')
       .then(res => res.json())
       .then(data => setRooms(data))

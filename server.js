@@ -83,6 +83,19 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+const uploadCover = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
+    filename: (req, file, cb) => cb(null, `cover-${Date.now()}-${file.originalname}`),
+  }),
+});
+
+app.post('/api/upload-cover', uploadCover.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Dosya yüklenmedi' });
+  const url = `/uploads/images/${req.file.filename}`;
+  res.json({ url });
+});
+
 // ─── Special door helpers ─────────────────────────────────────────────────────
 
 const OUTER_GRID_SIZE_SRV = 120;
@@ -95,6 +108,7 @@ function serializeRoom(r) {
     id: r.id,
     name: r.name,
     roomType: r.roomType ?? 'room',
+    coverImage: r.coverImage ?? null,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     categories: (r.categories ?? []).map(rc => rc.category),
@@ -232,9 +246,27 @@ async function getAllAncestors(roomId, visited = new Set()) {
   return visited;
 }
 
+app.get('/api/worlds', async (req, res) => {
+  const worlds = await prisma.room.findMany({
+    where: { parentId: null },
+    orderBy: { createdAt: 'asc' },
+    include: roomInclude,
+  });
+  res.json(worlds.map(serializeRoom));
+});
+
+app.put('/api/rooms/:id/cover-image', async (req, res) => {
+  const { id } = req.params;
+  const { coverImage } = req.body;
+  const room = await prisma.room.findUnique({ where: { id } });
+  if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
+  const updated = await prisma.room.update({ where: { id }, data: { coverImage: coverImage || null } });
+  res.json({ ok: true, coverImage: updated.coverImage });
+});
+
 app.put('/api/rooms/:id/settings', async (req, res) => {
   const { id } = req.params;
-  const { name, categoryNames, parentId } = req.body;
+  const { name, categoryNames, parentId, coverImage } = req.body;
 
   const room = await prisma.room.findUnique({ where: { id } });
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
@@ -249,6 +281,7 @@ app.put('/api/rooms/:id/settings', async (req, res) => {
     const data = {};
     if (name && name.trim()) data.name = name.trim();
     if (parentId !== undefined) data.parentId = parentId || null;
+    if (coverImage !== undefined) data.coverImage = coverImage || null;
     if (Object.keys(data).length) await tx.room.update({ where: { id }, data });
 
     if (Array.isArray(categoryNames)) {
