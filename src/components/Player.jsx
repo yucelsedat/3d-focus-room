@@ -16,9 +16,15 @@ const FOV_NORMAL      = 75
 const FOV_ZOOM        = 20
 const FOV_SPEED       = 8
 const TILE_SIZE       = 1
-const OUTER_CONFIG    = { gx: 120, gz: 120, wh: 5 }
+const OUTER_CONFIG    = { gx: 120, gz: 120, wh: 25 }
 const OUTER_OFFSET    = 60
 const FAR_LIMIT       = 200
+const GROUND_Y        = 2.5
+const MAX_FLY_Y       = 24
+const FLY_UP_SPEED    = 8
+const FLY_DOWN_SPEED  = 8
+const FAST_FALL_SPEED = 20
+const DOUBLE_TAP_MS   = 300
 
 // Kapı açık mı? (h=1 veya h=2 tile'ı hidden set'te mi)
 function canPassThrough(hiddenSet, face, posAlongWall, config) {
@@ -79,6 +85,12 @@ export function Player() {
   const currentRoomTypeRef   = useRef('room')
   const roomsRef             = useRef([])
 
+  const flyY             = useRef(GROUND_Y)
+  const flyVelocityY     = useRef(0)
+  const isFalling        = useRef(false)
+  const lastSpaceTime    = useRef(0)
+  const prevSpacePressed = useRef(false)
+
   useFrame((state, delta) => {
     if (teleporting.current || isTyping()) return
 
@@ -89,7 +101,37 @@ export function Player() {
     currentRoomTypeRef.current  = currentRoomType
     roomsRef.current            = rooms
 
-    const { forward: moveForward, backward, left, right } = getKeys()
+    const { forward: moveForward, backward, left, right, jump, crouch } = getKeys()
+
+    // --- Dikey hareket (uçma) ---
+    const now = performance.now()
+
+    if (jump && !prevSpacePressed.current) {
+      const timeSinceLast = now - lastSpaceTime.current
+      if (timeSinceLast < DOUBLE_TAP_MS && flyY.current > GROUND_Y) {
+        isFalling.current    = true
+        flyVelocityY.current = -FAST_FALL_SPEED
+      }
+      lastSpaceTime.current = now
+    }
+    prevSpacePressed.current = jump
+
+    if (isFalling.current) {
+      flyY.current += flyVelocityY.current * delta
+      if (flyY.current <= GROUND_Y) {
+        flyY.current         = GROUND_Y
+        flyVelocityY.current = 0
+        isFalling.current    = false
+      }
+    } else {
+      if (jump && !crouch) {
+        flyY.current = Math.min(MAX_FLY_Y, flyY.current + FLY_UP_SPEED * delta)
+      } else if (crouch && !jump) {
+        flyY.current = Math.max(GROUND_Y, flyY.current - FLY_DOWN_SPEED * delta)
+      }
+    }
+
+    state.camera.position.y = flyY.current
 
     const targetFov = zoomActive.current ? FOV_ZOOM : FOV_NORMAL
     state.camera.fov += (targetFov - state.camera.fov) * Math.min(FOV_SPEED * delta, 1)
@@ -228,9 +270,11 @@ export function Player() {
             else if (rf === 1) { sx = rj - rx + 1; sz =  rz - 2 }
             else if (rf === 2) { sx = -rx + 2;     sz = rj - rz + 1 }
             else               { sx =  rx - 2;     sz = rj - rz + 1 }
-            state.camera.position.set(sx, 2.5, sz)
+            flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
+            state.camera.position.set(sx, GROUND_Y, sz)
           } else {
-            state.camera.position.set(spawnX, 2.5, spawnZ)
+            flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
+            state.camera.position.set(spawnX, GROUND_Y, spawnZ)
           }
           teleporting.current = false
         }).catch(err => {
@@ -329,9 +373,11 @@ export function Player() {
             else if (rf === 1) { sx = rj - rx + 1; sz =  rz - 2 }
             else if (rf === 2) { sx = -rx + 2;     sz = rj - rz + 1 }
             else               { sx =  rx - 2;     sz = rj - rz + 1 }
-            state.camera.position.set(sx, 2.5, sz)
+            flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
+            state.camera.position.set(sx, GROUND_Y, sz)
           } else {
-            state.camera.position.set(spawnX, 2.5, spawnZ)
+            flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
+            state.camera.position.set(spawnX, GROUND_Y, spawnZ)
           }
           teleporting.current = false
         }).catch(err => {

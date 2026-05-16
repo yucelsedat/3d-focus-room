@@ -60,6 +60,8 @@ function App() {
         { name: 'edit',     keys: ['e', 'E'] },
         { name: 'room',     keys: ['r', 'R'] },
         { name: 'menu',     keys: ['q', 'Q'] },
+        { name: 'jump',     keys: ['Space'] },
+        { name: 'crouch',   keys: ['ShiftLeft', 'ShiftRight'] },
       ]}
     >
       <div style={{ width: '100vw', height: '100vh' }}>
