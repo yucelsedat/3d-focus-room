@@ -348,7 +348,7 @@ function GifMesh({ url, width, height }) {
     <mesh position={[0, 0, 0.02]}>
       <planeGeometry args={[width, height]} />
       <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
-      <Html transform occlude="blending" position={[0, 0, 0]} scale={scale}
+      <Html transform pointerEvents="none" position={[0, 0, 0]} scale={scale}
         style={{ width: `${pxWidth}px`, height: `${pxHeight}px`, pointerEvents: 'none' }}>
         <img src={url} style={{ width: '100%', height: '100%', objectFit: 'fill' }} alt="gif" />
       </Html>
