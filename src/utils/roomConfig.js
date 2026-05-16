@@ -1,6 +1,6 @@
 export const ROOM_CONFIGS = {
-  room:  { gx: 40, gz: 40, wh: 5 },
-  cadde: { gx: 60, gz: 15, wh: 5 },
+  room:  { gx: 40, gz: 40, wh: 25 },
+  cadde: { gx: 60, gz: 15, wh: 25 },
 }
 
 // Square rooms use legacy j*4+face encoding for backward compat.
