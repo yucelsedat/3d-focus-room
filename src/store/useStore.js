@@ -16,6 +16,7 @@ export const useStore = create((set) => ({
   rooms: [],
   specialDoors: [],
   outerSpecialDoors: [],
+  roomHistory: [],
 
   openModal: (tile) => set({ activeModal: true, selectedTile: tile }),
   closeModal: () => set({ activeModal: false, selectedTile: null }),
@@ -42,6 +43,10 @@ export const useStore = create((set) => ({
   removeOuterDoor: (ids) => set((state) => ({ hiddenOuterWalls: state.hiddenOuterWalls.filter(id => !ids.includes(id)) })),
 
   setCurrentRoom: (id, name, type = 'room') => set({ currentRoomId: id, currentRoomName: name, currentRoomType: type }),
+  addToHistory: (id, name) => set(state => {
+    const filtered = state.roomHistory.filter(r => r.id !== id)
+    return { roomHistory: [...filtered, { id, name }].slice(-30) }
+  }),
   setRooms: (rooms) => set({ rooms }),
   setSpecialDoors: (specialDoors) => set({ specialDoors }),
   setOuterSpecialDoors: (outerSpecialDoors) => set({ outerSpecialDoors }),

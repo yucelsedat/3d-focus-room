@@ -12,6 +12,7 @@ import { MainMenu } from './components/MainMenu'
 import { MediaManager } from './components/MediaManager'
 import { KeyHandler } from './components/KeyHandler'
 import { BlueDoors } from './components/BlueDoor'
+import { RoomNavHUD } from './components/RoomNavHUD'
 import { useStore } from './store/useStore'
 import { loadRoom } from './utils/loadRoom'
 import './App.css'
@@ -101,6 +102,7 @@ function App() {
           </Suspense>
         </Canvas>
         <Crosshair />
+        <RoomNavHUD />
         <EditModal />
         <RoomModal />
         <MainMenu />

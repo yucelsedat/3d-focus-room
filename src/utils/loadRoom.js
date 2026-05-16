@@ -4,6 +4,7 @@ export async function loadRoom(id, name) {
   const {
     setWorldMedia, setHiddenWalls, setHiddenOuterWalls,
     setFloorTexture, setCurrentRoom, setSpecialDoors, setOuterSpecialDoors,
+    addToHistory,
   } = useStore.getState()
 
   const activateRes = await fetch(`/api/rooms/${id}/activate`, { method: 'POST' })
@@ -30,6 +31,7 @@ export async function loadRoom(id, name) {
   setSpecialDoors(innerSpecial)
   setOuterSpecialDoors(outerSpecial)
   setCurrentRoom(id, name, roomType)
+  addToHistory(id, name)
 
   localStorage.setItem('lastRoomId', id)
   localStorage.setItem('lastRoomName', name)
