@@ -90,6 +90,13 @@ const uploadCover = multer({
   }),
 });
 
+const canvasUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
+    filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${file.originalname}`),
+  }),
+});
+
 app.post('/api/upload-cover', uploadCover.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Dosya yüklenmedi' });
   const url = `/uploads/images/${req.file.filename}`;
@@ -611,6 +618,41 @@ app.post('/api/add-text', async (req, res) => {
   res.json(serializeMedia(media));
 });
 
+app.post('/api/canvas', async (req, res) => {
+  const { tileId, width, height, position, rotation, bg = '#1a1a2e' } = req.body;
+  const pos = JSON.parse(position);
+  const rot = JSON.parse(rotation);
+  const id = BigInt(Date.now());
+  const content = JSON.stringify({ items: [], bg });
+
+  const media = await prisma.media.create({
+    data: {
+      id,
+      roomId: activeRoomId,
+      tileId,
+      type: 'canvas',
+      url: null,
+      content,
+      width: parseFloat(width) || 8,
+      height: parseFloat(height) || 4.5,
+      posX: parseFloat(pos[0]) || 0,
+      posY: parseFloat(pos[1]) || 0,
+      posZ: parseFloat(pos[2]) || 0,
+      rotX: parseFloat(rot[0]) || 0,
+      rotY: parseFloat(rot[1]) || 0,
+      rotZ: parseFloat(rot[2]) || 0,
+      rotOrder: String(rot[3] || 'XYZ'),
+    },
+  });
+
+  res.json(serializeMedia(media));
+});
+
+app.post('/api/canvas/:id/upload', canvasUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Dosya yok' });
+  res.json({ url: `/uploads/images/${req.file.filename}` });
+});
+
 app.put('/api/media/:id', async (req, res) => {
   let id;
   try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
@@ -633,6 +675,18 @@ app.delete('/api/media/:id', async (req, res) => {
   try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
   const item = await prisma.media.findUnique({ where: { id } });
   if (!item) return res.status(404).json({ error: 'Not found' });
+
+  if (item.type === 'canvas' && item.content) {
+    try {
+      const parsed = JSON.parse(item.content);
+      (parsed.items || []).forEach(ci => {
+        if (ci.url?.startsWith('/uploads/')) {
+          const fp = path.join(__dirname, 'public', ci.url);
+          if (fs.existsSync(fp)) fs.unlinkSync(fp);
+        }
+      });
+    } catch {}
+  }
 
   if (item.url && item.url.startsWith('/uploads/')) {
     const filePath = path.join(__dirname, 'public', item.url);

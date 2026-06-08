@@ -2,6 +2,8 @@ import { create } from 'zustand'
 
 export const useStore = create((set) => ({
   activeModal: false,
+  canvasEditorOpen: false,
+  canvasEditorMediaId: null,
   selectedTile: null, // { id, position, rotation }
   hoveredTile: null,  // { id, position, rotation }
   worldMedia: [],
@@ -17,6 +19,10 @@ export const useStore = create((set) => ({
   specialDoors: [],
   outerSpecialDoors: [],
   roomHistory: [],
+
+  setCanvasEditorOpen: (open) => set({ canvasEditorOpen: open }),
+  openCanvasEditor: (id) => set({ canvasEditorOpen: true, canvasEditorMediaId: id }),
+  closeCanvasEditor: () => set({ canvasEditorOpen: false, canvasEditorMediaId: null }),
 
   openModal: (tile) => set({ activeModal: true, selectedTile: tile }),
   closeModal: () => set({ activeModal: false, selectedTile: null }),
