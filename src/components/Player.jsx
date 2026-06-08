@@ -52,6 +52,7 @@ function canPassThroughOuter(hiddenOuterSet, face, posAlongWall) {
 
 export function Player() {
   const activeModal        = useStore((state) => state.activeModal)
+  const canvasEditorOpen   = useStore((state) => state.canvasEditorOpen)
   const hiddenWalls        = useStore((state) => state.hiddenWalls)
   const hiddenOuterWalls   = useStore((state) => state.hiddenOuterWalls)
   const specialDoors       = useStore((state) => state.specialDoors)
@@ -395,5 +396,5 @@ export function Player() {
     state.camera.position.z = nz
   })
 
-  return <PointerLockControls enabled={!activeModal} />
+  return <PointerLockControls enabled={!activeModal && !canvasEditorOpen} />
 }

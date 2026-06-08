@@ -44,6 +44,7 @@ export function EditModal() {
   const [loadingStep, setLoadingStep] = useState('')
   const [naturalRatio, setNaturalRatio] = useState(null) // ratio = width / height
   const [markdownContent, setMarkdownContent] = useState('')
+  const [canvasBg, setCanvasBg] = useState('#1a1a2e')
   const [editingId, setEditingId] = useState(null)
   const [editingContent, setEditingContent] = useState('')
   const [copiedId, setCopiedId] = useState(null)
@@ -159,6 +160,38 @@ export function EditModal() {
   }
 
   const handleApply = async () => {
+    if (activeTab === 'canvas') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/canvas', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            bg: canvasBg,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Canvas oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setCanvasBg('#1a1a2e')
+        setWidth(8)
+        setHeight(4.5)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (activeTab === 'markdown') {
       if (!markdownContent.trim()) {
         alert('Lütfen metin girin.')
@@ -393,8 +426,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -570,10 +603,35 @@ export function EditModal() {
           >
             🌐 Site
           </button>
+          <button
+            style={activeTab === 'canvas' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('canvas'); setWidth(40); setHeight(20) }}
+          >
+            🎨 Canvas
+          </button>
         </div>
 
         {/* Form */}
         <div style={s.form}>
+
+          {/* Canvas */}
+          {activeTab === 'canvas' && (
+            <div style={s.inputGroup}>
+              <label style={s.label}>Arka Plan Rengi</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input
+                  type="color"
+                  value={canvasBg}
+                  onChange={e => setCanvasBg(e.target.value)}
+                  style={{ width: 40, height: 36, border: 'none', background: 'none', cursor: 'pointer', padding: 0, borderRadius: 4 }}
+                />
+                <span style={{ color: '#888', fontSize: 12 }}>{canvasBg}</span>
+              </div>
+              <p style={{ color: '#666', fontSize: 11, marginTop: 10 }}>
+                Canvas oluşturulduktan sonra üzerine çift tıklayarak resim ve metin ekleyebilirsiniz.
+              </p>
+            </div>
+          )}
 
           {/* Markdown textarea */}
           {activeTab === 'markdown' && (

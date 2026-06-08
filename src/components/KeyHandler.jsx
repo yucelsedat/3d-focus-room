@@ -13,14 +13,15 @@ export function KeyHandler() {
     openModal, hoveredTile,
     activeModal, roomModal, openRoomModal, closeRoomModal,
     menuModal, openMenuModal, closeMenuModal,
+    canvasEditorOpen,
   } = useStore()
 
-  // Release pointer lock whenever any modal is active
+  // Release pointer lock whenever any modal or canvas editor is active
   useEffect(() => {
-    if ((activeModal || roomModal || menuModal) && document.pointerLockElement) {
+    if ((activeModal || roomModal || menuModal || canvasEditorOpen) && document.pointerLockElement) {
       document.exitPointerLock()
     }
-  }, [activeModal, roomModal, menuModal])
+  }, [activeModal, roomModal, menuModal, canvasEditorOpen])
 
   // E — edit tile
   useEffect(() => {
