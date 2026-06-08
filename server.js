@@ -648,6 +648,36 @@ app.post('/api/canvas', async (req, res) => {
   res.json(serializeMedia(media));
 });
 
+app.post('/api/header', async (req, res) => {
+  const { tileId, width, height, position, rotation, bg = '#1a1a2e', color = '#ffffff', text = '' } = req.body;
+  const pos = JSON.parse(position);
+  const rot = JSON.parse(rotation);
+  const id = BigInt(Date.now());
+  const content = JSON.stringify({ text, bg, color });
+
+  const media = await prisma.media.create({
+    data: {
+      id,
+      roomId: activeRoomId,
+      tileId,
+      type: 'header',
+      url: null,
+      content,
+      width: parseFloat(width) || 4,
+      height: parseFloat(height) || 1,
+      posX: parseFloat(pos[0]) || 0,
+      posY: parseFloat(pos[1]) || 0,
+      posZ: parseFloat(pos[2]) || 0,
+      rotX: parseFloat(rot[0]) || 0,
+      rotY: parseFloat(rot[1]) || 0,
+      rotZ: parseFloat(rot[2]) || 0,
+      rotOrder: String(rot[3] || 'XYZ'),
+    },
+  });
+
+  res.json(serializeMedia(media));
+});
+
 app.post('/api/canvas/:id/upload', canvasUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Dosya yok' });
   res.json({ url: `/uploads/images/${req.file.filename}` });
