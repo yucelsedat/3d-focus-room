@@ -16,11 +16,11 @@ const FOV_NORMAL      = 75
 const FOV_ZOOM        = 20
 const FOV_SPEED       = 8
 const TILE_SIZE       = 1
-const OUTER_CONFIG    = { gx: 120, gz: 120, wh: 25 }
+const OUTER_CONFIG    = { gx: 120, gz: 120, wh: 5 }
 const OUTER_OFFSET    = 60
 const FAR_LIMIT       = 200
 const GROUND_Y        = 2.5
-const MAX_FLY_Y       = 24
+const MAX_FLY_Y       = 80
 const FLY_UP_SPEED    = 8
 const FLY_DOWN_SPEED  = 8
 const FAST_FALL_SPEED = 20
@@ -170,43 +170,48 @@ export function Player() {
     const hs = hiddenSetRef.current
 
     // --- İç duvar collision ---
-    // North/South duvarlar: x ekseninde span kontrol, z sınırında dur
-    const inXSpan = nx > -OFFSET_X && nx < OFFSET_X
+    // Oyuncu duvar tepesinin üzerindeyse (uçarak geçiyor) collision atla
+    const aboveInnerWall = flyY.current > config.wh + GROUND_Y
 
-    if (inXSpan) {
-      if (prev.z > -OFFSET_Z && nz <= -OFFSET_Z) {
-        if (!canPassThrough(hs, 0, nx, config)) nz = -OFFSET_Z + 0.01
-      }
-      if (prev.z < -OFFSET_Z && nz >= -OFFSET_Z) {
-        if (!canPassThrough(hs, 0, nx, config)) nz = -OFFSET_Z - 0.01
-      }
-    }
-    if (inXSpan) {
-      if (prev.z < OFFSET_Z && nz >= OFFSET_Z) {
-        if (!canPassThrough(hs, 1, nx, config)) nz = OFFSET_Z - 0.01
-      }
-      if (prev.z > OFFSET_Z && nz <= OFFSET_Z) {
-        if (!canPassThrough(hs, 1, nx, config)) nz = OFFSET_Z + 0.01
-      }
-    }
+    if (!aboveInnerWall) {
+      // North/South duvarlar: x ekseninde span kontrol, z sınırında dur
+      const inXSpan = nx > -OFFSET_X && nx < OFFSET_X
 
-    // West/East duvarlar: z ekseninde span kontrol, x sınırında dur
-    const inZSpan = nz > -OFFSET_Z && nz < OFFSET_Z
+      if (inXSpan) {
+        if (prev.z > -OFFSET_Z && nz <= -OFFSET_Z) {
+          if (!canPassThrough(hs, 0, nx, config)) nz = -OFFSET_Z + 0.01
+        }
+        if (prev.z < -OFFSET_Z && nz >= -OFFSET_Z) {
+          if (!canPassThrough(hs, 0, nx, config)) nz = -OFFSET_Z - 0.01
+        }
+      }
+      if (inXSpan) {
+        if (prev.z < OFFSET_Z && nz >= OFFSET_Z) {
+          if (!canPassThrough(hs, 1, nx, config)) nz = OFFSET_Z - 0.01
+        }
+        if (prev.z > OFFSET_Z && nz <= OFFSET_Z) {
+          if (!canPassThrough(hs, 1, nx, config)) nz = OFFSET_Z + 0.01
+        }
+      }
 
-    if (inZSpan) {
-      if (prev.x > -OFFSET_X && nx <= -OFFSET_X) {
-        if (!canPassThrough(hs, 2, nz, config)) nx = -OFFSET_X + 0.01
+      // West/East duvarlar: z ekseninde span kontrol, x sınırında dur
+      const inZSpan = nz > -OFFSET_Z && nz < OFFSET_Z
+
+      if (inZSpan) {
+        if (prev.x > -OFFSET_X && nx <= -OFFSET_X) {
+          if (!canPassThrough(hs, 2, nz, config)) nx = -OFFSET_X + 0.01
+        }
+        if (prev.x < -OFFSET_X && nx >= -OFFSET_X) {
+          if (!canPassThrough(hs, 2, nz, config)) nx = -OFFSET_X - 0.01
+        }
       }
-      if (prev.x < -OFFSET_X && nx >= -OFFSET_X) {
-        if (!canPassThrough(hs, 2, nz, config)) nx = -OFFSET_X - 0.01
-      }
-    }
-    if (inZSpan) {
-      if (prev.x < OFFSET_X && nx >= OFFSET_X) {
-        if (!canPassThrough(hs, 3, nz, config)) nx = OFFSET_X - 0.01
-      }
-      if (prev.x > OFFSET_X && nx <= OFFSET_X) {
-        if (!canPassThrough(hs, 3, nz, config)) nx = OFFSET_X + 0.01
+      if (inZSpan) {
+        if (prev.x < OFFSET_X && nx >= OFFSET_X) {
+          if (!canPassThrough(hs, 3, nz, config)) nx = OFFSET_X - 0.01
+        }
+        if (prev.x > OFFSET_X && nx <= OFFSET_X) {
+          if (!canPassThrough(hs, 3, nz, config)) nx = OFFSET_X + 0.01
+        }
       }
     }
 
@@ -287,31 +292,34 @@ export function Player() {
     }
 
     // --- Dış duvar collision ---
-    const outerHs = hiddenOuterSetRef.current
+    const outerHs        = hiddenOuterSetRef.current
+    const aboveOuterWall = flyY.current > OUTER_CONFIG.wh + GROUND_Y
 
-    if (prev.z > -OUTER_OFFSET && nz <= -OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 0, nx)) nz = -OUTER_OFFSET + 0.01
-    }
-    if (prev.z < -OUTER_OFFSET && nz >= -OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 0, nx)) nz = -OUTER_OFFSET - 0.01
-    }
-    if (prev.z < OUTER_OFFSET && nz >= OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 1, nx)) nz = OUTER_OFFSET - 0.01
-    }
-    if (prev.z > OUTER_OFFSET && nz <= OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 1, nx)) nz = OUTER_OFFSET + 0.01
-    }
-    if (prev.x > -OUTER_OFFSET && nx <= -OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 2, nz)) nx = -OUTER_OFFSET + 0.01
-    }
-    if (prev.x < -OUTER_OFFSET && nx >= -OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 2, nz)) nx = -OUTER_OFFSET - 0.01
-    }
-    if (prev.x < OUTER_OFFSET && nx >= OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 3, nz)) nx = OUTER_OFFSET - 0.01
-    }
-    if (prev.x > OUTER_OFFSET && nx <= OUTER_OFFSET) {
-      if (!canPassThroughOuter(outerHs, 3, nz)) nx = OUTER_OFFSET + 0.01
+    if (!aboveOuterWall) {
+      if (prev.z > -OUTER_OFFSET && nz <= -OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 0, nx)) nz = -OUTER_OFFSET + 0.01
+      }
+      if (prev.z < -OUTER_OFFSET && nz >= -OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 0, nx)) nz = -OUTER_OFFSET - 0.01
+      }
+      if (prev.z < OUTER_OFFSET && nz >= OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 1, nx)) nz = OUTER_OFFSET - 0.01
+      }
+      if (prev.z > OUTER_OFFSET && nz <= OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 1, nx)) nz = OUTER_OFFSET + 0.01
+      }
+      if (prev.x > -OUTER_OFFSET && nx <= -OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 2, nz)) nx = -OUTER_OFFSET + 0.01
+      }
+      if (prev.x < -OUTER_OFFSET && nx >= -OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 2, nz)) nx = -OUTER_OFFSET - 0.01
+      }
+      if (prev.x < OUTER_OFFSET && nx >= OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 3, nz)) nx = OUTER_OFFSET - 0.01
+      }
+      if (prev.x > OUTER_OFFSET && nx <= OUTER_OFFSET) {
+        if (!canPassThroughOuter(outerHs, 3, nz)) nx = OUTER_OFFSET + 0.01
+      }
     }
 
     // --- Dış özel kapı geçişi ---

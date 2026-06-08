@@ -5,9 +5,9 @@ import { useStore } from '../store/useStore'
 import * as THREE from 'three'
 
 const OUTER_GRID_SIZE = 120
-const WALL_HEIGHT     = 25
+const WALL_HEIGHT     = 5
 const TILE_SIZE       = 1
-const COUNT           = OUTER_GRID_SIZE * WALL_HEIGHT * 4  // 12000
+const COUNT           = OUTER_GRID_SIZE * WALL_HEIGHT * 4  // 2400
 const OFFSET          = 60
 const DEFAULT_COLOR   = new THREE.Color('#aaaaaa')
 const HOVER_COLOR     = new THREE.Color('#00f2ff')
