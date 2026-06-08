@@ -98,6 +98,13 @@ export function OuterWalls() {
     }
 
     if (hit >= 0) {
+      // İç oda duvarı aktifken dış bahçe duvarı üzerine yazmasın
+      const stored = useStore.getState().hoveredTile
+      if (stored && typeof stored.id === 'string' && stored.id.startsWith('wall-')) {
+        hoveredRef.current = -1
+        return
+      }
+
       if (mesh.instanceColor) mesh.setColorAt(hit, HOVER_COLOR)
 
       const mat = new THREE.Matrix4()
