@@ -44,12 +44,14 @@ export function EditModal() {
   const [loadingStep, setLoadingStep] = useState('')
   const [naturalRatio, setNaturalRatio] = useState(null) // ratio = width / height
   const [markdownContent, setMarkdownContent] = useState('')
-  const [canvasBg, setCanvasBg] = useState('#1a1a2e')
+  const [canvasBg, setCanvasBg]       = useState('#1a1a2e')
+  const [headerBg, setHeaderBg]       = useState('#1a1a2e')
+  const [headerColor, setHeaderColor] = useState('#ffffff')
   const [editingId, setEditingId] = useState(null)
   const [editingContent, setEditingContent] = useState('')
   const [copiedId, setCopiedId] = useState(null)
   const [pastePreview, setPastePreview] = useState(null)
-  const mdMeasureRef = useRef(null)
+  const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
 
@@ -160,6 +162,41 @@ export function EditModal() {
   }
 
   const handleApply = async () => {
+    if (activeTab === 'header') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/header', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            bg: headerBg,
+            color: headerColor,
+            text: '',
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Başlık oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setHeaderBg('#1a1a2e')
+        setHeaderColor('#ffffff')
+        setWidth(1)
+        setHeight(1)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (activeTab === 'canvas') {
       setLoading(true)
       setLoadingStep('saving')
@@ -609,10 +646,34 @@ export function EditModal() {
           >
             🎨 Canvas
           </button>
+          <button
+            style={activeTab === 'header' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('header'); setWidth(4); setHeight(1) }}
+          >
+            🔤 Başlık
+          </button>
         </div>
 
         {/* Form */}
         <div style={s.form}>
+
+          {/* Header */}
+          {activeTab === 'header' && (
+            <div style={s.inputGroup}>
+              <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <label style={{ ...s.label, marginBottom: 0, fontSize: 11 }}>Arka plan</label>
+                  <input type="color" value={headerBg} onChange={e => setHeaderBg(e.target.value)}
+                    style={{ width: 36, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0, borderRadius: 4 }} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <label style={{ ...s.label, marginBottom: 0, fontSize: 11 }}>Yazı rengi</label>
+                  <input type="color" value={headerColor} onChange={e => setHeaderColor(e.target.value)}
+                    style={{ width: 36, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0, borderRadius: 4 }} />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Canvas */}
           {activeTab === 'canvas' && (
@@ -658,7 +719,7 @@ export function EditModal() {
           )}
 
           {/* URL input */}
-          {activeTab !== 'markdown' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -687,7 +748,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}

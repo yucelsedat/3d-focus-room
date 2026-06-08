@@ -1,5 +1,6 @@
 import React, { Suspense, Component, useState, useEffect, useRef } from 'react'
 import CanvasMesh from './CanvasMesh'
+import HeaderMesh from './HeaderMesh'
 import { useTexture, useVideoTexture, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { marked } from 'marked'
@@ -372,7 +373,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isMarkdown = type === 'markdown'
   const isEmbed    = type === 'embed'
   const isCanvas   = type === 'canvas'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas
+  const isHeader   = type === 'header'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -381,7 +383,9 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   return (
     <group position={position} rotation={rotation}>
       <group position={[offsetX, offsetY, 0]}>
-        {isCanvas ? (
+        {isHeader ? (
+          <HeaderMesh id={id} content={content} width={width} height={height} />
+        ) : isCanvas ? (
           <CanvasMesh id={id} content={content} width={width} height={height} />
         ) : isMarkdown ? (
           <MarkdownMesh id={id} content={content} width={width} height={height} />
