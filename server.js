@@ -700,6 +700,57 @@ app.put('/api/media/:id', async (req, res) => {
   res.json(serializeMedia(updated));
 });
 
+app.post('/api/media/clone', async (req, res) => {
+  const { sourceId, tileId, position, rotation } = req.body;
+  let source;
+  try {
+    source = await prisma.media.findUnique({ where: { id: BigInt(sourceId) } });
+  } catch { return res.status(400).json({ error: 'Geçersiz ID' }); }
+  if (!source) return res.status(404).json({ error: 'Kaynak bulunamadı' });
+
+  const pos = JSON.parse(position);
+  const rot = JSON.parse(rotation);
+
+  const copyUpload = (srcUrl) => {
+    if (!srcUrl?.startsWith('/uploads/')) return srcUrl;
+    const srcPath = path.join(__dirname, 'public', srcUrl);
+    if (!fs.existsSync(srcPath)) return srcUrl;
+    const ext = path.extname(srcUrl);
+    const dir = path.dirname(srcUrl);
+    const newFilename = `clone-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+    fs.copyFileSync(srcPath, path.join(__dirname, 'public', dir, newFilename));
+    return `${dir}/${newFilename}`;
+  };
+
+  const newUrl = copyUpload(source.url);
+
+  let newContent = source.content;
+  if (source.type === 'canvas' && source.content) {
+    try {
+      const parsed = JSON.parse(source.content);
+      const items = (parsed.items || []).map(ci => ({ ...ci, url: copyUpload(ci.url) }));
+      newContent = JSON.stringify({ ...parsed, items });
+    } catch {}
+  }
+
+  const media = await prisma.media.create({
+    data: {
+      id: BigInt(Date.now()),
+      roomId: activeRoomId,
+      tileId,
+      type: source.type,
+      url: newUrl,
+      content: newContent,
+      width: source.width,
+      height: source.height,
+      posX: parseFloat(pos[0]), posY: parseFloat(pos[1]), posZ: parseFloat(pos[2]),
+      rotX: parseFloat(rot[0]), rotY: parseFloat(rot[1]), rotZ: parseFloat(rot[2]),
+      rotOrder: String(rot[3] || 'XYZ'),
+    },
+  });
+  res.json(serializeMedia(media));
+});
+
 app.delete('/api/media/:id', async (req, res) => {
   let id;
   try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }

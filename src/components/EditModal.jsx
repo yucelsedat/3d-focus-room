@@ -51,6 +51,7 @@ export function EditModal() {
   const [editingContent, setEditingContent] = useState('')
   const [copiedId, setCopiedId] = useState(null)
   const [pastePreview, setPastePreview] = useState(null)
+  const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label }
   const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
@@ -161,6 +162,34 @@ export function EditModal() {
     }
   }
 
+  const handlePaste = async () => {
+    if (!clonedMedia || !selectedTile) return
+    setLoading(true)
+    setLoadingStep('saving')
+    try {
+      const r = await fetch('/api/media/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: clonedMedia.id,
+          tileId: selectedTile.id,
+          position: JSON.stringify(selectedTile.position),
+          rotation: JSON.stringify(selectedTile.rotation),
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Yapıştırılamadı')
+      addMedia(d)
+      setClonedMedia(null)
+      closeModal()
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setLoading(false)
+      setLoadingStep('')
+    }
+  }
+
   const handleApply = async () => {
     if (activeTab === 'header') {
       setLoading(true)
@@ -218,8 +247,8 @@ export function EditModal() {
         addMedia(d)
         closeModal()
         setCanvasBg('#1a1a2e')
-        setWidth(8)
-        setHeight(4.5)
+        setWidth(10)
+        setHeight(5)
       } catch (err) {
         alert(err.message)
       } finally {
@@ -454,6 +483,28 @@ export function EditModal() {
           <button style={s.closeBtn} onClick={closeModal}>✕</button>
         </div>
 
+        {/* Paste banner — her zaman görünür, tileMedia bağımsız */}
+        {clonedMedia && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', margin: '0 0 8px 0', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 8 }}>
+            <span style={{ fontSize: 13, color: '#93c5fd', flex: 1 }}>
+              <b>{clonedMedia.label}</b> kopyalandı — bu duvara yapıştır
+            </span>
+            <button
+              style={{ padding: '5px 12px', background: '#2563eb', border: 'none', borderRadius: 6, color: '#fff', fontSize: 13, cursor: 'pointer', fontWeight: 600 }}
+              onClick={handlePaste}
+              disabled={loading}
+            >
+              Yapıştır
+            </button>
+            <button
+              style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: 16, cursor: 'pointer', padding: '0 4px' }}
+              onClick={() => setClonedMedia(null)}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Existing media on this tile */}
         {tileMedia.length > 0 && (
           <div style={s.existingSection}>
@@ -570,6 +621,16 @@ export function EditModal() {
                         </button>
                       </>
                     )}
+                    <button
+                      style={{ ...s.deleteBtn, background: clonedMedia?.id === m.id ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${clonedMedia?.id === m.id ? '#60a5fa' : '#333'}`, color: clonedMedia?.id === m.id ? '#60a5fa' : '#888' }}
+                      title="Bu medyayı başka bir duvara kopyala"
+                      onClick={() => {
+                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık' }
+                        setClonedMedia(clonedMedia?.id === m.id ? null : { id: m.id, type: m.type, label: typeLabel[m.type] || m.type })
+                      }}
+                    >
+                      {clonedMedia?.id === m.id ? '✓ Kopyalandı' : '⧉ Kopyala'}
+                    </button>
                     <button style={s.deleteBtn} onClick={() => handleDelete(m.id)}>
                       Sil
                     </button>
@@ -642,7 +703,7 @@ export function EditModal() {
           </button>
           <button
             style={activeTab === 'canvas' ? s.activeTab : s.tab}
-            onClick={() => { setActiveTab('canvas'); setWidth(40); setHeight(20) }}
+            onClick={() => { setActiveTab('canvas'); setWidth(10); setHeight(5) }}
           >
             🎨 Canvas
           </button>
