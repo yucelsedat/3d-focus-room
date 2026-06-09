@@ -1,10 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useStore } from '../store/useStore'
 
+// Modül düzeyinde pano — canvas açıp kapansa da persist eder
+// { items: [...], sourceMediaId: number, pasteCount: number }
+let canvasClipboard = null
+
+const PASTE_STEP = 20 // her yapıştırmada ek offset
+
 export default function CanvasEditor({ mediaId }) {
-  const updateMedia      = useStore(s => s.updateMedia)
+  const updateMedia       = useStore(s => s.updateMedia)
   const closeCanvasEditor = useStore(s => s.closeCanvasEditor)
-  const worldMedia       = useStore(s => s.worldMedia)
+  const worldMedia        = useStore(s => s.worldMedia)
 
   const media = worldMedia.find(m => m.id === mediaId)
   const initialData = (() => {
@@ -12,64 +18,78 @@ export default function CanvasEditor({ mediaId }) {
   })()
   const id = mediaId
 
-  const [items, setItems] = useState(initialData.items || [])
-  const [bg, setBg] = useState(initialData.bg || '#1a1a2e')
-  const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [isPanning, setIsPanning] = useState(false)
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
-  const [dragState, setDragState] = useState(null)
+  const [items,         setItems]         = useState(initialData.items || [])
+  const [bg,            setBg]            = useState(initialData.bg    || '#1a1a2e')
+  const [pan,           setPan]           = useState({ x: 0, y: 0 })
+  const [isPanning,     setIsPanning]     = useState(false)
+  const [panStart,      setPanStart]      = useState({ x: 0, y: 0 })
+  const [dragState,     setDragState]     = useState(null)
   const [editingItemId, setEditingItemId] = useState(null)
-  const [saving, setSaving] = useState(false)
+  const [saving,        setSaving]        = useState(false)
   const [hoveredItemId, setHoveredItemId] = useState(null)
+  const [selectedIds,   setSelectedIds]   = useState(new Set())
+  const [clipboardSize, setClipboardSize] = useState(canvasClipboard?.items?.length ?? 0)
 
-  const saveTimerRef = useRef(null)
-  const doSaveRef = useRef(null)
-  const closeCanvasEditorRef = useRef(null)
-  const containerRef = useRef(null)
-  const fileInputRef = useRef(null)
-  const itemsRef = useRef(items)
-  const bgRef = useRef(bg)
-  useEffect(() => { itemsRef.current = items }, [items])
-  useEffect(() => { bgRef.current = bg }, [bg])
+  // Refs — stale closure'ları önlemek için
+  const saveTimerRef         = useRef(null)
+  const doSaveRef            = useRef(null)
+  const closeEditorRef       = useRef(null)
+  const containerRef         = useRef(null)
+  const fileInputRef         = useRef(null)
+  const itemsRef             = useRef(items)
+  const bgRef                = useRef(bg)
+  const selectedIdsRef       = useRef(selectedIds)
+  const editingItemIdRef     = useRef(editingItemId)
+  const actionRef            = useRef({})  // copy / paste / deleteSelected
 
-  // Block game controls while editor is open; ESC closes editor
+  useEffect(() => { itemsRef.current = items },             [items])
+  useEffect(() => { bgRef.current = bg },                   [bg])
+  useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
+  useEffect(() => { editingItemIdRef.current = editingItemId }, [editingItemId])
+
+  // ── Oyun kontrollerini engelle; ESC → düzenlemeyi kapat veya editörü kapat ──
   useEffect(() => {
     if (document.pointerLockElement) document.exitPointerLock()
     const block = e => {
       e.stopPropagation()
+      const ctrl     = e.ctrlKey || e.metaKey
+      const inText   = editingItemIdRef.current !== null
+
       if (e.key === 'Escape') {
         e.preventDefault()
+        if (editingItemIdRef.current) { setEditingItemId(null); return }
         clearTimeout(saveTimerRef.current)
-        doSaveRef.current(itemsRef.current, bgRef.current)
-        closeCanvasEditorRef.current()
+        doSaveRef.current?.(itemsRef.current, bgRef.current)
+        closeEditorRef.current?.()
+        return
+      }
+      if (ctrl && e.key === 'a' && !inText) { e.preventDefault(); actionRef.current.selectAll?.(); return }
+      if (ctrl && e.key === 'c' && !inText) { e.preventDefault(); actionRef.current.copy?.(); return }
+      if (ctrl && e.key === 'v' && !inText) { e.preventDefault(); actionRef.current.paste?.(); return }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !inText) {
+        e.preventDefault(); actionRef.current.deleteSelected?.(); return
       }
     }
     document.addEventListener('keydown', block, true)
-    return () => {
-      document.removeEventListener('keydown', block, true)
-      clearTimeout(saveTimerRef.current)
-    }
+    return () => { document.removeEventListener('keydown', block, true); clearTimeout(saveTimerRef.current) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Save ──────────────────────────────────────────────────────────────────
   const doSave = useCallback(async (currentItems, currentBg) => {
     setSaving(true)
     try {
-      const content = JSON.stringify({ items: currentItems, bg: currentBg })
       const r = await fetch(`/api/media/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content: JSON.stringify({ items: currentItems, bg: currentBg }) }),
       })
       if (r.ok) updateMedia(await r.json())
-    } catch (e) {
-      console.error('[CanvasEditor] save failed', e)
-    } finally {
-      setSaving(false)
-    }
+    } catch (e) { console.error('[CanvasEditor] save failed', e) }
+    finally { setSaving(false) }
   }, [id, updateMedia])
 
-  doSaveRef.current = doSave
-  closeCanvasEditorRef.current = closeCanvasEditor
+  doSaveRef.current   = doSave
+  closeEditorRef.current = closeCanvasEditor
 
   const scheduleSave = useCallback((newItems, newBg) => {
     clearTimeout(saveTimerRef.current)
@@ -86,6 +106,7 @@ export default function CanvasEditor({ mediaId }) {
   const handleViewportMouseDown = (e) => {
     if (e.target !== e.currentTarget) return
     if (editingItemId) { setEditingItemId(null); return }
+    setSelectedIds(new Set())
     setIsPanning(true)
     setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y })
   }
@@ -96,147 +117,204 @@ export default function CanvasEditor({ mediaId }) {
       return
     }
     if (dragState) {
-      const rect = containerRef.current?.getBoundingClientRect()
-      if (!rect) return
-      const newX = e.clientX - dragState.offsetX - rect.left - pan.x
-      const newY = e.clientY - dragState.offsetY - rect.top - pan.y
-      setItems(prev => prev.map(it =>
-        it.id === dragState.itemId ? { ...it, x: newX, y: newY } : it
-      ))
+      const dx = e.clientX - dragState.startMouse.x
+      const dy = e.clientY - dragState.startMouse.y
+      setItems(prev => prev.map(it => {
+        const orig = dragState.originsMap[it.id]
+        return orig ? { ...it, x: orig.x + dx, y: orig.y + dy } : it
+      }))
     }
   }
 
   const handleMouseUp = () => {
-    if (dragState) {
-      scheduleSave(itemsRef.current, bgRef.current)
-    }
+    if (dragState) scheduleSave(itemsRef.current, bgRef.current)
     setIsPanning(false)
     setDragState(null)
   }
 
-  // ── Item drag ─────────────────────────────────────────────────────────────
+  // ── Item interactions ─────────────────────────────────────────────────────
   const handleItemMouseDown = (e, item) => {
     e.stopPropagation()
     if (editingItemId === item.id) return
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setDragState({
-      itemId: item.id,
-      offsetX: e.clientX - (rect.left + pan.x + item.x),
-      offsetY: e.clientY - (rect.top + pan.y + item.y),
+
+    const ctrl = e.ctrlKey || e.metaKey
+
+    if (ctrl) {
+      // Ctrl+click → seçimi değiştir, drag yok
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        next.has(item.id) ? next.delete(item.id) : next.add(item.id)
+        return next
+      })
+      return
+    }
+
+    // Normal click: seçilmemişse sadece bunu seç; seçilmişse mevcut seçimi koru (multi-drag için)
+    const isSelected = selectedIdsRef.current.has(item.id)
+    const dragIds    = isSelected ? [...selectedIdsRef.current] : [item.id]
+    if (!isSelected) setSelectedIds(new Set([item.id]))
+
+    const originsMap = {}
+    dragIds.forEach(did => {
+      const it = itemsRef.current.find(i => i.id === did)
+      if (it) originsMap[did] = { x: it.x, y: it.y }
     })
+
+    setDragState({ originsMap, startMouse: { x: e.clientX, y: e.clientY } })
   }
 
-  // ── Add items ─────────────────────────────────────────────────────────────
+  const handleItemDoubleClick = (e, item) => {
+    e.stopPropagation()
+    if (item.type === 'text') { setEditingItemId(item.id); setSelectedIds(new Set([item.id])) }
+  }
+
+  // ── CRUD ──────────────────────────────────────────────────────────────────
   const addTextItem = () => {
     const newItem = {
-      id: crypto.randomUUID(),
-      type: 'text',
-      x: -pan.x + 100,
-      y: -pan.y + 100,
-      w: 300,
-      h: 150,
-      content: 'Yeni metin...',
+      id: crypto.randomUUID(), type: 'text',
+      x: -pan.x + 100, y: -pan.y + 100, w: 300, h: 150, content: 'Yeni metin...',
     }
-    setItems(prev => {
-      const next = [...prev, newItem]
-      scheduleSave(next, bgRef.current)
-      return next
-    })
+    setItems(prev => { const next = [...prev, newItem]; scheduleSave(next, bgRef.current); return next })
     setEditingItemId(newItem.id)
+    setSelectedIds(new Set([newItem.id]))
   }
 
   const handleImageFileSelect = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
+    const file = e.target.files[0]; if (!file) return
     e.target.value = ''
-    const formData = new FormData()
-    formData.append('file', file)
+    const fd = new FormData(); fd.append('file', file)
     try {
-      const r = await fetch(`/api/canvas/${id}/upload`, { method: 'POST', body: formData })
+      const r = await fetch(`/api/canvas/${id}/upload`, { method: 'POST', body: fd })
       const d = await r.json()
       if (!r.ok) { alert(d.error); return }
       const newItem = {
-        id: crypto.randomUUID(),
-        type: 'image',
-        x: -pan.x + 100,
-        y: -pan.y + 100,
-        w: 400,
-        h: 300,
-        url: d.url,
+        id: crypto.randomUUID(), type: 'image',
+        x: -pan.x + 100, y: -pan.y + 100, w: 400, h: 300, url: d.url,
       }
-      setItems(prev => {
-        const next = [...prev, newItem]
-        scheduleSave(next, bgRef.current)
-        return next
-      })
-    } catch (err) {
-      alert('Resim yüklenemedi: ' + err.message)
-    }
+      setItems(prev => { const next = [...prev, newItem]; scheduleSave(next, bgRef.current); return next })
+      setSelectedIds(new Set([newItem.id]))
+    } catch (err) { alert('Resim yüklenemedi: ' + err.message) }
   }
 
   const deleteItem = (e, itemId) => {
     e.stopPropagation()
-    setItems(prev => {
-      const next = prev.filter(it => it.id !== itemId)
-      scheduleSave(next, bgRef.current)
-      return next
-    })
+    setItems(prev => { const next = prev.filter(it => it.id !== itemId); scheduleSave(next, bgRef.current); return next })
+    setSelectedIds(prev => { const next = new Set(prev); next.delete(itemId); return next })
   }
 
   const handleBgChange = (e) => {
-    const newBg = e.target.value
-    setBg(newBg)
-    scheduleSave(itemsRef.current, newBg)
+    const newBg = e.target.value; setBg(newBg); scheduleSave(itemsRef.current, newBg)
   }
 
+  // ── Copy / Paste / Select-all / Delete-selected ───────────────────────────
+  const copySelected = () => {
+    if (selectedIdsRef.current.size === 0) return
+    const copied = itemsRef.current.filter(it => selectedIdsRef.current.has(it.id))
+    canvasClipboard = { items: copied, sourceMediaId: id, pasteCount: 0 }
+    setClipboardSize(copied.length)
+  }
+
+  const pasteItems = async () => {
+    if (!canvasClipboard?.items?.length) return
+
+    const offset   = PASTE_STEP + canvasClipboard.pasteCount * PASTE_STEP
+    let srcItems   = canvasClipboard.items
+
+    // Farklı canvas'a yapıştırınca resim dosyalarını kopyala
+    if (canvasClipboard.sourceMediaId !== id) {
+      const imageUrls = srcItems
+        .filter(it => it.type === 'image' && it.url?.startsWith('/uploads/'))
+        .map(it => it.url)
+
+      if (imageUrls.length > 0) {
+        try {
+          const r = await fetch('/api/canvas/copy-images', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls: imageUrls }),
+          })
+          if (r.ok) {
+            const { mapping } = await r.json()
+            srcItems = srcItems.map(it =>
+              it.type === 'image' && mapping[it.url] ? { ...it, url: mapping[it.url] } : it
+            )
+          }
+        } catch {}
+      }
+    }
+
+    const pasted = srcItems.map(it => ({
+      ...it, id: crypto.randomUUID(), x: it.x + offset, y: it.y + offset,
+    }))
+
+    setItems(prev => { const next = [...prev, ...pasted]; scheduleSave(next, bgRef.current); return next })
+    setSelectedIds(new Set(pasted.map(it => it.id)))
+    canvasClipboard = { ...canvasClipboard, pasteCount: canvasClipboard.pasteCount + 1 }
+  }
+
+  const selectAll = () => setSelectedIds(new Set(itemsRef.current.map(it => it.id)))
+
+  const deleteSelected = () => {
+    if (selectedIdsRef.current.size === 0) return
+    setItems(prev => {
+      const next = prev.filter(it => !selectedIdsRef.current.has(it.id))
+      scheduleSave(next, bgRef.current)
+      return next
+    })
+    setSelectedIds(new Set())
+  }
+
+  // Aksiyon ref'lerini her render'da güncelle (mount-time keydown handler için)
+  actionRef.current = { copy: copySelected, paste: pasteItems, selectAll, deleteSelected }
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 9999,
-      display: 'flex', flexDirection: 'column',
-      background: '#0a0a0f',
-      userSelect: 'none',
-    }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', flexDirection: 'column', background: '#0a0a0f', userSelect: 'none' }}>
+
       {/* Toolbar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '8px 16px',
-        background: 'rgba(255,255,255,0.05)',
-        borderBottom: '1px solid rgba(255,255,255,0.1)',
-        flexShrink: 0,
-      }}>
-        <span style={{ color: '#888', fontSize: 13, marginRight: 8 }}>🎨 Canvas</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.1)', flexShrink: 0 }}>
+        <span style={{ color: '#888', fontSize: 13, marginRight: 4 }}>🎨 Canvas</span>
 
-        <button onClick={addTextItem} style={toolbarBtn}>
-          ✏️ Metin Ekle
-        </button>
+        <button onClick={addTextItem} style={tbBtn}>✏️ Metin Ekle</button>
+        <button onClick={() => fileInputRef.current?.click()} style={tbBtn}>🖼️ Resim Ekle</button>
+        <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageFileSelect} />
 
-        <button onClick={() => fileInputRef.current?.click()} style={toolbarBtn}>
-          🖼️ Resim Ekle
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          style={{ display: 'none' }}
-          onChange={handleImageFileSelect}
-        />
+        {selectedIds.size > 0 && (
+          <>
+            <div style={tbDivider} />
+            <button onClick={copySelected} style={tbBtn} title="Ctrl+C">
+              ⧉ Kopyala {selectedIds.size > 1 ? `(${selectedIds.size})` : ''}
+            </button>
+            <button onClick={deleteSelected} style={{ ...tbBtn, color: '#f87171' }} title="Delete">
+              🗑 Sil
+            </button>
+          </>
+        )}
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#aaa', fontSize: 12 }}>
+        {clipboardSize > 0 && (
+          <>
+            <div style={tbDivider} />
+            <button onClick={pasteItems} style={{ ...tbBtn, borderColor: 'rgba(96,165,250,0.4)', color: '#93c5fd' }} title="Ctrl+V">
+              ⌘ Yapıştır {clipboardSize > 1 ? `(${clipboardSize})` : ''}
+            </button>
+          </>
+        )}
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#aaa', fontSize: 12, marginLeft: 8 }}>
           Arka plan
-          <input
-            type="color"
-            value={bg}
-            onChange={handleBgChange}
-            style={{ width: 28, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
-          />
+          <input type="color" value={bg} onChange={handleBgChange}
+            style={{ width: 28, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
         </label>
 
         <span style={{ marginLeft: 'auto', fontSize: 11, color: saving ? '#60a5fa' : '#4ade80' }}>
           {saving ? '⟳ Kaydediliyor...' : '✓ Kaydedildi'}
         </span>
 
-        <button onClick={handleClose} style={{ ...toolbarBtn, marginLeft: 8, background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>
+        <span style={{ fontSize: 10, color: '#444', marginLeft: 8 }}>
+          Ctrl+A · Ctrl+C · Ctrl+V · Del
+        </span>
+
+        <button onClick={handleClose} style={{ ...tbBtn, marginLeft: 8, background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>
           ✕ Kapat
         </button>
       </div>
@@ -244,130 +322,92 @@ export default function CanvasEditor({ mediaId }) {
       {/* Canvas viewport */}
       <div
         ref={containerRef}
-        style={{
-          flex: 1,
-          overflow: 'hidden',
-          position: 'relative',
-          cursor: isPanning ? 'grabbing' : dragState ? 'grabbing' : 'grab',
-        }}
+        style={{ flex: 1, overflow: 'hidden', position: 'relative', cursor: isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default' }}
         onMouseDown={handleViewportMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
         {/* Canvas surface */}
-        <div style={{
-          position: 'absolute',
-          width: 8000,
-          height: 8000,
-          top: 0,
-          left: 0,
-          transform: `translate(${pan.x}px, ${pan.y}px)`,
-          backgroundColor: bg,
-        }}>
-          {items.map(item => (
-            <div
-              key={item.id}
-              style={{
-                position: 'absolute',
-                left: item.x,
-                top: item.y,
-                width: item.w,
-                height: item.h,
-                cursor: editingItemId === item.id ? 'text' : 'move',
-                outline: hoveredItemId === item.id || dragState?.itemId === item.id
-                  ? '1px solid rgba(96,165,250,0.6)' : '1px solid transparent',
-                borderRadius: 4,
-                boxSizing: 'border-box',
-              }}
-              onMouseDown={e => handleItemMouseDown(e, item)}
-              onMouseEnter={() => setHoveredItemId(item.id)}
-              onMouseLeave={() => setHoveredItemId(null)}
-              onDoubleClick={e => { e.stopPropagation(); if (item.type === 'text') setEditingItemId(item.id) }}
-            >
-              {/* Item content */}
-              {item.type === 'image' ? (
-                <img
-                  src={item.url}
-                  alt=""
-                  draggable={false}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4, display: 'block', pointerEvents: 'none' }}
-                />
-              ) : item.type === 'text' && editingItemId === item.id ? (
-                <textarea
-                  autoFocus
-                  defaultValue={item.content}
-                  style={{
-                    width: '100%', height: '100%',
-                    background: 'rgba(0,0,0,0.5)',
-                    border: '1px solid #60a5fa',
-                    borderRadius: 4,
-                    color: '#fff',
-                    fontSize: 14,
-                    padding: 8,
-                    resize: 'none',
-                    outline: 'none',
-                    boxSizing: 'border-box',
-                    fontFamily: 'inherit',
-                  }}
-                  onMouseDown={e => e.stopPropagation()}
-                  onBlur={e => {
-                    const newContent = e.target.value
-                    setItems(prev => {
-                      const next = prev.map(it => it.id === item.id ? { ...it, content: newContent } : it)
-                      scheduleSave(next, bgRef.current)
-                      return next
-                    })
-                    setEditingItemId(null)
-                  }}
-                />
-              ) : (
-                <div style={{
-                  width: '100%', height: '100%',
-                  background: 'rgba(0,0,0,0.35)',
-                  borderRadius: 4,
-                  color: '#e2e8f0',
-                  fontSize: 14,
-                  padding: 8,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  overflow: 'hidden',
-                  boxSizing: 'border-box',
-                  pointerEvents: 'none',
-                }}>
-                  {item.content}
-                </div>
-              )}
+        <div style={{ position: 'absolute', width: 8000, height: 8000, top: 0, left: 0, transform: `translate(${pan.x}px, ${pan.y}px)`, backgroundColor: bg }}>
 
-              {/* Delete button */}
-              {hoveredItemId === item.id && editingItemId !== item.id && (
-                <button
-                  onMouseDown={e => e.stopPropagation()}
-                  onClick={e => deleteItem(e, item.id)}
-                  style={{
-                    position: 'absolute', top: -10, right: -10,
-                    width: 20, height: 20,
-                    background: '#ef4444', border: 'none',
-                    borderRadius: '50%', color: '#fff',
-                    fontSize: 12, lineHeight: '20px', textAlign: 'center',
-                    cursor: 'pointer', padding: 0,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    zIndex: 1,
-                  }}
-                >×</button>
-              )}
-            </div>
-          ))}
+          {items.map(item => {
+            const isSelected = selectedIds.has(item.id)
+            const isHovered  = hoveredItemId === item.id
+            const isDragging = dragState?.originsMap?.[item.id] !== undefined
+
+            let outline = '1px solid transparent'
+            if (isSelected)       outline = '2px solid #60a5fa'
+            else if (isHovered || isDragging) outline = '1px solid rgba(96,165,250,0.5)'
+
+            return (
+              <div
+                key={item.id}
+                style={{
+                  position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h,
+                  cursor: editingItemId === item.id ? 'text' : 'move',
+                  outline, borderRadius: 4, boxSizing: 'border-box',
+                  boxShadow: isSelected ? '0 0 0 1px rgba(96,165,250,0.2)' : 'none',
+                }}
+                onMouseDown={e => handleItemMouseDown(e, item)}
+                onMouseEnter={() => setHoveredItemId(item.id)}
+                onMouseLeave={() => setHoveredItemId(null)}
+                onDoubleClick={e => handleItemDoubleClick(e, item)}
+              >
+                {/* Item content */}
+                {item.type === 'image' ? (
+                  <img src={item.url} alt="" draggable={false}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
+                ) : item.type === 'text' && editingItemId === item.id ? (
+                  <textarea
+                    autoFocus
+                    defaultValue={item.content}
+                    style={{
+                      width: '100%', height: '100%',
+                      background: 'rgba(0,0,0,0.5)', border: '1px solid #60a5fa', borderRadius: 4,
+                      color: '#fff', fontSize: 14, padding: 8, resize: 'none', outline: 'none',
+                      boxSizing: 'border-box', fontFamily: 'inherit',
+                    }}
+                    onMouseDown={e => e.stopPropagation()}
+                    onBlur={e => {
+                      const newContent = e.target.value
+                      setItems(prev => {
+                        const next = prev.map(it => it.id === item.id ? { ...it, content: newContent } : it)
+                        scheduleSave(next, bgRef.current)
+                        return next
+                      })
+                      setEditingItemId(null)
+                    }}
+                  />
+                ) : (
+                  <div style={{
+                    width: '100%', height: '100%', background: 'rgba(0,0,0,0.35)', borderRadius: 4,
+                    color: '#e2e8f0', fontSize: 14, padding: 8, whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word', overflow: 'hidden', boxSizing: 'border-box', pointerEvents: 'none',
+                  }}>
+                    {item.content}
+                  </div>
+                )}
+
+                {/* Delete button — hover'da, seçili item için */}
+                {(isHovered || isSelected) && editingItemId !== item.id && (
+                  <button
+                    onMouseDown={e => e.stopPropagation()}
+                    onClick={e => deleteItem(e, item.id)}
+                    style={{
+                      position: 'absolute', top: -10, right: -10, width: 20, height: 20,
+                      background: '#ef4444', border: 'none', borderRadius: '50%', color: '#fff',
+                      fontSize: 12, lineHeight: '20px', textAlign: 'center', cursor: 'pointer',
+                      padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1,
+                    }}
+                  >×</button>
+                )}
+              </div>
+            )
+          })}
 
           {items.length === 0 && (
-            <div style={{
-              position: 'absolute', top: '50%', left: '50%',
-              transform: 'translate(-50%, -50%)',
-              color: 'rgba(255,255,255,0.15)',
-              fontSize: 16,
-              textAlign: 'center',
-              pointerEvents: 'none',
-            }}>
+            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'rgba(255,255,255,0.15)', fontSize: 16, textAlign: 'center', pointerEvents: 'none' }}>
               Metin veya resim ekleyin<br />
               <span style={{ fontSize: 12 }}>Gezinmek için sürükleyin</span>
             </div>
@@ -378,12 +418,12 @@ export default function CanvasEditor({ mediaId }) {
   )
 }
 
-const toolbarBtn = {
+const tbBtn = {
   background: 'rgba(255,255,255,0.08)',
   border: '1px solid rgba(255,255,255,0.1)',
-  borderRadius: 6,
-  color: '#e2e8f0',
-  padding: '6px 12px',
-  cursor: 'pointer',
-  fontSize: 12,
+  borderRadius: 6, color: '#e2e8f0', padding: '6px 12px', cursor: 'pointer', fontSize: 12,
+}
+
+const tbDivider = {
+  width: 1, height: 24, background: 'rgba(255,255,255,0.1)', flexShrink: 0,
 }

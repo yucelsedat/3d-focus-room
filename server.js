@@ -683,6 +683,22 @@ app.post('/api/canvas/:id/upload', canvasUpload.single('file'), (req, res) => {
   res.json({ url: `/uploads/images/${req.file.filename}` });
 });
 
+// Farklı canvas'a yapıştırırken resim dosyalarını kopyalar
+app.post('/api/canvas/copy-images', (req, res) => {
+  const { urls } = req.body;
+  const mapping = {};
+  for (const srcUrl of (urls || [])) {
+    if (!srcUrl?.startsWith('/uploads/')) continue;
+    const srcPath = path.join(__dirname, 'public', srcUrl);
+    if (!fs.existsSync(srcPath)) continue;
+    const ext = path.extname(srcUrl);
+    const newFilename = `canvas-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+    fs.copyFileSync(srcPath, path.join(__dirname, 'public', 'uploads', 'images', newFilename));
+    mapping[srcUrl] = `/uploads/images/${newFilename}`;
+  }
+  res.json({ mapping });
+});
+
 app.put('/api/media/:id', async (req, res) => {
   let id;
   try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
