@@ -247,8 +247,8 @@ export function EditModal() {
         addMedia(d)
         closeModal()
         setCanvasBg('#1a1a2e')
-        setWidth(8)
-        setHeight(4.5)
+        setWidth(10)
+        setHeight(5)
       } catch (err) {
         alert(err.message)
       } finally {
@@ -703,7 +703,7 @@ export function EditModal() {
           </button>
           <button
             style={activeTab === 'canvas' ? s.activeTab : s.tab}
-            onClick={() => { setActiveTab('canvas'); setWidth(40); setHeight(20) }}
+            onClick={() => { setActiveTab('canvas'); setWidth(10); setHeight(5) }}
           >
             🎨 Canvas
           </button>
