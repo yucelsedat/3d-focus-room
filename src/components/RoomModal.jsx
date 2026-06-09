@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import { ROOM_CONFIGS, getDoorInstanceIds } from '../utils/roomConfig'
 
-const OUTER_CONFIG = { gx: 120, gz: 120, wh: 5 }
+const OUTER_CONFIG = { gx: 120, gz: 120, wh: 6 }
 
 export function RoomModal() {
   const {

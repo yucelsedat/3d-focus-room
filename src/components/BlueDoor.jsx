@@ -2,7 +2,7 @@ import { useStore } from '../store/useStore'
 import { ROOM_CONFIGS, decodeWallId } from '../utils/roomConfig'
 
 const TILE_SIZE = 1
-const OUTER_CONFIG = { gx: 120, gz: 120, wh: 5 }
+const OUTER_CONFIG = { gx: 120, gz: 120, wh: 6 }
 
 function doorWorldPos(anchorId, config) {
   const { gx, gz } = config

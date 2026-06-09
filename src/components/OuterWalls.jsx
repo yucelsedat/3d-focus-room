@@ -5,7 +5,7 @@ import { useStore } from '../store/useStore'
 import * as THREE from 'three'
 
 const OUTER_GRID_SIZE = 120
-const WALL_HEIGHT     = 5
+const WALL_HEIGHT     = 6
 const TILE_SIZE       = 1
 const COUNT           = OUTER_GRID_SIZE * WALL_HEIGHT * 4  // 2400
 const OFFSET          = 60
