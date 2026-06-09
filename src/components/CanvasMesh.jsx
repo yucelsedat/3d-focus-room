@@ -16,6 +16,27 @@ const HANDLES = [
   { h: 'w',  style: { top: 'calc(50% - 10px)', left: -10 },    cursor: 'w-resize'  },
 ]
 
+const MAX_IMG_W = 800
+const getImageNaturalSize = (url) => new Promise((resolve) => {
+  const img = new Image()
+  img.onload  = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+  img.onerror = () => resolve(null)
+  img.src = url
+})
+
+// Module-level clipboard — persists across canvas instances / re-renders
+let canvasMeshClipboard = null
+let _canvasClipboardTs   = 0
+// When the user copies something outside the canvas, clear the internal clipboard
+// so Ctrl+V uses the OS clipboard instead of stale canvas items.
+// The 50ms guard prevents this from firing on our own Ctrl+C (where e.preventDefault
+// blocks the copy event but a tiny race is possible in some browsers).
+if (typeof document !== 'undefined') {
+  document.addEventListener('copy', () => {
+    if (Date.now() - _canvasClipboardTs > 50) canvasMeshClipboard = null
+  }, true)
+}
+
 // bounding box of box-type items matching id set
 function getBounds(ids, items) {
   const sel = items.filter(it => ids.has(it.id) && it.type !== 'arrow')
@@ -81,8 +102,9 @@ export default function CanvasMesh({ id, content, width, height }) {
   const selectedIdsRef  = useRef(selectedIds)
   const isEditModeRef   = useRef(false)
   const scheduleSaveRef = useRef(null)
-  const pasteActionRef  = useRef(null)
-  const ctrlRef         = useRef(false)
+  const pasteActionRef   = useRef(null)
+  const pasteInternalRef = useRef(null)
+  const ctrlRef          = useRef(false)
 
   // Ctrl tuşu durumunu ayrıca takip et (bazı browser/OS'larda e.ctrlKey wheel'de güvenilmez)
   useEffect(() => {
@@ -167,6 +189,27 @@ export default function CanvasMesh({ id, content, width, height }) {
       if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); exitEdit(); return }
       const active = document.activeElement
       if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') return
+      const ctrl = e.ctrlKey || e.metaKey
+      if (ctrl && e.key === 'a') {
+        e.preventDefault(); e.stopPropagation()
+        setSelectedIds(new Set(itemsRef.current.map(it => it.id)))
+        return
+      }
+      if (ctrl && e.key === 'c') {
+        if (selectedIdsRef.current.size > 0) {
+          e.preventDefault(); e.stopPropagation()
+          _canvasClipboardTs = Date.now()
+          canvasMeshClipboard = { sourceId: id, items: itemsRef.current.filter(it => selectedIdsRef.current.has(it.id)) }
+          setPasteMsg('copy')
+          setTimeout(() => setPasteMsg(''), 1000)
+        }
+        return
+      }
+      if (ctrl && e.key === 'v' && canvasMeshClipboard?.items?.length) {
+        e.preventDefault(); e.stopPropagation()
+        pasteInternalRef.current?.()
+        return
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdsRef.current.size > 0) {
         e.stopPropagation(); e.preventDefault()
         const toDelete = [...selectedIdsRef.current]
@@ -203,8 +246,11 @@ export default function CanvasMesh({ id, content, width, height }) {
         const r = await fetch(`/api/canvas/${id}/upload`, { method: 'POST', body: form })
         const d = await r.json()
         if (r.ok) {
-          const pt = centerSurface()
-          const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: 640, h: 420, url: d.url }
+          const pt   = centerSurface()
+          const dims = await getImageNaturalSize(d.url)
+          const iw   = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
+          const ih   = dims ? Math.round(iw * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
+          const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: iw, h: ih, url: d.url }
           setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
           setPasteMsg('ok')
         } else setPasteMsg('err')
@@ -218,7 +264,10 @@ export default function CanvasMesh({ id, content, width, height }) {
       const isImgUrl = (() => { try { const { pathname } = new URL(text); return /\.(jpe?g|png|gif|webp|svg|bmp|avif|tiff?)(\?.*)?$/i.test(pathname) } catch { return false } })()
       const pt = centerSurface()
       if (isImgUrl) {
-        const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: 640, h: 420, url: text }
+        const dims = await getImageNaturalSize(text)
+        const iw   = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
+        const ih   = dims ? Math.round(iw * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
+        const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: iw, h: ih, url: text }
         setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
       } else {
         const ni = { id: crypto.randomUUID(), type: 'text', x: pt.x, y: pt.y, w: 500, h: 220, content: text || '', fontSize: 30 }
@@ -227,6 +276,51 @@ export default function CanvasMesh({ id, content, width, height }) {
       }
       setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
     }
+  }
+
+  pasteInternalRef.current = async () => {
+    if (!canvasMeshClipboard?.items?.length) return
+    const clip = canvasMeshClipboard
+    let clipItems = clip.items
+
+    if (clip.sourceId !== id) {
+      const imgUrls = clipItems
+        .filter(it => it.type === 'image' && it.url?.startsWith('/uploads/'))
+        .map(it => it.url)
+      if (imgUrls.length) {
+        setPasteMsg('loading')
+        try {
+          const r = await fetch('/api/canvas/copy-images', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls: imgUrls }),
+          })
+          const d = await r.json()
+          if (r.ok && d.mapping) {
+            clipItems = clipItems.map(it =>
+              it.type === 'image' && d.mapping[it.url] ? { ...it, url: d.mapping[it.url] } : it
+            )
+          }
+        } catch {}
+      }
+    }
+
+    const origIds = new Set(clipItems.map(i => i.id))
+    const box = getBounds(origIds, clipItems)
+    const pt = centerSurface()
+    const ox = box ? pt.x - box.x - box.w / 2 : 0
+    const oy = box ? pt.y - box.y - box.h / 2 : 0
+
+    const newItems = clipItems.map(it => ({
+      ...it,
+      id: crypto.randomUUID(),
+      x: (it.x ?? 0) + ox,
+      y: (it.y ?? 0) + oy,
+      ...(it.type === 'arrow' ? { x1: it.x1 + ox, y1: it.y1 + oy, x2: it.x2 + ox, y2: it.y2 + oy } : {}),
+    }))
+
+    setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
+    setSelectedIds(new Set(newItems.map(c => c.id)))
+    setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
   }
 
   useEffect(() => {
@@ -324,6 +418,19 @@ export default function CanvasMesh({ id, content, width, height }) {
         if (rh.includes('s')) nh = Math.max(20, ib.h + dy)
         if (rh.includes('w')) { nw = Math.max(40, ib.w - dx); nx = ib.x + ib.w - nw }
         if (rh.includes('n')) { nh = Math.max(20, ib.h - dy); ny = ib.y + ib.h - nh }
+        // Lock aspect ratio for a single image item
+        if (initItems.length === 1) {
+          const selItem = itemsRef.current.find(it => it.id === initItems[0].id)
+          if (selItem?.type === 'image') {
+            const ratio = ib.w / ib.h
+            if (rh === 'e' || rh === 'w') {
+              nh = nw / ratio
+            } else {
+              nw = nh * ratio
+              if (rh === 'n') ny = ib.y + ib.h - nh
+            }
+          }
+        }
         scale = null
       }
       const sx = nw / ib.w, sy = nh / ib.h
@@ -415,10 +522,13 @@ export default function CanvasMesh({ id, content, width, height }) {
     setSelectedIds(new Set([ni.id])); setEditingItemId(ni.id); setDrawMode(null)
   }
 
-  const addImageFromUrl = (e) => {
+  const addImageFromUrl = async (e) => {
     stop(e); const url = urlValue.trim(); if (!url) return
-    const pt = centerSurface()
-    const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: 640, h: 420, url }
+    const pt   = centerSurface()
+    const dims = await getImageNaturalSize(url)
+    const iw   = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
+    const ih   = dims ? Math.round(iw * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
+    const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: iw, h: ih, url }
     setItems(prev => { const next = [...prev, ni]; scheduleSave(next, bgRef.current); return next })
     setSelectedIds(new Set([ni.id])); setShowUrlInput(false); setUrlValue('')
   }
@@ -538,7 +648,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   // ── Box item content ──────────────────────────────────────────────────────
   const renderBoxContent = (item) => {
     if (item.type === 'room')  return <RoomChip item={item} />
-    if (item.type === 'image') return <img src={item.url} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
+    if (item.type === 'image') return <img src={item.url} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'fill', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
     if (item.type === 'text' && editingItemId === item.id) {
       const autoH = el => {
         if (!el) return
@@ -590,7 +700,7 @@ export default function CanvasMesh({ id, content, width, height }) {
             <div style={{ position: 'absolute', top: 0, left: 0, width: 8000, height: 8000, transform: surfTx, transformOrigin: '0 0' }}>
               {items.filter(it => it.type !== 'arrow').map(item =>
                 item.type === 'image' ? (
-                  <img key={item.id} src={item.url} alt="" style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, objectFit: 'cover', borderRadius: 4, pointerEvents: 'none' }} />
+                  <img key={item.id} src={item.url} alt="" style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, objectFit: 'fill', borderRadius: 4, pointerEvents: 'none' }} />
                 ) : item.type === 'text' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto', minHeight: item.h || 60, color: '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
                 ) : item.type === 'room' ? (
@@ -672,13 +782,13 @@ export default function CanvasMesh({ id, content, width, height }) {
               )}
 
               {pasteMsg && (
-                <span style={{ fontSize: 22, flexShrink: 0, color: pasteMsg === 'loading' ? '#60a5fa' : pasteMsg === 'ok' ? '#4ade80' : '#f87171' }}>
-                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
+                <span style={{ fontSize: 22, flexShrink: 0, color: pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy') ? '#4ade80' : '#f87171' }}>
+                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
                 </span>
               )}
 
               <span style={{ marginLeft: 'auto', fontSize: 20, color: 'rgba(148,163,184,0.3)', flexShrink: 0 }}>
-                {hasBoxSel ? 'Del: sil' : 'Ctrl+sürükle: seç'} · ESC
+                {hasBoxSel ? 'Ctrl+C: kopyala · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'} · ESC
               </span>
             </div>
 
