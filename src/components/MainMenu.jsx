@@ -269,6 +269,9 @@ export function MainMenu() {
                 {[
                   ['W A S D', 'Hareket et'],
                   ['Mouse', 'Etrafına bak'],
+                  ['Space', 'Yukarı uç (basılı tut)'],
+                  ['Shift', 'Aşağı in (basılı tut)'],
+                  ['Space ×2', 'Hızlı düşüş'],
                   ['E', "Tile'a medya ekle / düzenle"],
                   ['R', 'Kapı aç/kapat · Zemin değiştir'],
                   ['Q', 'Bu menüyü aç / kapat'],

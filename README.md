@@ -39,12 +39,23 @@ Once the environment boots up, your application will be available at [http://loc
 
 ## 🎮 Controls
 
+### Movement
 | Key / Input | Action |
 |---|---|
-| `W` `A` `S` `D` / Arrow Keys | Move camera across the room |
+| `W` `A` `S` `D` / Arrow Keys | Move forward / left / backward / right |
 | `Mouse` | Look around (Pointer Locked) |
-| `E` | Open the Media Editor when hovering over a wall or floor tile |
-| `Esc` | Release pointer lock / close modal |
+| `Space` (hold) | Fly upward |
+| `Shift` (hold) | Fly downward |
+| `Space` × 2 (double tap) | Fast fall to the ground |
+| `C` (hold) | Zoom in |
+
+### Interface
+| Key / Input | Action |
+|---|---|
+| `E` | Open Media Editor for the hovered wall / floor tile |
+| `R` | Open Room Settings (doors, floor texture) |
+| `Q` | Open / close main menu |
+| `Esc` | Release pointer lock · close any open modal |
 
 ## 🖼 Media Types
 
@@ -55,6 +66,8 @@ Once the environment boots up, your application will be available at [http://loc
 | **YouTube** | Paste any YouTube link (`watch`, `youtu.be`, or `<iframe>`) |
 | **GIF** | Detected automatically from URL — rendered natively in-browser |
 | **Markdown** | Write formatted text; auto-flows into multi-column layout if tall |
+| **Canvas** | Infinite 2D canvas — add text boxes and images, pan freely, drag to rearrange |
+| **Header** | Auto-fitting large title text with custom background and text colour; click on wall to edit inline |
 
 ---
 *Built to benchmark and demonstrate high-performance React-Three-Fiber environments, seamless Web DOM overlays, and real-time backend asset synchronization.*
