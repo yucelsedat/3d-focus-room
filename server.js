@@ -794,6 +794,20 @@ app.delete('/api/media/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// YouTube oEmbed meta proxy (title + thumbnail — avoids browser CORS)
+app.get('/api/youtube-meta', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url gerekli' });
+  try {
+    const r = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+    if (!r.ok) return res.status(r.status).json({ error: 'oEmbed hatası' });
+    const d = await r.json();
+    res.json({ title: d.title || '', thumbnail_url: d.thumbnail_url || '', author_name: d.author_name || '' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 await bootMigrate();
 app.listen(port, () => {

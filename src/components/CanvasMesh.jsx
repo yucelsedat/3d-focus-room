@@ -261,6 +261,22 @@ export default function CanvasMesh({ id, content, width, height }) {
 
     const text = e.clipboardData?.getData('text/plain')?.trim()
     if (text) {
+      // YouTube link
+      const ytId = (() => { try { const u = new URL(text); if (u.hostname.includes('youtube.com')) return u.searchParams.get('v'); if (u.hostname === 'youtu.be') return u.pathname.slice(1).split('?')[0] } catch {} return null })()
+      if (ytId) {
+        setPasteMsg('loading')
+        const pt  = centerSurface()
+        let title = '', thumbUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`
+        try {
+          const r = await fetch(`/api/youtube-meta?url=${encodeURIComponent(text)}`)
+          if (r.ok) { const d = await r.json(); title = d.title || ''; if (d.thumbnail_url) thumbUrl = d.thumbnail_url }
+        } catch {}
+        const ni = { id: crypto.randomUUID(), type: 'youtube', x: pt.x, y: pt.y, w: 480, h: 270, url: text, videoId: ytId, thumbUrl, title }
+        setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
+        setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
+        return
+      }
+
       const isImgUrl = (() => { try { const { pathname } = new URL(text); return /\.(jpe?g|png|gif|webp|svg|bmp|avif|tiff?)(\?.*)?$/i.test(pathname) } catch { return false } })()
       const pt = centerSurface()
       if (isImgUrl) {
@@ -646,8 +662,27 @@ export default function CanvasMesh({ id, content, width, height }) {
   )
 
   // ── Box item content ──────────────────────────────────────────────────────
+  const YoutubeCard = ({ item, clickable = false }) => (
+    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', cursor: clickable ? 'pointer' : 'inherit' }}
+      {...(clickable ? { onMouseDown: stop, onClick: (e) => { stop(e); navigator.clipboard?.writeText(item.url).catch(() => {}) } } : {})}>
+      <img src={item.thumbUrl} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+        <svg width="64" height="44" viewBox="0 0 68 48">
+          <path d="M66.52 7.74c-.78-2.93-2.49-5.41-5.42-6.19C55.79.13 34 0 34 0S12.21.13 6.9 1.55c-2.93.78-4.63 3.26-5.42 6.19C.06 13.05 0 24 0 24s.06 10.95 1.48 16.26c.78 2.93 2.49 5.41 5.42 6.19C12.21 47.87 34 48 34 48s21.79-.13 27.1-1.55c2.93-.78 4.64-3.26 5.42-6.19C67.94 34.95 68 24 68 24s-.06-10.95-1.48-16.26z" fill="#f00"/>
+          <path d="M45 24L27 14v20" fill="#fff"/>
+        </svg>
+      </div>
+      {item.title && (
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.85))', padding: '28px 12px 10px', color: '#fff', fontSize: 28, lineHeight: 1.35, fontWeight: 600, pointerEvents: 'none' }}>
+          {item.title}
+        </div>
+      )}
+    </div>
+  )
+
   const renderBoxContent = (item) => {
-    if (item.type === 'room')  return <RoomChip item={item} />
+    if (item.type === 'room')    return <RoomChip item={item} />
+    if (item.type === 'youtube') return <YoutubeCard item={item} />
     if (item.type === 'image') return <img src={item.url} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'fill', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
     if (item.type === 'text' && editingItemId === item.id) {
       const autoH = el => {
@@ -701,6 +736,10 @@ export default function CanvasMesh({ id, content, width, height }) {
               {items.filter(it => it.type !== 'arrow').map(item =>
                 item.type === 'image' ? (
                   <img key={item.id} src={item.url} alt="" style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, objectFit: 'fill', borderRadius: 4, pointerEvents: 'none' }} />
+                ) : item.type === 'youtube' ? (
+                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+                    <YoutubeCard item={item} clickable />
+                  </div>
                 ) : item.type === 'text' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto', minHeight: item.h || 60, color: '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
                 ) : item.type === 'room' ? (
