@@ -1,8 +1,68 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
+import { Marked } from 'marked'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark-dimmed.css'
+import DOMPurify from 'dompurify'
 import { useStore } from '../store/useStore'
 import { loadRoom } from '../utils/loadRoom'
+
+// Canvas-only marked instance — does NOT affect the global marked used in MarkdownMesh
+const canvasMarked = new Marked({
+  renderer: {
+    code({ text, lang }) {
+      const language = lang && hljs.getLanguage(lang) ? lang : null
+      const highlighted = language
+        ? hljs.highlight(text, { language }).value
+        : hljs.highlightAuto(text).value
+      const detectedLang = language || 'code'
+      return `<div class="cvmd-code-block"><span class="cvmd-code-lang">${detectedLang}</span><pre><code class="hljs language-${detectedLang}">${highlighted}</code></pre></div>`
+    }
+  }
+})
+
+const parseMd = (content) => DOMPurify.sanitize(canvasMarked.parse(content))
+
+// Inject markdown styles once
+if (typeof document !== 'undefined' && !document.getElementById('cvmd-styles')) {
+  const s = document.createElement('style')
+  s.id = 'cvmd-styles'
+  s.textContent = `
+    .cvmd { line-height: 1.5; }
+    .cvmd > *:first-child { margin-top: 0 !important; }
+    .cvmd > *:last-child  { margin-bottom: 0 !important; }
+    .cvmd h1 { font-size: 1.75em; font-weight: 800; margin: 0 0 0.3em; }
+    .cvmd h2 { font-size: 1.4em;  font-weight: 700; margin: 0.6em 0 0.25em; }
+    .cvmd h3 { font-size: 1.15em; font-weight: 600; margin: 0.5em 0 0.2em; }
+    .cvmd p  { margin: 0 0 0.55em; }
+    .cvmd ul, .cvmd ol { margin: 0 0 0.55em; padding-left: 1.5em; }
+    .cvmd li { margin-bottom: 0.2em; }
+    .cvmd code { background: rgba(255,255,255,0.1); padding: 0.1em 0.38em; border-radius: 4px; font-family: 'Fira Code', 'Cascadia Code', monospace; font-size: 0.85em; }
+    .cvmd blockquote { border-left: 3px solid rgba(255,255,255,0.25); padding-left: 0.75em; margin: 0 0 0.55em 0; opacity: 0.8; }
+    .cvmd a  { color: #60a5fa; text-decoration: underline; }
+    .cvmd hr { border: none; border-top: 1px solid rgba(255,255,255,0.18); margin: 0.6em 0; }
+    .cvmd strong { font-weight: 700; }
+    .cvmd em     { font-style: italic; }
+    .cvmd table  { border-collapse: collapse; margin-bottom: 0.55em; width: 100%; }
+    .cvmd th, .cvmd td { border: 1px solid rgba(255,255,255,0.18); padding: 0.25em 0.55em; }
+    .cvmd th { background: rgba(255,255,255,0.08); font-weight: 600; }
+
+    /* code block wrapper */
+    .cvmd-code-block { position: relative; margin: 0 0 0.6em; border-radius: 8px; overflow: hidden; background: #1c2128; }
+    .cvmd-code-lang {
+      display: inline-block; position: absolute; top: 0; right: 0;
+      padding: 0.18em 0.7em; font-size: 0.72em; font-family: monospace;
+      background: rgba(255,255,255,0.07); color: rgba(148,163,184,0.7);
+      border-bottom-left-radius: 6px; letter-spacing: 0.05em; text-transform: lowercase;
+      pointer-events: none;
+    }
+    .cvmd-code-block pre { margin: 0; padding: 0.9em 1em 0.8em; overflow-x: auto; background: transparent !important; border-radius: 0; }
+    .cvmd-code-block pre code.hljs { padding: 0; font-size: 0.88em; font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Menlo, monospace; line-height: 1.55; background: transparent !important; }
+    .cvmd pre code { font-family: 'Fira Code', 'Cascadia Code', monospace; }
+  `
+  document.head.appendChild(s)
+}
 
 // 8 bounding-box handle descriptors
 const HANDLES = [
@@ -92,6 +152,9 @@ export default function CanvasMesh({ id, content, width, height }) {
   // paste feedback
   const [pasteMsg, setPasteMsg]             = useState('')
 
+  // text color picker
+  const [showColorPicker, setShowColorPicker] = useState(null) // null | 'text' | 'bg'
+
   // ── refs ──────────────────────────────────────────────────────────────────
   const containerRef    = useRef(null)
   const saveTimerRef    = useRef(null)
@@ -102,9 +165,10 @@ export default function CanvasMesh({ id, content, width, height }) {
   const selectedIdsRef  = useRef(selectedIds)
   const isEditModeRef   = useRef(false)
   const scheduleSaveRef = useRef(null)
-  const pasteActionRef   = useRef(null)
-  const pasteInternalRef = useRef(null)
-  const ctrlRef          = useRef(false)
+  const pasteActionRef      = useRef(null)
+  const pasteInternalRef    = useRef(null)
+  const ctrlRef             = useRef(false)
+  const showColorPickerRef  = useRef(null)
 
   // Ctrl tuşu durumunu ayrıca takip et (bazı browser/OS'larda e.ctrlKey wheel'de güvenilmez)
   useEffect(() => {
@@ -124,6 +188,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   useEffect(() => { itemsRef.current = items }, [items])
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
   useEffect(() => { isEditModeRef.current = isEditMode }, [isEditMode])
+  useEffect(() => { showColorPickerRef.current = showColorPicker }, [showColorPicker])
   useEffect(() => {
     panRef.current = pan
     if (isEditMode) scheduleSaveRef.current?.(itemsRef.current, bgRef.current)
@@ -186,7 +251,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   useEffect(() => {
     if (!isEditMode) return
     const onKey = e => {
-      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); exitEdit(); return }
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); if (showColorPickerRef.current) { setShowColorPicker(null); return } exitEdit(); return }
       const active = document.activeElement
       if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') return
       const ctrl = e.ctrlKey || e.metaKey
@@ -395,6 +460,7 @@ export default function CanvasMesh({ id, content, width, height }) {
 
     // clear selection + close panels + pan
     setSelectedIds(new Set())
+    if (showColorPicker) { setShowColorPicker(null); return }
     if (editingItemId)  { setEditingItemId(null); return }
     if (showUrlInput)   { setShowUrlInput(false); setUrlValue(''); return }
     if (showRoomSearch) { setShowRoomSearch(false); setRoomSearchText(''); return }
@@ -530,10 +596,52 @@ export default function CanvasMesh({ id, content, width, height }) {
   }
 
   // ── Add items ─────────────────────────────────────────────────────────────
+  // ── Text color / bg color ─────────────────────────────────────────────────
+  const TEXT_COLORS = [
+    '#ffffff', '#e2e8f0', '#94a3b8', '#475569',
+    '#fbbf24', '#f97316', '#ef4444', '#f472b6',
+    '#c084fc', '#818cf8', '#60a5fa', '#22d3ee',
+    '#4ade80', '#a3e635', '#34d399', '#000000',
+  ]
+  const BG_COLORS = [
+    'transparent',
+    '#0f172a', '#1e293b', '#1e1b4b', '#14532d',
+    '#450a0a', '#422006', '#1c1917', '#0f0f23',
+    '#312e81', '#1d4ed8', '#0f766e', '#166534',
+    '#fbbf24', '#ef4444', '#ffffff',
+  ]
+
+  const applyTextColor = (color) => {
+    setItems(prev => {
+      const next = prev.map(it => selectedIds.has(it.id) && it.type === 'text' ? { ...it, color } : it)
+      scheduleSave(next, bgRef.current)
+      return next
+    })
+    setShowColorPicker(null)
+  }
+
+  const applyBgColor = (bgColor) => {
+    setItems(prev => {
+      const next = prev.map(it => selectedIds.has(it.id) && it.type === 'text' ? { ...it, bgColor } : it)
+      scheduleSave(next, bgRef.current)
+      return next
+    })
+    setShowColorPicker(null)
+  }
+
+  const toggleMarkdown = () => {
+    const allMd = selTextItems.every(it => it.markdown)
+    setItems(prev => {
+      const next = prev.map(it => selectedIds.has(it.id) && it.type === 'text' ? { ...it, markdown: !allMd } : it)
+      scheduleSave(next, bgRef.current)
+      return next
+    })
+  }
+
   const addText = (e) => {
     stop(e)
     const pt = centerSurface()
-    const ni = { id: crypto.randomUUID(), type: 'text', x: pt.x, y: pt.y, w: 500, h: 220, content: '', fontSize: 30 }
+    const ni = { id: crypto.randomUUID(), type: 'text', x: pt.x, y: pt.y, w: 500, h: 0, content: '', fontSize: 30 }
     setItems(prev => { const next = [...prev, ni]; scheduleSave(next, bgRef.current); return next })
     setSelectedIds(new Set([ni.id])); setEditingItemId(ni.id); setDrawMode(null)
   }
@@ -605,9 +713,16 @@ export default function CanvasMesh({ id, content, width, height }) {
   const surfTx = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
 
   // bounding box for current selection (box items only)
-  const bounds    = getBounds(selectedIds, items)
-  const hasBoxSel = selectedIds.size > 0 && bounds !== null
-  const BPAD      = 10   // padding around bounding box in canvas-px
+  const bounds       = getBounds(selectedIds, items)
+  const hasBoxSel    = selectedIds.size > 0 && bounds !== null
+  const BPAD         = 10   // padding around bounding box in canvas-px
+
+  // text-specific selection helpers
+  const selTextItems    = items.filter(it => selectedIds.has(it.id) && it.type === 'text')
+  const hasTextSel      = selTextItems.length > 0
+  const commonTextColor = selTextItems.length > 0 && selTextItems.every(it => it.color === selTextItems[0].color) ? (selTextItems[0].color || '#e2e8f0') : null
+  const commonBgColor   = selTextItems.length > 0 && selTextItems.every(it => it.bgColor === selTextItems[0].bgColor) ? (selTextItems[0].bgColor ?? null) : null
+  const markdownActive  = selTextItems.length > 0 && selTextItems.every(it => it.markdown)
 
   // ── Arrow SVG layer ───────────────────────────────────────────────────────
   const ArrowLayer = ({ editMode }) => (
@@ -689,6 +804,7 @@ export default function CanvasMesh({ id, content, width, height }) {
         if (!el) return
         el.style.height = 'auto'
         el.style.height = el.scrollHeight + 'px'
+        if (item.h === 0 && el.scrollHeight > 0) setItems(prev => prev.map(it => it.id === item.id && it.h === 0 ? { ...it, h: el.scrollHeight } : it))
       }
       return (
         <textarea autoFocus defaultValue={item.content}
@@ -711,7 +827,13 @@ export default function CanvasMesh({ id, content, width, height }) {
         />
       )
     }
-    return <div style={{ width: '100%', height: 'auto', minHeight: 60, background: 'rgba(0,0,0,0.38)', borderRadius: 4, color: '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
+    if (item.markdown && item.content) {
+      return (
+        <div className="cvmd" style={{ width: '100%', height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'rgba(0,0,0,0.38)', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none', wordBreak: 'break-word' }}
+          dangerouslySetInnerHTML={{ __html: parseMd(item.content) }} />
+      )
+    }
+    return <div style={{ width: '100%', height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'rgba(0,0,0,0.38)', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
   }
 
   // ── Room search ───────────────────────────────────────────────────────────
@@ -741,7 +863,10 @@ export default function CanvasMesh({ id, content, width, height }) {
                     <YoutubeCard item={item} clickable />
                   </div>
                 ) : item.type === 'text' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto', minHeight: item.h || 60, color: '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
+                  item.markdown && item.content
+                    ? <div key={item.id} className="cvmd" style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'transparent', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none', wordBreak: 'break-word' }}
+                        dangerouslySetInnerHTML={{ __html: parseMd(item.content) }} />
+                    : <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'transparent', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
                 ) : item.type === 'room' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}
                     onMouseDown={stop} onClick={(e) => { stop(e); navigateToRoom(item) }}>
@@ -792,6 +917,39 @@ export default function CanvasMesh({ id, content, width, height }) {
                 <>
                   <div style={div} />
                   <span style={{ fontSize: 22, color: 'rgba(148,163,184,0.6)', flexShrink: 0 }}>{selectedIds.size} seçili</span>
+
+                  {/* text color & bg color buttons — only when text items are selected */}
+                  {hasTextSel && (
+                    <>
+                      {/* text color button */}
+                      <button onMouseDown={stop} onClick={(e) => { stop(e); setShowColorPicker(v => v === 'text' ? null : 'text') }}
+                        style={{ ...tbBtn, position: 'relative', padding: '0 14px', gap: 0, background: showColorPicker === 'text' ? 'rgba(96,165,250,0.18)' : tbBtn.background, borderColor: showColorPicker === 'text' ? 'rgba(96,165,250,0.5)' : tbBtn.borderColor }}>
+                        <span style={{ fontSize: 26, fontWeight: 800, color: commonTextColor || '#e2e8f0', lineHeight: 1, display: 'block', paddingBottom: 5 }}>A</span>
+                        <span style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', width: 18, height: 3, borderRadius: 2, background: commonTextColor || '#e2e8f0' }} />
+                      </button>
+                      {/* bg color button */}
+                      <button onMouseDown={stop} onClick={(e) => { stop(e); setShowColorPicker(v => v === 'bg' ? null : 'bg') }}
+                        style={{ ...tbBtn, padding: '0 12px', gap: 6, background: showColorPicker === 'bg' ? 'rgba(96,165,250,0.18)' : tbBtn.background, borderColor: showColorPicker === 'bg' ? 'rgba(96,165,250,0.5)' : tbBtn.borderColor }}>
+                        <span style={{ width: 22, height: 22, borderRadius: 4, flexShrink: 0, display: 'inline-block',
+                          background: (commonBgColor && commonBgColor !== 'transparent') ? commonBgColor : 'repeating-conic-gradient(#555 0% 25%, #333 0% 50%) 0 0 / 10px 10px',
+                          border: '1.5px solid rgba(255,255,255,0.25)',
+                          boxSizing: 'border-box',
+                        }} />
+                        <span style={{ fontSize: 20, color: 'rgba(148,163,184,0.7)' }}>↓</span>
+                      </button>
+                      {/* markdown toggle button */}
+                      <button onMouseDown={stop} onClick={(e) => { stop(e); toggleMarkdown() }}
+                        title={markdownActive ? 'Markdown kapat' : 'Markdown olarak göster'}
+                        style={{ ...tbBtn, padding: '0 14px', gap: 0,
+                          background: markdownActive ? 'rgba(96,165,250,0.18)' : tbBtn.background,
+                          borderColor: markdownActive ? 'rgba(96,165,250,0.5)' : tbBtn.borderColor,
+                          color: markdownActive ? '#93c5fd' : 'rgba(148,163,184,0.55)',
+                        }}>
+                        <span style={{ fontSize: 22, fontWeight: 700, fontFamily: 'monospace', letterSpacing: -1 }}>M↓</span>
+                      </button>
+                    </>
+                  )}
+
                   <button onMouseDown={stop} onClick={duplicateSelected}
                     style={{ ...tbBtn, background: 'rgba(96,165,250,0.12)', color: '#93c5fd', borderColor: 'rgba(96,165,250,0.35)' }}>
                     ⧉ Kopyala
@@ -863,6 +1021,58 @@ export default function CanvasMesh({ id, content, width, height }) {
                   {!roomSearchText && rooms.length === 0 && (
                     <div style={{ padding: '20px', color: '#64748b', fontSize: 24, textAlign: 'center' }}>Henüz oda yok</div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* ── Color picker panel ────────────────────────────────────── */}
+            {showColorPicker && hasTextSel && !drawMode && (
+              <div onMouseDown={stop}
+                style={{ position: 'absolute', top: tbH + 10, left: 20, zIndex: 35, background: 'rgba(8,8,22,0.97)', border: '1px solid rgba(96,165,250,0.25)', borderRadius: 14, padding: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)', minWidth: 280 }}>
+                {/* header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <span style={{ fontSize: 20, color: 'rgba(148,163,184,0.7)', fontWeight: 600, letterSpacing: 1 }}>
+                    {showColorPicker === 'text' ? 'YAZI RENGİ' : 'ARKA PLAN'}
+                  </span>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onMouseDown={stop} onClick={() => setShowColorPicker('text')}
+                      style={{ padding: '4px 12px', borderRadius: 6, border: `1px solid ${showColorPicker === 'text' ? 'rgba(96,165,250,0.6)' : 'rgba(255,255,255,0.1)'}`, background: showColorPicker === 'text' ? 'rgba(96,165,250,0.18)' : 'transparent', color: showColorPicker === 'text' ? '#93c5fd' : 'rgba(148,163,184,0.5)', fontSize: 20, cursor: 'pointer', fontWeight: 700 }}>A</button>
+                    <button onMouseDown={stop} onClick={() => setShowColorPicker('bg')}
+                      style={{ padding: '4px 10px', borderRadius: 6, border: `1px solid ${showColorPicker === 'bg' ? 'rgba(96,165,250,0.6)' : 'rgba(255,255,255,0.1)'}`, background: showColorPicker === 'bg' ? 'rgba(96,165,250,0.18)' : 'transparent', color: showColorPicker === 'bg' ? '#93c5fd' : 'rgba(148,163,184,0.5)', fontSize: 20, cursor: 'pointer' }}>▭</button>
+                  </div>
+                </div>
+                {/* color grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 6 }}>
+                  {(showColorPicker === 'text' ? TEXT_COLORS : BG_COLORS).map((color, i) => {
+                    const isActive = showColorPicker === 'text' ? color === commonTextColor : color === commonBgColor
+                    const isTransparent = color === 'transparent'
+                    return (
+                      <div key={i} onMouseDown={stop}
+                        onClick={() => showColorPicker === 'text' ? applyTextColor(color) : applyBgColor(color)}
+                        title={color}
+                        style={{
+                          width: 28, height: 28, borderRadius: 5, cursor: 'pointer', position: 'relative', boxSizing: 'border-box',
+                          background: isTransparent ? 'repeating-conic-gradient(#555 0% 25%, #2a2a2a 0% 50%) 0 0 / 10px 10px' : color,
+                          border: isActive ? '2px solid #60a5fa' : '1.5px solid rgba(255,255,255,0.12)',
+                          outline: isActive ? '1px solid rgba(96,165,250,0.4)' : 'none',
+                          outlineOffset: 2,
+                          transform: isActive ? 'scale(1.18)' : 'scale(1)',
+                          transition: 'transform 0.1s',
+                          boxShadow: isActive ? '0 0 0 2px rgba(96,165,250,0.3)' : 'none',
+                        }}
+                      >
+                        {isTransparent && (
+                          <svg viewBox="0 0 28 28" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                            <line x1="2" y1="26" x2="26" y2="2" stroke="#f87171" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+                {/* tip */}
+                <div style={{ marginTop: 10, fontSize: 18, color: 'rgba(100,116,139,0.6)', textAlign: 'center' }}>
+                  {showColorPicker === 'text' ? 'Yazı rengini seç' : 'Arka plan rengini seç · şeffaf için ⊘'}
                 </div>
               </div>
             )}
