@@ -167,6 +167,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   const scheduleSaveRef = useRef(null)
   const pasteActionRef      = useRef(null)
   const pasteInternalRef    = useRef(null)
+  const duplicateInternalRef = useRef(null)
   const ctrlRef             = useRef(false)
   const showColorPickerRef  = useRef(null)
 
@@ -273,6 +274,11 @@ export default function CanvasMesh({ id, content, width, height }) {
       if (ctrl && e.key === 'v' && canvasMeshClipboard?.items?.length) {
         e.preventDefault(); e.stopPropagation()
         pasteInternalRef.current?.()
+        return
+      }
+      if (ctrl && e.key === 'd') {
+        e.preventDefault(); e.stopPropagation()
+        duplicateInternalRef.current?.()
         return
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdsRef.current.size > 0) {
@@ -690,6 +696,8 @@ export default function CanvasMesh({ id, content, width, height }) {
     setSelectedIds(new Set(copies.map(c => c.id)))
   }
 
+  duplicateInternalRef.current = () => duplicateSelected()
+
   const deleteSelected = (e) => {
     if (e) { stop(e) }
     const toDelete = [...selectedIds]
@@ -950,10 +958,6 @@ export default function CanvasMesh({ id, content, width, height }) {
                     </>
                   )}
 
-                  <button onMouseDown={stop} onClick={duplicateSelected}
-                    style={{ ...tbBtn, background: 'rgba(96,165,250,0.12)', color: '#93c5fd', borderColor: 'rgba(96,165,250,0.35)' }}>
-                    ⧉ Kopyala
-                  </button>
                   <button onMouseDown={stop} onClick={deleteSelected}
                     style={{ ...tbBtn, background: 'rgba(239,68,68,0.15)', color: '#f87171', borderColor: 'rgba(239,68,68,0.35)' }}>
                     🗑 Sil
@@ -985,7 +989,7 @@ export default function CanvasMesh({ id, content, width, height }) {
               )}
 
               <span style={{ marginLeft: 'auto', fontSize: 20, color: 'rgba(148,163,184,0.3)', flexShrink: 0 }}>
-                {hasBoxSel ? 'Ctrl+C: kopyala · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'} · ESC
+                {hasBoxSel ? 'Ctrl+C: kopyala · Ctrl+D: çoğalt · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'} · ESC
               </span>
             </div>
 
