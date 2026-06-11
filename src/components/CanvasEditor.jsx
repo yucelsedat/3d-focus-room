@@ -24,22 +24,25 @@ export default function CanvasEditor({ mediaId }) {
   const [selectedIds,   setSelectedIds]   = useState(new Set())
   const [clipboardSize, setClipboardSize] = useState(canvasClipboard?.items?.length ?? 0)
 
-  // Pan/zoom — React state yerine ref: sıfır React re-render pan/zoom sırasında
-  const transformRef = useRef({ x: 0, y: 0, scale: 1 })
-  const isPanningRef = useRef(false)
-  const panStartRef  = useRef({ x: 0, y: 0 })
-  const rafRef       = useRef(null)
+  // ── Transform — React state kullanılmıyor, sıfır re-render ──────────────────
+  const transformRef  = useRef({ x: 0, y: 0, scale: 1 })
+  const isPanningRef  = useRef(false)
+  const panStartRef   = useRef({ x: 0, y: 0 })
+  const rafRef        = useRef(null)
+  // dragState'i native handler içinde okuyabilmek için ref'e yansıt
+  const dragStateRef  = useRef(null)
 
   // DOM refs
-  const surfaceRef    = useRef(null)
-  const containerRef  = useRef(null)
-  const fileInputRef  = useRef(null)
-  const zoomLabelRef  = useRef(null)
+  const surfaceRef   = useRef(null)
+  const containerRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const zoomLabelRef = useRef(null)
 
-  // Stale closure'ları önlemek için
+  // Stale closure önleyiciler
   const saveTimerRef       = useRef(null)
   const doSaveRef          = useRef(null)
   const closeEditorRef     = useRef(null)
+  const scheduleSaveRef    = useRef(null)  // native handler'dan erişim için
   const itemsRef           = useRef(items)
   const bgRef              = useRef(bg)
   const selectedIdsRef     = useRef(selectedIds)
@@ -50,8 +53,10 @@ export default function CanvasEditor({ mediaId }) {
   useEffect(() => { bgRef.current = bg },                   [bg])
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
   useEffect(() => { editingItemIdRef.current = editingItemId }, [editingItemId])
+  // dragStateRef her render'da sync edilir (useEffect'e gerek yok — render'da yazılıyor)
+  dragStateRef.current = dragState
 
-  // CSS transform'u doğrudan DOM'a yaz — React render'ı atla
+  // ── Transform → DOM (React bypass) ─────────────────────────────────────────
   const applyTransform = useCallback(() => {
     rafRef.current = null
     if (!surfaceRef.current) return
@@ -68,45 +73,98 @@ export default function CanvasEditor({ mediaId }) {
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
 
-  // Wheel: scroll=pan, Ctrl+scroll/pinch=zoom (trackpad pinch de ctrlKey:true gönderir)
+  // ── Native Pointer Events — pan (React event sistemi tamamen atlanıyor) ─────
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
+    const el = containerRef.current
+    if (!el) return
+
+    const onPointerDown = (e) => {
+      if (e.button !== 0) return
+      // Items üzerine tıklanınca pan başlatma (target container'ın kendisi olmalı)
+      if (e.target !== el) return
+      if (editingItemIdRef.current) { setEditingItemId(null); return }
+
+      // Seçimi temizle — zaten boşsa re-render tetikleme
+      if (selectedIdsRef.current.size > 0) setSelectedIds(new Set())
+
+      isPanningRef.current = true
+      panStartRef.current = {
+        x: e.clientX - transformRef.current.x,
+        y: e.clientY - transformRef.current.y,
+      }
+      // Pointer capture: container dışına çıksa da event gelmeye devam eder
+      el.setPointerCapture(e.pointerId)
+      el.style.cursor = 'grabbing'
+      // Item hover eventlerini sustur (setHoveredItemId → re-render döngüsünü kes)
+      if (surfaceRef.current) surfaceRef.current.style.pointerEvents = 'none'
+    }
+
+    const onPointerMove = (e) => {
+      if (!isPanningRef.current) return
+      transformRef.current = {
+        ...transformRef.current,
+        x: e.clientX - panStartRef.current.x,
+        y: e.clientY - panStartRef.current.y,
+      }
+      scheduleTransform()
+    }
+
+    const onPointerUp = () => {
+      if (!isPanningRef.current) return
+      isPanningRef.current = false
+      el.style.cursor = 'default'
+      if (surfaceRef.current) surfaceRef.current.style.pointerEvents = ''
+    }
+
+    el.addEventListener('pointerdown', onPointerDown)
+    el.addEventListener('pointermove', onPointerMove)
+    el.addEventListener('pointerup',   onPointerUp)
+    el.addEventListener('pointercancel', onPointerUp)
+
+    return () => {
+      el.removeEventListener('pointerdown', onPointerDown)
+      el.removeEventListener('pointermove', onPointerMove)
+      el.removeEventListener('pointerup',   onPointerUp)
+      el.removeEventListener('pointercancel', onPointerUp)
+    }
+  }, [scheduleTransform])  // scheduleTransform stable (useCallback([stable]))
+
+  // ── Native Wheel — zoom (Ctrl+scroll) ve scroll pan ────────────────────────
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
     const onWheel = (e) => {
       e.preventDefault()
       const { x, y, scale } = transformRef.current
 
       if (e.ctrlKey) {
-        // Zoom — imleç altındaki dünya noktasını sabit tut
-        const rect = container.getBoundingClientRect()
-        const mx = e.clientX - rect.left
-        const my = e.clientY - rect.top
-        const delta = e.deltaY * (e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 400 : 1)
+        const rect   = el.getBoundingClientRect()
+        const mx     = e.clientX - rect.left
+        const my     = e.clientY - rect.top
+        const delta  = e.deltaY * (e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 400 : 1)
         const factor = Math.exp(-delta * 0.001)
         const newScale = Math.min(Math.max(scale * factor, 0.05), 8)
         const wx = (mx - x) / scale
         const wy = (my - y) / scale
         transformRef.current = { x: mx - wx * newScale, y: my - wy * newScale, scale: newScale }
       } else {
-        // Pan — delta normalizasyonu (mouse wheel vs trackpad)
         const dx = e.deltaMode === 0 ? e.deltaX : e.deltaX * 20
         const dy = e.deltaMode === 0 ? e.deltaY : e.deltaY * 20
         transformRef.current = { x: x - dx, y: y - dy, scale }
       }
       scheduleTransform()
     }
-    container.addEventListener('wheel', onWheel, { passive: false })
-    return () => container.removeEventListener('wheel', onWheel)
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
   }, [scheduleTransform])
 
-  // Klavye
+  // ── Klavye ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (document.pointerLockElement) document.exitPointerLock()
     const block = e => {
       e.stopPropagation()
       const ctrl   = e.ctrlKey || e.metaKey
       const inText = editingItemIdRef.current !== null
-
       if (e.key === 'Escape') {
         e.preventDefault()
         if (editingItemIdRef.current) { setEditingItemId(null); return }
@@ -127,7 +185,7 @@ export default function CanvasEditor({ mediaId }) {
     return () => { document.removeEventListener('keydown', block, true); clearTimeout(saveTimerRef.current) }
   }, [])
 
-  // Save
+  // ── Save ───────────────────────────────────────────────────────────────────
   const doSave = useCallback(async (currentItems, currentBg) => {
     setSaving(true)
     try {
@@ -149,59 +207,33 @@ export default function CanvasEditor({ mediaId }) {
     saveTimerRef.current = setTimeout(() => doSave(newItems, newBg), 500)
   }, [doSave])
 
+  scheduleSaveRef.current = scheduleSave
+
   const handleClose = () => {
     clearTimeout(saveTimerRef.current)
     doSave(itemsRef.current, bgRef.current)
     closeCanvasEditor()
   }
 
-  // Pan — ref tabanlı, sıfır React re-render per pixel
-  const handleViewportMouseDown = (e) => {
-    if (e.target !== e.currentTarget) return
-    if (editingItemId) { setEditingItemId(null); return }
-    setSelectedIds(new Set())
-    isPanningRef.current = true
-    panStartRef.current = {
-      x: e.clientX - transformRef.current.x,
-      y: e.clientY - transformRef.current.y,
-    }
-    // Cursor + pointer-events direkt DOM — React re-render tetiklememek için
-    if (containerRef.current) containerRef.current.style.cursor = 'grabbing'
-    if (surfaceRef.current)   surfaceRef.current.style.pointerEvents = 'none'
-  }
-
+  // ── Item drag — React synthetic (sadece item hareketi için, pan değil) ──────
   const handleMouseMove = (e) => {
-    if (isPanningRef.current) {
-      transformRef.current = {
-        ...transformRef.current,
-        x: e.clientX - panStartRef.current.x,
-        y: e.clientY - panStartRef.current.y,
-      }
-      scheduleTransform()
-      return
-    }
-    if (dragState) {
-      const scale = transformRef.current.scale
-      const dx = (e.clientX - dragState.startMouse.x) / scale
-      const dy = (e.clientY - dragState.startMouse.y) / scale
-      setItems(prev => prev.map(it => {
-        const orig = dragState.originsMap[it.id]
-        return orig ? { ...it, x: orig.x + dx, y: orig.y + dy } : it
-      }))
-    }
+    if (isPanningRef.current || !dragState) return
+    const scale = transformRef.current.scale
+    const dx = (e.clientX - dragState.startMouse.x) / scale
+    const dy = (e.clientY - dragState.startMouse.y) / scale
+    setItems(prev => prev.map(it => {
+      const orig = dragState.originsMap[it.id]
+      return orig ? { ...it, x: orig.x + dx, y: orig.y + dy } : it
+    }))
   }
 
   const handleMouseUp = () => {
-    if (isPanningRef.current) {
-      isPanningRef.current = false
-      if (surfaceRef.current) surfaceRef.current.style.pointerEvents = ''
-    }
     if (containerRef.current) containerRef.current.style.cursor = 'default'
     if (dragState) scheduleSave(itemsRef.current, bgRef.current)
     setDragState(null)
   }
 
-  // Item etkileşimleri
+  // ── Item etkileşimleri ─────────────────────────────────────────────────────
   const handleItemMouseDown = (e, item) => {
     e.stopPropagation()
     if (editingItemId === item.id) return
@@ -234,33 +266,19 @@ export default function CanvasEditor({ mediaId }) {
     if (item.type === 'text') { setEditingItemId(item.id); setSelectedIds(new Set([item.id])) }
   }
 
-  // İmlecin altındaki canvas dünya koordinatını döner
-  const screenToWorld = (sx, sy) => {
-    const { x, y, scale } = transformRef.current
-    const container = containerRef.current
-    const rect = container?.getBoundingClientRect() ?? { left: 0, top: 0 }
-    return {
-      x: (sx - rect.left - x) / scale,
-      y: (sy - rect.top  - y) / scale,
-    }
-  }
-
-  // Viewport merkezine yeni item ekle
+  // ── Viewport koordinat yardımcıları ────────────────────────────────────────
   const viewportCenter = () => {
     const { x, y, scale } = transformRef.current
-    const container = containerRef.current
-    const cx = container ? container.clientWidth  / 2 : 400
-    const cy = container ? container.clientHeight / 2 : 300
+    const el = containerRef.current
+    const cx = el ? el.clientWidth  / 2 : 400
+    const cy = el ? el.clientHeight / 2 : 300
     return { x: (cx - x) / scale, y: (cy - y) / scale }
   }
 
-  // CRUD
+  // ── CRUD ───────────────────────────────────────────────────────────────────
   const addTextItem = () => {
     const { x: wx, y: wy } = viewportCenter()
-    const newItem = {
-      id: crypto.randomUUID(), type: 'text',
-      x: wx, y: wy, w: 300, h: 150, content: 'Yeni metin...',
-    }
+    const newItem = { id: crypto.randomUUID(), type: 'text', x: wx, y: wy, w: 300, h: 150, content: 'Yeni metin...' }
     setItems(prev => { const next = [...prev, newItem]; scheduleSave(next, bgRef.current); return next })
     setEditingItemId(newItem.id)
     setSelectedIds(new Set([newItem.id]))
@@ -275,10 +293,7 @@ export default function CanvasEditor({ mediaId }) {
       const d = await r.json()
       if (!r.ok) { alert(d.error); return }
       const { x: wx, y: wy } = viewportCenter()
-      const newItem = {
-        id: crypto.randomUUID(), type: 'image',
-        x: wx, y: wy, w: 400, h: 300, url: d.url,
-      }
+      const newItem = { id: crypto.randomUUID(), type: 'image', x: wx, y: wy, w: 400, h: 300, url: d.url }
       setItems(prev => { const next = [...prev, newItem]; scheduleSave(next, bgRef.current); return next })
       setSelectedIds(new Set([newItem.id]))
     } catch (err) { alert('Resim yüklenemedi: ' + err.message) }
@@ -294,7 +309,7 @@ export default function CanvasEditor({ mediaId }) {
     const newBg = e.target.value; setBg(newBg); scheduleSave(itemsRef.current, newBg)
   }
 
-  // Copy / Paste / Select-all / Delete / Duplicate
+  // ── Copy / Paste / Select-all / Delete / Duplicate ─────────────────────────
   const copySelected = () => {
     if (selectedIdsRef.current.size === 0) return
     const copied = itemsRef.current.filter(it => selectedIdsRef.current.has(it.id))
@@ -304,29 +319,17 @@ export default function CanvasEditor({ mediaId }) {
 
   const pasteItems = async () => {
     if (!canvasClipboard?.items?.length) return
-    const offset   = PASTE_STEP + canvasClipboard.pasteCount * PASTE_STEP
-    let srcItems   = canvasClipboard.items
-
+    const offset = PASTE_STEP + canvasClipboard.pasteCount * PASTE_STEP
+    let srcItems = canvasClipboard.items
     if (canvasClipboard.sourceMediaId !== id) {
-      const imageUrls = srcItems
-        .filter(it => it.type === 'image' && it.url?.startsWith('/uploads/'))
-        .map(it => it.url)
+      const imageUrls = srcItems.filter(it => it.type === 'image' && it.url?.startsWith('/uploads/')).map(it => it.url)
       if (imageUrls.length > 0) {
         try {
-          const r = await fetch('/api/canvas/copy-images', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: imageUrls }),
-          })
-          if (r.ok) {
-            const { mapping } = await r.json()
-            srcItems = srcItems.map(it =>
-              it.type === 'image' && mapping[it.url] ? { ...it, url: mapping[it.url] } : it
-            )
-          }
+          const r = await fetch('/api/canvas/copy-images', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urls: imageUrls }) })
+          if (r.ok) { const { mapping } = await r.json(); srcItems = srcItems.map(it => it.type === 'image' && mapping[it.url] ? { ...it, url: mapping[it.url] } : it) }
         } catch {}
       }
     }
-
     const pasted = srcItems.map(it => ({ ...it, id: crypto.randomUUID(), x: it.x + offset, y: it.y + offset }))
     setItems(prev => { const next = [...prev, ...pasted]; scheduleSave(next, bgRef.current); return next })
     setSelectedIds(new Set(pasted.map(it => it.id)))
@@ -337,11 +340,7 @@ export default function CanvasEditor({ mediaId }) {
 
   const deleteSelected = () => {
     if (selectedIdsRef.current.size === 0) return
-    setItems(prev => {
-      const next = prev.filter(it => !selectedIdsRef.current.has(it.id))
-      scheduleSave(next, bgRef.current)
-      return next
-    })
+    setItems(prev => { const next = prev.filter(it => !selectedIdsRef.current.has(it.id)); scheduleSave(next, bgRef.current); return next })
     setSelectedIds(new Set())
   }
 
@@ -355,14 +354,13 @@ export default function CanvasEditor({ mediaId }) {
 
   actionRef.current = { copy: copySelected, paste: pasteItems, selectAll, deleteSelected, duplicate }
 
-  // Render
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', flexDirection: 'column', background: '#0a0a0f', userSelect: 'none' }}>
 
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.1)', flexShrink: 0 }}>
         <span style={{ color: '#888', fontSize: 13, marginRight: 4 }}>🎨 Canvas</span>
-
         <button onClick={addTextItem} style={tbBtn}>✏️ Metin Ekle</button>
         <button onClick={() => fileInputRef.current?.click()} style={tbBtn}>🖼️ Resim Ekle</button>
         <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImageFileSelect} />
@@ -370,59 +368,36 @@ export default function CanvasEditor({ mediaId }) {
         {selectedIds.size > 0 && (
           <>
             <div style={tbDivider} />
-            <button onClick={copySelected} style={tbBtn} title="Ctrl+C">
-              ⧉ Kopyala {selectedIds.size > 1 ? `(${selectedIds.size})` : ''}
-            </button>
-            <button onClick={deleteSelected} style={{ ...tbBtn, color: '#f87171' }} title="Delete">
-              🗑 Sil
-            </button>
+            <button onClick={copySelected} style={tbBtn} title="Ctrl+C">⧉ Kopyala {selectedIds.size > 1 ? `(${selectedIds.size})` : ''}</button>
+            <button onClick={deleteSelected} style={{ ...tbBtn, color: '#f87171' }} title="Delete">🗑 Sil</button>
           </>
         )}
-
         {clipboardSize > 0 && (
           <>
             <div style={tbDivider} />
-            <button onClick={pasteItems} style={{ ...tbBtn, borderColor: 'rgba(96,165,250,0.4)', color: '#93c5fd' }} title="Ctrl+V">
-              ⌘ Yapıştır {clipboardSize > 1 ? `(${clipboardSize})` : ''}
-            </button>
+            <button onClick={pasteItems} style={{ ...tbBtn, borderColor: 'rgba(96,165,250,0.4)', color: '#93c5fd' }} title="Ctrl+V">⌘ Yapıştır {clipboardSize > 1 ? `(${clipboardSize})` : ''}</button>
           </>
         )}
-
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#aaa', fontSize: 12, marginLeft: 8 }}>
           Arka plan
-          <input type="color" value={bg} onChange={handleBgChange}
-            style={{ width: 28, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+          <input type="color" value={bg} onChange={handleBgChange} style={{ width: 28, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
         </label>
-
-        {/* Zoom göstergesi — direkt DOM update, React state yok */}
         <div style={tbDivider} />
-        <span ref={zoomLabelRef} style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
-          100%
-        </span>
-
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: saving ? '#60a5fa' : '#4ade80' }}>
-          {saving ? '⟳ Kaydediliyor...' : '✓ Kaydedildi'}
-        </span>
-
-        <span style={{ fontSize: 10, color: '#444', marginLeft: 8 }}>
-          Ctrl+A · C · V · D · Del · Ctrl+Scroll: Zoom
-        </span>
-
-        <button onClick={handleClose} style={{ ...tbBtn, marginLeft: 8, background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>
-          ✕ Kapat
-        </button>
+        <span ref={zoomLabelRef} style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>100%</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: saving ? '#60a5fa' : '#4ade80' }}>{saving ? '⟳ Kaydediliyor...' : '✓ Kaydedildi'}</span>
+        <span style={{ fontSize: 10, color: '#444', marginLeft: 8 }}>Ctrl+A · C · V · D · Del · Ctrl+Scroll: Zoom</span>
+        <button onClick={handleClose} style={{ ...tbBtn, marginLeft: 8, background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>✕ Kapat</button>
       </div>
 
-      {/* Canvas viewport */}
+      {/* Canvas viewport — pan/zoom native pointer events ile yönetiliyor */}
       <div
         ref={containerRef}
         style={{ flex: 1, overflow: 'hidden', position: 'relative' }}
-        onMouseDown={handleViewportMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
-        {/* Canvas surface — transform: ref + RAF, React render'dan bağımsız */}
+        {/* Surface — transform hiçbir zaman JSX style'a yazılmıyor, sadece RAF ile */}
         <div
           ref={surfaceRef}
           style={{
@@ -430,14 +405,12 @@ export default function CanvasEditor({ mediaId }) {
             backgroundColor: bg,
             transformOrigin: '0 0',
             willChange: 'transform',
-            // transform buraya yazılmıyor — React re-render'da RAF değerini ezmemesi için
           }}
         >
           {items.map(item => {
             const isSelected = selectedIds.has(item.id)
             const isHovered  = hoveredItemId === item.id
             const isDragging = dragState?.originsMap?.[item.id] !== undefined
-
             let outline = '1px solid transparent'
             if (isSelected)                   outline = '2px solid #60a5fa'
             else if (isHovered || isDragging) outline = '1px solid rgba(96,165,250,0.5)'
@@ -460,46 +433,25 @@ export default function CanvasEditor({ mediaId }) {
                   <img src={item.url} alt="" draggable={false}
                     style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
                 ) : item.type === 'text' && editingItemId === item.id ? (
-                  <textarea
-                    autoFocus
-                    defaultValue={item.content}
-                    style={{
-                      width: '100%', height: '100%',
-                      background: 'rgba(0,0,0,0.5)', border: '1px solid #60a5fa', borderRadius: 4,
-                      color: '#fff', fontSize: 14, padding: 8, resize: 'none', outline: 'none',
-                      boxSizing: 'border-box', fontFamily: 'inherit',
-                    }}
+                  <textarea autoFocus defaultValue={item.content}
+                    style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.5)', border: '1px solid #60a5fa', borderRadius: 4, color: '#fff', fontSize: 14, padding: 8, resize: 'none', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }}
                     onMouseDown={e => e.stopPropagation()}
                     onBlur={e => {
                       const newContent = e.target.value
-                      setItems(prev => {
-                        const next = prev.map(it => it.id === item.id ? { ...it, content: newContent } : it)
-                        scheduleSave(next, bgRef.current)
-                        return next
-                      })
+                      setItems(prev => { const next = prev.map(it => it.id === item.id ? { ...it, content: newContent } : it); scheduleSave(next, bgRef.current); return next })
                       setEditingItemId(null)
                     }}
                   />
                 ) : (
-                  <div style={{
-                    width: '100%', height: '100%', background: 'rgba(0,0,0,0.35)', borderRadius: 4,
-                    color: '#e2e8f0', fontSize: 14, padding: 8, whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word', overflow: 'hidden', boxSizing: 'border-box', pointerEvents: 'none',
-                  }}>
+                  <div style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.35)', borderRadius: 4, color: '#e2e8f0', fontSize: 14, padding: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'hidden', boxSizing: 'border-box', pointerEvents: 'none' }}>
                     {item.content}
                   </div>
                 )}
-
                 {(isHovered || isSelected) && editingItemId !== item.id && (
                   <button
                     onMouseDown={e => e.stopPropagation()}
                     onClick={e => deleteItem(e, item.id)}
-                    style={{
-                      position: 'absolute', top: -10, right: -10, width: 20, height: 20,
-                      background: '#ef4444', border: 'none', borderRadius: '50%', color: '#fff',
-                      fontSize: 12, lineHeight: '20px', textAlign: 'center', cursor: 'pointer',
-                      padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1,
-                    }}
+                    style={{ position: 'absolute', top: -10, right: -10, width: 20, height: 20, background: '#ef4444', border: 'none', borderRadius: '50%', color: '#fff', fontSize: 12, lineHeight: '20px', textAlign: 'center', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}
                   >×</button>
                 )}
               </div>
@@ -524,6 +476,4 @@ const tbBtn = {
   borderRadius: 6, color: '#e2e8f0', padding: '6px 12px', cursor: 'pointer', fontSize: 12,
 }
 
-const tbDivider = {
-  width: 1, height: 24, background: 'rgba(255,255,255,0.1)', flexShrink: 0,
-}
+const tbDivider = { width: 1, height: 24, background: 'rgba(255,255,255,0.1)', flexShrink: 0 }
