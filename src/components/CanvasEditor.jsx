@@ -1,11 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useStore } from '../store/useStore'
 
-// Modül düzeyinde pano — canvas açıp kapansa da persist eder
-// { items: [...], sourceMediaId: number, pasteCount: number }
 let canvasClipboard = null
-
-const PASTE_STEP = 20 // her yapıştırmada ek offset
+const PASTE_STEP = 20
 
 export default function CanvasEditor({ mediaId }) {
   const updateMedia       = useStore(s => s.updateMedia)
@@ -20,40 +17,97 @@ export default function CanvasEditor({ mediaId }) {
 
   const [items,         setItems]         = useState(initialData.items || [])
   const [bg,            setBg]            = useState(initialData.bg    || '#1a1a2e')
-  const [pan,           setPan]           = useState({ x: 0, y: 0 })
-  const [isPanning,     setIsPanning]     = useState(false)
-  const [panStart,      setPanStart]      = useState({ x: 0, y: 0 })
   const [dragState,     setDragState]     = useState(null)
   const [editingItemId, setEditingItemId] = useState(null)
   const [saving,        setSaving]        = useState(false)
   const [hoveredItemId, setHoveredItemId] = useState(null)
   const [selectedIds,   setSelectedIds]   = useState(new Set())
   const [clipboardSize, setClipboardSize] = useState(canvasClipboard?.items?.length ?? 0)
+  // cursor sadece mousedown/mouseup'ta değişir, per-pixel değil
+  const [cursor,        setCursor]        = useState('default')
 
-  // Refs — stale closure'ları önlemek için
-  const saveTimerRef         = useRef(null)
-  const doSaveRef            = useRef(null)
-  const closeEditorRef       = useRef(null)
-  const containerRef         = useRef(null)
-  const fileInputRef         = useRef(null)
-  const itemsRef             = useRef(items)
-  const bgRef                = useRef(bg)
-  const selectedIdsRef       = useRef(selectedIds)
-  const editingItemIdRef     = useRef(editingItemId)
-  const actionRef            = useRef({})  // copy / paste / deleteSelected
+  // Pan/zoom — React state yerine ref: sıfır React re-render pan/zoom sırasında
+  const transformRef = useRef({ x: 0, y: 0, scale: 1 })
+  const isPanningRef = useRef(false)
+  const panStartRef  = useRef({ x: 0, y: 0 })
+  const rafRef       = useRef(null)
+
+  // DOM refs
+  const surfaceRef    = useRef(null)
+  const containerRef  = useRef(null)
+  const fileInputRef  = useRef(null)
+  const zoomLabelRef  = useRef(null)
+
+  // Stale closure'ları önlemek için
+  const saveTimerRef       = useRef(null)
+  const doSaveRef          = useRef(null)
+  const closeEditorRef     = useRef(null)
+  const itemsRef           = useRef(items)
+  const bgRef              = useRef(bg)
+  const selectedIdsRef     = useRef(selectedIds)
+  const editingItemIdRef   = useRef(editingItemId)
+  const actionRef          = useRef({})
 
   useEffect(() => { itemsRef.current = items },             [items])
   useEffect(() => { bgRef.current = bg },                   [bg])
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
   useEffect(() => { editingItemIdRef.current = editingItemId }, [editingItemId])
 
-  // ── Oyun kontrollerini engelle; ESC → düzenlemeyi kapat veya editörü kapat ──
+  // CSS transform'u doğrudan DOM'a yaz — React render'ı atla
+  const applyTransform = useCallback(() => {
+    rafRef.current = null
+    if (!surfaceRef.current) return
+    const { x, y, scale } = transformRef.current
+    surfaceRef.current.style.transform = `translate(${x}px,${y}px) scale(${scale})`
+    if (zoomLabelRef.current) {
+      zoomLabelRef.current.textContent = `${Math.round(scale * 100)}%`
+    }
+  }, [])
+
+  const scheduleTransform = useCallback(() => {
+    if (!rafRef.current) rafRef.current = requestAnimationFrame(applyTransform)
+  }, [applyTransform])
+
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
+
+  // Wheel: scroll=pan, Ctrl+scroll/pinch=zoom (trackpad pinch de ctrlKey:true gönderir)
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const onWheel = (e) => {
+      e.preventDefault()
+      const { x, y, scale } = transformRef.current
+
+      if (e.ctrlKey) {
+        // Zoom — imleç altındaki dünya noktasını sabit tut
+        const rect = container.getBoundingClientRect()
+        const mx = e.clientX - rect.left
+        const my = e.clientY - rect.top
+        const delta = e.deltaY * (e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 400 : 1)
+        const factor = Math.exp(-delta * 0.001)
+        const newScale = Math.min(Math.max(scale * factor, 0.05), 8)
+        const wx = (mx - x) / scale
+        const wy = (my - y) / scale
+        transformRef.current = { x: mx - wx * newScale, y: my - wy * newScale, scale: newScale }
+      } else {
+        // Pan — delta normalizasyonu (mouse wheel vs trackpad)
+        const dx = e.deltaMode === 0 ? e.deltaX : e.deltaX * 20
+        const dy = e.deltaMode === 0 ? e.deltaY : e.deltaY * 20
+        transformRef.current = { x: x - dx, y: y - dy, scale }
+      }
+      scheduleTransform()
+    }
+    container.addEventListener('wheel', onWheel, { passive: false })
+    return () => container.removeEventListener('wheel', onWheel)
+  }, [scheduleTransform])
+
+  // Klavye
   useEffect(() => {
     if (document.pointerLockElement) document.exitPointerLock()
     const block = e => {
       e.stopPropagation()
-      const ctrl     = e.ctrlKey || e.metaKey
-      const inText   = editingItemIdRef.current !== null
+      const ctrl   = e.ctrlKey || e.metaKey
+      const inText = editingItemIdRef.current !== null
 
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -66,15 +120,16 @@ export default function CanvasEditor({ mediaId }) {
       if (ctrl && e.key === 'a' && !inText) { e.preventDefault(); actionRef.current.selectAll?.(); return }
       if (ctrl && e.key === 'c' && !inText) { e.preventDefault(); actionRef.current.copy?.(); return }
       if (ctrl && e.key === 'v' && !inText) { e.preventDefault(); actionRef.current.paste?.(); return }
+      if (ctrl && e.key === 'd' && !inText) { e.preventDefault(); actionRef.current.duplicate?.(); return }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !inText) {
         e.preventDefault(); actionRef.current.deleteSelected?.(); return
       }
     }
     document.addEventListener('keydown', block, true)
     return () => { document.removeEventListener('keydown', block, true); clearTimeout(saveTimerRef.current) }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
-  // ── Save ──────────────────────────────────────────────────────────────────
+  // Save
   const doSave = useCallback(async (currentItems, currentBg) => {
     setSaving(true)
     try {
@@ -88,7 +143,7 @@ export default function CanvasEditor({ mediaId }) {
     finally { setSaving(false) }
   }, [id, updateMedia])
 
-  doSaveRef.current   = doSave
+  doSaveRef.current      = doSave
   closeEditorRef.current = closeCanvasEditor
 
   const scheduleSave = useCallback((newItems, newBg) => {
@@ -102,23 +157,33 @@ export default function CanvasEditor({ mediaId }) {
     closeCanvasEditor()
   }
 
-  // ── Panning ───────────────────────────────────────────────────────────────
+  // Pan — ref tabanlı, sıfır React re-render per pixel
   const handleViewportMouseDown = (e) => {
     if (e.target !== e.currentTarget) return
     if (editingItemId) { setEditingItemId(null); return }
     setSelectedIds(new Set())
-    setIsPanning(true)
-    setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y })
+    isPanningRef.current = true
+    panStartRef.current = {
+      x: e.clientX - transformRef.current.x,
+      y: e.clientY - transformRef.current.y,
+    }
+    setCursor('grabbing')
   }
 
   const handleMouseMove = (e) => {
-    if (isPanning) {
-      setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y })
+    if (isPanningRef.current) {
+      transformRef.current = {
+        ...transformRef.current,
+        x: e.clientX - panStartRef.current.x,
+        y: e.clientY - panStartRef.current.y,
+      }
+      scheduleTransform()
       return
     }
     if (dragState) {
-      const dx = e.clientX - dragState.startMouse.x
-      const dy = e.clientY - dragState.startMouse.y
+      const scale = transformRef.current.scale
+      const dx = (e.clientX - dragState.startMouse.x) / scale
+      const dy = (e.clientY - dragState.startMouse.y) / scale
       setItems(prev => prev.map(it => {
         const orig = dragState.originsMap[it.id]
         return orig ? { ...it, x: orig.x + dx, y: orig.y + dy } : it
@@ -127,20 +192,21 @@ export default function CanvasEditor({ mediaId }) {
   }
 
   const handleMouseUp = () => {
+    if (isPanningRef.current) {
+      isPanningRef.current = false
+    }
     if (dragState) scheduleSave(itemsRef.current, bgRef.current)
-    setIsPanning(false)
     setDragState(null)
+    setCursor('default')
   }
 
-  // ── Item interactions ─────────────────────────────────────────────────────
+  // Item etkileşimleri
   const handleItemMouseDown = (e, item) => {
     e.stopPropagation()
     if (editingItemId === item.id) return
 
     const ctrl = e.ctrlKey || e.metaKey
-
     if (ctrl) {
-      // Ctrl+click → seçimi değiştir, drag yok
       setSelectedIds(prev => {
         const next = new Set(prev)
         next.has(item.id) ? next.delete(item.id) : next.add(item.id)
@@ -149,7 +215,6 @@ export default function CanvasEditor({ mediaId }) {
       return
     }
 
-    // Normal click: seçilmemişse sadece bunu seç; seçilmişse mevcut seçimi koru (multi-drag için)
     const isSelected = selectedIdsRef.current.has(item.id)
     const dragIds    = isSelected ? [...selectedIdsRef.current] : [item.id]
     if (!isSelected) setSelectedIds(new Set([item.id]))
@@ -159,8 +224,8 @@ export default function CanvasEditor({ mediaId }) {
       const it = itemsRef.current.find(i => i.id === did)
       if (it) originsMap[did] = { x: it.x, y: it.y }
     })
-
     setDragState({ originsMap, startMouse: { x: e.clientX, y: e.clientY } })
+    setCursor('grabbing')
   }
 
   const handleItemDoubleClick = (e, item) => {
@@ -168,11 +233,32 @@ export default function CanvasEditor({ mediaId }) {
     if (item.type === 'text') { setEditingItemId(item.id); setSelectedIds(new Set([item.id])) }
   }
 
-  // ── CRUD ──────────────────────────────────────────────────────────────────
+  // İmlecin altındaki canvas dünya koordinatını döner
+  const screenToWorld = (sx, sy) => {
+    const { x, y, scale } = transformRef.current
+    const container = containerRef.current
+    const rect = container?.getBoundingClientRect() ?? { left: 0, top: 0 }
+    return {
+      x: (sx - rect.left - x) / scale,
+      y: (sy - rect.top  - y) / scale,
+    }
+  }
+
+  // Viewport merkezine yeni item ekle
+  const viewportCenter = () => {
+    const { x, y, scale } = transformRef.current
+    const container = containerRef.current
+    const cx = container ? container.clientWidth  / 2 : 400
+    const cy = container ? container.clientHeight / 2 : 300
+    return { x: (cx - x) / scale, y: (cy - y) / scale }
+  }
+
+  // CRUD
   const addTextItem = () => {
+    const { x: wx, y: wy } = viewportCenter()
     const newItem = {
       id: crypto.randomUUID(), type: 'text',
-      x: -pan.x + 100, y: -pan.y + 100, w: 300, h: 150, content: 'Yeni metin...',
+      x: wx, y: wy, w: 300, h: 150, content: 'Yeni metin...',
     }
     setItems(prev => { const next = [...prev, newItem]; scheduleSave(next, bgRef.current); return next })
     setEditingItemId(newItem.id)
@@ -187,9 +273,10 @@ export default function CanvasEditor({ mediaId }) {
       const r = await fetch(`/api/canvas/${id}/upload`, { method: 'POST', body: fd })
       const d = await r.json()
       if (!r.ok) { alert(d.error); return }
+      const { x: wx, y: wy } = viewportCenter()
       const newItem = {
         id: crypto.randomUUID(), type: 'image',
-        x: -pan.x + 100, y: -pan.y + 100, w: 400, h: 300, url: d.url,
+        x: wx, y: wy, w: 400, h: 300, url: d.url,
       }
       setItems(prev => { const next = [...prev, newItem]; scheduleSave(next, bgRef.current); return next })
       setSelectedIds(new Set([newItem.id]))
@@ -206,7 +293,7 @@ export default function CanvasEditor({ mediaId }) {
     const newBg = e.target.value; setBg(newBg); scheduleSave(itemsRef.current, newBg)
   }
 
-  // ── Copy / Paste / Select-all / Delete-selected ───────────────────────────
+  // Copy / Paste / Select-all / Delete / Duplicate
   const copySelected = () => {
     if (selectedIdsRef.current.size === 0) return
     const copied = itemsRef.current.filter(it => selectedIdsRef.current.has(it.id))
@@ -216,21 +303,17 @@ export default function CanvasEditor({ mediaId }) {
 
   const pasteItems = async () => {
     if (!canvasClipboard?.items?.length) return
-
     const offset   = PASTE_STEP + canvasClipboard.pasteCount * PASTE_STEP
     let srcItems   = canvasClipboard.items
 
-    // Farklı canvas'a yapıştırınca resim dosyalarını kopyala
     if (canvasClipboard.sourceMediaId !== id) {
       const imageUrls = srcItems
         .filter(it => it.type === 'image' && it.url?.startsWith('/uploads/'))
         .map(it => it.url)
-
       if (imageUrls.length > 0) {
         try {
           const r = await fetch('/api/canvas/copy-images', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ urls: imageUrls }),
           })
           if (r.ok) {
@@ -243,10 +326,7 @@ export default function CanvasEditor({ mediaId }) {
       }
     }
 
-    const pasted = srcItems.map(it => ({
-      ...it, id: crypto.randomUUID(), x: it.x + offset, y: it.y + offset,
-    }))
-
+    const pasted = srcItems.map(it => ({ ...it, id: crypto.randomUUID(), x: it.x + offset, y: it.y + offset }))
     setItems(prev => { const next = [...prev, ...pasted]; scheduleSave(next, bgRef.current); return next })
     setSelectedIds(new Set(pasted.map(it => it.id)))
     canvasClipboard = { ...canvasClipboard, pasteCount: canvasClipboard.pasteCount + 1 }
@@ -264,10 +344,17 @@ export default function CanvasEditor({ mediaId }) {
     setSelectedIds(new Set())
   }
 
-  // Aksiyon ref'lerini her render'da güncelle (mount-time keydown handler için)
-  actionRef.current = { copy: copySelected, paste: pasteItems, selectAll, deleteSelected }
+  const duplicate = () => {
+    if (selectedIdsRef.current.size === 0) return
+    const toDupe = itemsRef.current.filter(it => selectedIdsRef.current.has(it.id))
+    const duped  = toDupe.map(it => ({ ...it, id: crypto.randomUUID(), x: it.x + PASTE_STEP, y: it.y + PASTE_STEP }))
+    setItems(prev => { const next = [...prev, ...duped]; scheduleSave(next, bgRef.current); return next })
+    setSelectedIds(new Set(duped.map(it => it.id)))
+  }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  actionRef.current = { copy: copySelected, paste: pasteItems, selectAll, deleteSelected, duplicate }
+
+  // Render
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', flexDirection: 'column', background: '#0a0a0f', userSelect: 'none' }}>
 
@@ -306,12 +393,18 @@ export default function CanvasEditor({ mediaId }) {
             style={{ width: 28, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
         </label>
 
+        {/* Zoom göstergesi — direkt DOM update, React state yok */}
+        <div style={tbDivider} />
+        <span ref={zoomLabelRef} style={{ fontSize: 11, color: '#666', minWidth: 36, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
+          100%
+        </span>
+
         <span style={{ marginLeft: 'auto', fontSize: 11, color: saving ? '#60a5fa' : '#4ade80' }}>
           {saving ? '⟳ Kaydediliyor...' : '✓ Kaydedildi'}
         </span>
 
         <span style={{ fontSize: 10, color: '#444', marginLeft: 8 }}>
-          Ctrl+A · Ctrl+C · Ctrl+V · Del
+          Ctrl+A · C · V · D · Del · Ctrl+Scroll: Zoom
         </span>
 
         <button onClick={handleClose} style={{ ...tbBtn, marginLeft: 8, background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>
@@ -322,22 +415,30 @@ export default function CanvasEditor({ mediaId }) {
       {/* Canvas viewport */}
       <div
         ref={containerRef}
-        style={{ flex: 1, overflow: 'hidden', position: 'relative', cursor: isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default' }}
+        style={{ flex: 1, overflow: 'hidden', position: 'relative', cursor }}
         onMouseDown={handleViewportMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
-        {/* Canvas surface */}
-        <div style={{ position: 'absolute', width: 8000, height: 8000, top: 0, left: 0, transform: `translate(${pan.x}px, ${pan.y}px)`, backgroundColor: bg }}>
-
+        {/* Canvas surface — transform: ref + RAF, React render'dan bağımsız */}
+        <div
+          ref={surfaceRef}
+          style={{
+            position: 'absolute', width: 8000, height: 8000, top: 0, left: 0,
+            backgroundColor: bg,
+            transform: 'translate(0px,0px) scale(1)',
+            transformOrigin: '0 0',
+            willChange: 'transform',
+          }}
+        >
           {items.map(item => {
             const isSelected = selectedIds.has(item.id)
             const isHovered  = hoveredItemId === item.id
             const isDragging = dragState?.originsMap?.[item.id] !== undefined
 
             let outline = '1px solid transparent'
-            if (isSelected)       outline = '2px solid #60a5fa'
+            if (isSelected)                   outline = '2px solid #60a5fa'
             else if (isHovered || isDragging) outline = '1px solid rgba(96,165,250,0.5)'
 
             return (
@@ -354,7 +455,6 @@ export default function CanvasEditor({ mediaId }) {
                 onMouseLeave={() => setHoveredItemId(null)}
                 onDoubleClick={e => handleItemDoubleClick(e, item)}
               >
-                {/* Item content */}
                 {item.type === 'image' ? (
                   <img src={item.url} alt="" draggable={false}
                     style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
@@ -389,7 +489,6 @@ export default function CanvasEditor({ mediaId }) {
                   </div>
                 )}
 
-                {/* Delete button — hover'da, seçili item için */}
                 {(isHovered || isSelected) && editingItemId !== item.id && (
                   <button
                     onMouseDown={e => e.stopPropagation()}
@@ -409,7 +508,7 @@ export default function CanvasEditor({ mediaId }) {
           {items.length === 0 && (
             <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'rgba(255,255,255,0.15)', fontSize: 16, textAlign: 'center', pointerEvents: 'none' }}>
               Metin veya resim ekleyin<br />
-              <span style={{ fontSize: 12 }}>Gezinmek için sürükleyin</span>
+              <span style={{ fontSize: 12 }}>Sürükle: Pan · Ctrl+Scroll: Zoom</span>
             </div>
           )}
         </div>
