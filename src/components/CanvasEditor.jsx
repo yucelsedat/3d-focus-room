@@ -23,8 +23,6 @@ export default function CanvasEditor({ mediaId }) {
   const [hoveredItemId, setHoveredItemId] = useState(null)
   const [selectedIds,   setSelectedIds]   = useState(new Set())
   const [clipboardSize, setClipboardSize] = useState(canvasClipboard?.items?.length ?? 0)
-  // cursor sadece mousedown/mouseup'ta değişir, per-pixel değil
-  const [cursor,        setCursor]        = useState('default')
 
   // Pan/zoom — React state yerine ref: sıfır React re-render pan/zoom sırasında
   const transformRef = useRef({ x: 0, y: 0, scale: 1 })
@@ -167,7 +165,9 @@ export default function CanvasEditor({ mediaId }) {
       x: e.clientX - transformRef.current.x,
       y: e.clientY - transformRef.current.y,
     }
-    setCursor('grabbing')
+    // Cursor + pointer-events direkt DOM — React re-render tetiklememek için
+    if (containerRef.current) containerRef.current.style.cursor = 'grabbing'
+    if (surfaceRef.current)   surfaceRef.current.style.pointerEvents = 'none'
   }
 
   const handleMouseMove = (e) => {
@@ -194,10 +194,11 @@ export default function CanvasEditor({ mediaId }) {
   const handleMouseUp = () => {
     if (isPanningRef.current) {
       isPanningRef.current = false
+      if (surfaceRef.current) surfaceRef.current.style.pointerEvents = ''
     }
+    if (containerRef.current) containerRef.current.style.cursor = 'default'
     if (dragState) scheduleSave(itemsRef.current, bgRef.current)
     setDragState(null)
-    setCursor('default')
   }
 
   // Item etkileşimleri
@@ -225,7 +226,7 @@ export default function CanvasEditor({ mediaId }) {
       if (it) originsMap[did] = { x: it.x, y: it.y }
     })
     setDragState({ originsMap, startMouse: { x: e.clientX, y: e.clientY } })
-    setCursor('grabbing')
+    if (containerRef.current) containerRef.current.style.cursor = 'grabbing'
   }
 
   const handleItemDoubleClick = (e, item) => {
@@ -415,7 +416,7 @@ export default function CanvasEditor({ mediaId }) {
       {/* Canvas viewport */}
       <div
         ref={containerRef}
-        style={{ flex: 1, overflow: 'hidden', position: 'relative', cursor }}
+        style={{ flex: 1, overflow: 'hidden', position: 'relative' }}
         onMouseDown={handleViewportMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -427,9 +428,9 @@ export default function CanvasEditor({ mediaId }) {
           style={{
             position: 'absolute', width: 8000, height: 8000, top: 0, left: 0,
             backgroundColor: bg,
-            transform: 'translate(0px,0px) scale(1)',
             transformOrigin: '0 0',
             willChange: 'transform',
+            // transform buraya yazılmıyor — React re-render'da RAF değerini ezmemesi için
           }}
         >
           {items.map(item => {
