@@ -52,6 +52,8 @@ export function EditModal() {
   const [copiedId, setCopiedId] = useState(null)
   const [pastePreview, setPastePreview] = useState(null)
   const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label }
+  const [sessionModel, setSessionModel]   = useState('claude-fable-5')
+  const [sessionEffort, setSessionEffort] = useState('normal')
   const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
@@ -217,6 +219,38 @@ export function EditModal() {
         setHeaderColor('#ffffff')
         setWidth(1)
         setHeight(1)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
+    if (activeTab === 'session') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+            model: sessionModel,
+            effort: sessionEffort,
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Session oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setWidth(6)
+        setHeight(4)
       } catch (err) {
         alert(err.message)
       } finally {
@@ -514,8 +548,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -625,7 +659,7 @@ export function EditModal() {
                       style={{ ...s.deleteBtn, background: clonedMedia?.id === m.id ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${clonedMedia?.id === m.id ? '#60a5fa' : '#333'}`, color: clonedMedia?.id === m.id ? '#60a5fa' : '#888' }}
                       title="Bu medyayı başka bir duvara kopyala"
                       onClick={() => {
-                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık' }
+                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session' }
                         setClonedMedia(clonedMedia?.id === m.id ? null : { id: m.id, type: m.type, label: typeLabel[m.type] || m.type })
                       }}
                     >
@@ -713,6 +747,12 @@ export function EditModal() {
           >
             🔤 Başlık
           </button>
+          <button
+            style={activeTab === 'session' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('session'); setWidth(6); setHeight(4) }}
+          >
+            🤖 Session
+          </button>
         </div>
 
         {/* Form */}
@@ -731,6 +771,45 @@ export function EditModal() {
                   <label style={{ ...s.label, marginBottom: 0, fontSize: 11 }}>Yazı rengi</label>
                   <input type="color" value={headerColor} onChange={e => setHeaderColor(e.target.value)}
                     style={{ width: 36, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0, borderRadius: 4 }} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Session */}
+          {activeTab === 'session' && (
+            <div style={s.inputGroup}>
+              <p style={{ color: '#60a5fa', fontSize: '13px', margin: '0 0 12px', fontWeight: 600 }}>🤖 AI Session</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Model</label>
+                  <select
+                    value={sessionModel}
+                    onChange={e => setSessionModel(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    <option value="claude-fable-5">Claude Fable 5 (Opus 4.7)</option>
+                    <option value="claude-opus-4-8">Claude Opus 4.8</option>
+                    <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                    <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Effort (Düşünce derinliği)</label>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {[['low','Düşük'],['normal','Normal'],['high','Yüksek']].map(([val, label]) => (
+                      <button
+                        key={val}
+                        onClick={() => setSessionEffort(val)}
+                        style={{
+                          flex: 1, padding: '6px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer',
+                          border: sessionEffort === val ? '1px solid #60a5fa' : '1px solid #333',
+                          background: sessionEffort === val ? 'rgba(96,165,250,0.15)' : '#1a1a2e',
+                          color: sessionEffort === val ? '#60a5fa' : '#888',
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -780,7 +859,7 @@ export function EditModal() {
           )}
 
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -809,7 +888,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
@@ -859,31 +938,31 @@ export function EditModal() {
           <div style={s.row}>
             <div style={{ flex: 1 }}>
               <label style={s.label}>
-                Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : ''}
+                Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 3' : ''}
               </label>
               <input
-                style={{ ...s.input, opacity: activeTab === 'markdown' ? 0.5 : 1 }}
+                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session') ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={width}
                 onChange={(e) => handleWidthChange(e.target.value)}
-                readOnly={activeTab === 'markdown'}
+                readOnly={activeTab === 'markdown' || activeTab === 'session'}
               />
             </div>
             <div style={{ width: 12 }} />
             <div style={{ flex: 1 }}>
               <label style={s.label}>
-                Yükseklik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : naturalRatio ? '🔗' : ''}
+                Yükseklik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 5' : naturalRatio ? '🔗' : ''}
               </label>
               <input
-                style={{ ...s.input, opacity: activeTab === 'markdown' ? 0.5 : 1 }}
+                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session') ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={height}
                 onChange={(e) => handleHeightChange(e.target.value)}
-                readOnly={activeTab === 'markdown'}
+                readOnly={activeTab === 'markdown' || activeTab === 'session'}
               />
             </div>
           </div>

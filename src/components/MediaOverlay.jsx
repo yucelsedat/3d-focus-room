@@ -342,6 +342,390 @@ function MarkdownMesh({ id, content, width, height }) {
   )
 }
 
+const SESSION_PX_PER_UNIT = 200
+
+function SessionMessageBubble({ msg }) {
+  const base = { fontSize: '26px', lineHeight: '1.5', maxWidth: '90%', wordBreak: 'break-word' }
+
+  if (msg.role === 'user') return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ ...base, background: '#1e3a6e', border: '1px solid #2a5a9e', borderRadius: '12px 12px 2px 12px', padding: '8px 12px', color: '#e0e8ff' }}>
+        {msg.content}
+      </div>
+    </div>
+  )
+
+  if (msg.role === 'ai') return (
+    <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+      <div style={{ ...base, background: '#111', border: '1px solid #1e3a2e', borderRadius: '12px 12px 12px 2px', padding: '8px 12px', color: '#d0f0d0' }}>
+        <div className="session-markdown" style={{ fontSize: '26px' }} dangerouslySetInnerHTML={{ __html: marked(msg.content) }} />
+      </div>
+    </div>
+  )
+
+  if (msg.role === 'tool_call') return (
+    <div style={{ ...base, background: '#0a0a0a', border: '1px solid #1a2a1a', borderRadius: '4px', padding: '6px 10px', color: '#4ade80', fontFamily: 'monospace', fontSize: '24px' }}>
+      <span style={{ color: '#60a5fa', marginRight: '6px' }}>{msg.toolName || 'Tool'}</span>
+      <span style={{ color: '#fbbf24' }}>$</span>{' '}{msg.content}
+    </div>
+  )
+
+  if (msg.role === 'tool_result') return (
+    <div style={{ ...base, background: '#050505', border: '1px solid #1a2a1a', borderRadius: '4px', padding: '6px 10px', color: '#6b7280', fontFamily: 'monospace', fontSize: '22px', maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+      {msg.content || '(çıktı yok)'}
+    </div>
+  )
+
+  if (msg.role === 'error') return (
+    <div style={{ ...base, background: '#1a0505', border: '1px solid #3a1515', borderRadius: '4px', padding: '6px 10px', color: '#f87171', fontSize: '24px' }}>
+      ⚠ {msg.content}
+    </div>
+  )
+
+  return null
+}
+
+function SessionMesh({ id, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+  const pxWidth  = Math.round(w * SESSION_PX_PER_UNIT)
+  const pxHeight = Math.round(h * SESSION_PX_PER_UNIT)
+  const scaleFactor = w * 40 / pxWidth
+
+  const MODELS = [
+    { value: 'claude-fable-5',           label: 'Fable 5' },
+    { value: 'claude-opus-4-8',          label: 'Opus 4.8' },
+    { value: 'claude-sonnet-4-6',        label: 'Sonnet 4.6' },
+    { value: 'claude-haiku-4-5-20251001',label: 'Haiku 4.5' },
+  ]
+
+  const [messages, setMessages]       = useState([])
+  const [streaming, setStreaming]     = useState(false)
+  const [thinking, setThinking]       = useState(false)
+  const [connected, setConnected]     = useState(false)
+  const [error, setError]             = useState(null)
+  const [model, setModel]             = useState('claude-fable-5')
+  const [effort, setEffort]           = useState('normal')
+  const [contextTokens, setContextTokens] = useState(null)
+  const msgListRef  = useRef(null)
+  const inputRef    = useRef(null)
+  const activeAiRef = useRef(null)
+
+  // Scroll to bottom on new messages
+  useEffect(() => {
+    const el = msgListRef.current
+    if (!el) return
+    const raf = requestAnimationFrame(() => { el.scrollTop = el.scrollHeight })
+    return () => cancelAnimationFrame(raf)
+  }, [messages, thinking])
+
+  // Persist settings change to DB
+  const saveSetting = (key, value) => {
+    fetch(`/api/ai-session/${id}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    }).catch(() => {})
+  }
+
+  // Load this tile's persistent session history + settings on mount
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/ai-session/${id}/history`)
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return
+        if (data.error) { setError(data.error); return }
+        setConnected(true)
+        if (data.model)  setModel(data.model)
+        if (data.effort) setEffort(data.effort)
+        setMessages((data.messages || []).map(m => ({
+          id: m.id, role: m.role === 'assistant' ? 'ai' : m.role,
+          content: m.text, toolName: m.toolName
+        })))
+      })
+      .catch(() => { if (!cancelled) setError('Geçmiş yüklenemedi') })
+    return () => { cancelled = true }
+  }, [id])
+
+  const submit = async () => {
+    const msg = inputRef.current?.value?.trim() ?? ''
+    if (!msg || streaming) return
+    if (inputRef.current) inputRef.current.value = ''
+
+    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: msg }])
+    setStreaming(true)
+    setThinking(false)
+    activeAiRef.current = null
+    const streamSeenIds = new Set()
+
+    try {
+      const resp = await fetch('/api/ai-session/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaId: id, message: msg }),
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        setMessages(prev => [...prev, { id: `e-${Date.now()}`, role: 'error', content: err.error || `HTTP ${resp.status}` }])
+        return
+      }
+
+      const reader  = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          try {
+            const ev = JSON.parse(raw)
+            if (ev.type === 'done') break
+
+            if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
+
+            if (ev.type === 'assistant') {
+              const msgId  = ev.message?.id
+              const blocks = ev.message?.content ?? []
+              const hasText  = blocks.some(b => b.type === 'text' && b.text)
+              const hasThink = blocks.some(b => b.type === 'thinking')
+
+              if (hasThink && !hasText) setThinking(true)
+
+              if (hasText) {
+                setThinking(false)
+                const text = blocks.find(b => b.type === 'text').text
+                if (!streamSeenIds.has(msgId)) {
+                  streamSeenIds.add(msgId)
+                  const newId = `stream-${msgId}`
+                  activeAiRef.current = { id: newId, msgId }
+                  // Only add if not already in messages (from JSONL watcher)
+                  setMessages(prev =>
+                    prev.some(m => m.id === newId) ? prev
+                      : [...prev, { id: newId, role: 'ai', content: text }]
+                  )
+                } else if (activeAiRef.current?.msgId === msgId) {
+                  const eid = activeAiRef.current.id
+                  setMessages(prev => prev.map(m => m.id === eid ? { ...m, content: text } : m))
+                }
+              }
+
+              for (const b of blocks.filter(b => b.type === 'tool_use')) {
+                const tid = `stream-tc-${b.id}`
+                const cmd = b.input?.command || b.input?.description || b.name
+                setMessages(prev =>
+                  prev.some(m => m.id === tid) ? prev
+                    : [...prev, { id: tid, role: 'tool_call', content: cmd, toolName: b.name }]
+                )
+              }
+            }
+
+            if (ev.type === 'tool') {
+              const tid = `stream-tr-${ev.tool_use_id}`
+              const out = ev.content?.[0]?.text ?? ''
+              setMessages(prev =>
+                prev.some(m => m.id === tid) ? prev
+                  : [...prev, { id: tid, role: 'tool_result', content: out }]
+              )
+            }
+
+            if (ev.type === 'result' && ev.usage) {
+              const used = (ev.usage.input_tokens || 0) + (ev.usage.cache_read_input_tokens || 0) + (ev.usage.cache_creation_input_tokens || 0)
+              setContextTokens({ used, window: 200000 })
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { id: `e-${Date.now()}`, role: 'error', content: err.message }])
+    } finally {
+      setStreaming(false)
+      setThinking(false)
+      activeAiRef.current = null
+      setTimeout(() => inputRef.current?.focus(), 50)
+    }
+  }
+
+  const onKeyDown = (e) => {
+    e.stopPropagation()
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
+  }
+
+  const px = { pointerEvents: 'auto' }
+
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      <Html transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
+        <style>{`
+          @keyframes sBar{0%{left:-40%}100%{left:110%}}
+          @keyframes sDot{0%,80%,100%{opacity:0.2}40%{opacity:1}}
+
+          .session-markdown h1, .session-markdown h2, .session-markdown h3 { margin: 12px 0 6px 0; font-weight: bold; }
+          .session-markdown h1 { font-size: 1.4em; }
+          .session-markdown h2 { font-size: 1.2em; }
+          .session-markdown h3 { font-size: 1.1em; }
+          .session-markdown strong { color: #60a5fa; font-weight: bold; }
+          .session-markdown em { color: #a0d8a0; font-style: italic; }
+          .session-markdown code { background: #0a0a0a; border: 1px solid #1e3a2e; padding: 2px 4px; border-radius: 3px; color: #4ade80; font-family: monospace; }
+          .session-markdown pre { background: #0a0a0a; border: 1px solid #1e3a2e; border-radius: 4px; padding: 8px 10px; overflow-x: auto; margin: 8px 0; }
+          .session-markdown pre code { background: none; border: none; padding: 0; color: #4ade80; }
+          .session-markdown ul, .session-markdown ol { margin: 6px 0; padding-left: 20px; }
+          .session-markdown li { margin: 3px 0; }
+          .session-markdown blockquote { border-left: 3px solid #2a5a8a; padding-left: 10px; margin: 6px 0; color: #a0a0a0; }
+          .session-markdown a { color: #60a5fa; text-decoration: underline; }
+          .session-markdown a:hover { color: #93c5fd; }
+          .session-markdown p { margin: 4px 0; }
+        `}</style>
+        <div
+          style={{
+            width: `${pxWidth}px`, height: `${pxHeight}px`,
+            backgroundColor: '#0d0d0d', borderRadius: '8px',
+            border: `1px solid ${connected ? '#1e3a5f' : '#2a1a1a'}`,
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            fontFamily: 'system-ui, sans-serif', pointerEvents: 'auto',
+          }}
+          onClick={e => e.stopPropagation()}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div style={{ padding: '6px 10px', background: 'linear-gradient(135deg,#1a2a3a,#0d1f2d)', borderBottom: '1px solid #1e3a5f', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, flexWrap: 'wrap', ...px }}>
+            <span style={{ fontSize: '26px' }}>🤖</span>
+            <span style={{ color: '#60a5fa', fontWeight: 600, fontSize: '22px' }}>Claude</span>
+            <span style={{ color: '#1e3a5f', fontSize: '20px' }}>#{ String(id).slice(-4) }</span>
+
+            {/* Model selector */}
+            <select
+              value={model}
+              onChange={e => { setModel(e.target.value); saveSetting('model', e.target.value) }}
+              onClick={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
+              style={{ background: '#0d1f2d', border: '1px solid #2a5a8a', color: '#60a5fa', borderRadius: '4px', fontSize: '20px', padding: '2px 6px', cursor: 'pointer', pointerEvents: 'auto', outline: 'none' }}
+            >
+              {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+
+            {/* Effort selector */}
+            <div style={{ display: 'flex', gap: '3px', ...px }}>
+              {[['low','↓'],['normal','→'],['high','↑']].map(([val, icon]) => (
+                <button
+                  key={val}
+                  onClick={e => { e.stopPropagation(); setEffort(val); saveSetting('effort', val) }}
+                  onPointerDown={e => e.stopPropagation()}
+                  title={val === 'low' ? 'Düşük effort' : val === 'normal' ? 'Normal effort' : 'Yüksek effort'}
+                  style={{
+                    padding: '2px 6px', borderRadius: '4px', fontSize: '20px', cursor: 'pointer',
+                    border: effort === val ? '1px solid #60a5fa' : '1px solid #1e3a5f',
+                    background: effort === val ? 'rgba(96,165,250,0.2)' : 'transparent',
+                    color: effort === val ? '#60a5fa' : '#4a6a8a', pointerEvents: 'auto',
+                  }}
+                >{icon} {val}</button>
+              ))}
+            </div>
+
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: connected ? '#4ade80' : '#ef4444', display: 'inline-block' }} />
+              <span style={{ color: connected ? '#4ade80' : '#ef4444', fontSize: '18px' }}>
+                {connected ? 'hazır' : 'yükleniyor...'}
+              </span>
+            </div>
+          </div>
+
+          {/* Loading bar */}
+          {streaming && (
+            <div style={{ position: 'relative', height: '3px', background: '#1e3a5f', flexShrink: 0, overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', top: 0, height: '100%', width: '40%', background: 'linear-gradient(90deg,transparent,#60a5fa,transparent)', animation: 'sBar 1.4s linear infinite' }} />
+            </div>
+          )}
+
+          {/* Context used bar */}
+          {contextTokens && (() => {
+            const pct = Math.min(contextTokens.used / contextTokens.window, 1)
+            const pctRound = Math.round(pct * 100)
+            const barColor = pct < 0.6 ? '#4ade80' : pct < 0.85 ? '#fbbf24' : '#f87171'
+            const kStr = contextTokens.used >= 1000 ? `${(contextTokens.used / 1000).toFixed(1)}k` : String(contextTokens.used)
+            return (
+              <div style={{ padding: '4px 10px 5px', background: '#0a0f1a', borderBottom: '1px solid #1e3a5f', flexShrink: 0, ...px }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                  <span style={{ color: '#4a6a8a', fontSize: '18px' }}>context</span>
+                  <span style={{ color: barColor, fontSize: '18px', fontVariantNumeric: 'tabular-nums' }}>{kStr} / 200k &nbsp;{pctRound}%</span>
+                </div>
+                <div style={{ height: '4px', background: '#1e3a5f', borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${pct * 100}%`, background: barColor, borderRadius: '2px', transition: 'width 0.4s ease, background 0.4s ease' }} />
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Messages */}
+          <div ref={msgListRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', ...px }}>
+            {messages.length === 0 && !streaming && (
+              <div style={{ color: error ? '#f87171' : '#2a4a6a', fontSize: '22px', textAlign: 'center', marginTop: '16px' }}>
+                {error || (connected ? 'Yeni session — ilk mesajını yazabilirsin.' : 'Yükleniyor...')}
+              </div>
+            )}
+            {messages.map(m => <SessionMessageBubble key={m.id} msg={m} />)}
+            {thinking && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 10px', background: '#0a1520', border: '1px solid #1e3a5f', borderRadius: '10px 10px 10px 2px', width: 'fit-content' }}>
+                <span style={{ color: '#60a5fa', fontSize: '22px' }}>🧠</span>
+                {[0, 150, 300].map(delay => (
+                  <span key={delay} style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#60a5fa', display: 'inline-block', animation: `sDot 1.2s ${delay}ms ease-in-out infinite` }} />
+                ))}
+              </div>
+            )}
+            {streaming && !thinking && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 10px', background: '#0a1520', border: '1px solid #1e3a5f', borderRadius: '10px 10px 10px 2px', width: 'fit-content' }}>
+                <span style={{ color: '#4a6a8a', fontSize: '22px' }}>⏳ Yanıt bekleniyor...</span>
+              </div>
+            )}
+          </div>
+
+          {/* Input */}
+          <div style={{ padding: '8px 10px', borderTop: '1px solid #1e3a5f', display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0, background: '#0a0f1a', ...px }}>
+            <textarea
+              ref={inputRef}
+              onKeyDown={onKeyDown}
+              onClick={e => e.stopPropagation()}
+              placeholder={streaming ? 'Yanıt bekleniyor...' : 'Mesaj yaz... (Enter: gönder)'}
+              disabled={streaming || !connected}
+              style={{
+                flex: 1, background: '#0d1f2d',
+                border: `1px solid ${streaming ? '#1e3a5f' : '#2a5a8a'}`,
+                borderRadius: '5px', color: streaming ? '#4a6a8a' : '#e0e0e0', fontSize: '24px',
+                padding: '7px 9px', resize: 'none', outline: 'none',
+                fontFamily: 'system-ui, sans-serif', lineHeight: '1.4', height: '52px',
+                boxSizing: 'border-box', pointerEvents: 'auto',
+              }}
+            />
+            <button
+              onClick={(e) => { e.stopPropagation(); submit() }}
+              disabled={streaming || !connected}
+              style={{
+                background: (streaming || !connected) ? '#1e3a5f' : 'linear-gradient(135deg,#2563eb,#60a5fa)',
+                border: 'none', borderRadius: '5px', color: '#fff', padding: '0 14px',
+                cursor: (streaming || !connected) ? 'not-allowed' : 'pointer',
+                fontSize: '32px', height: '52px', flexShrink: 0, pointerEvents: 'auto',
+              }}
+            >
+              {streaming ? '⏳' : '→'}
+            </button>
+          </div>
+        </div>
+      </Html>
+    </mesh>
+  )
+}
+
 function GifMesh({ url, width, height }) {
   const pxWidth  = 600
   const pxHeight = 600 * (height / width)
@@ -374,7 +758,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isEmbed    = type === 'embed'
   const isCanvas   = type === 'canvas'
   const isHeader   = type === 'header'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader
+  const isSession  = type === 'session'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -385,6 +770,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
       <group position={[offsetX, offsetY, 0]}>
         {isHeader ? (
           <HeaderMesh id={id} content={content} width={width} height={height} />
+        ) : isSession ? (
+          <SessionMesh id={id} width={width} height={height} />
         ) : isCanvas ? (
           <CanvasMesh id={id} content={content} width={width} height={height} />
         ) : isMarkdown ? (

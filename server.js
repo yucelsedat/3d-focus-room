@@ -2,8 +2,10 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, getReturnAnchorId, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
@@ -48,6 +50,21 @@ ensureDir('public/uploads/videos');
 // ─── Active room ──────────────────────────────────────────────────────────────
 let activeRoomId   = 'default';
 let activeRoomType = 'room';
+
+// ─── AI Session tracking ─────────────────────────────────────────────────────
+// Use standalone claude CLI (not CLAUDE_CODE_EXECPATH which is the VS Code extension's
+// internal binary and doesn't work when spawned outside the VS Code context)
+const CLAUDE_CLI = (() => {
+  const candidates = [
+    '/home/sedat/.local/bin/claude',
+    process.env.CLAUDE_CODE_EXECPATH,
+    'claude',
+  ]
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return c
+  }
+  return 'claude'
+})()
 
 // ─── Boot-time: auto-migrate JSON → SQLite if DB is empty ────────────────────
 async function bootMigrate() {
@@ -806,6 +823,395 @@ app.get('/api/youtube-meta', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── Live Session (works standalone — no VS Code required) ───────────────────
+
+const CWD_KEY = process.cwd().replace(/\//g, '-') // e.g. -home-sedat-projects-...
+const PROJECT_DIR = path.join(os.homedir(), '.claude', 'projects', CWD_KEY)
+
+// Session ID pinned for this server process lifetime (set on first message if no prior session)
+let pinnedSessionId = null
+
+function getLiveSession() {
+  // Strategy 1: pinned session from this server run
+  if (pinnedSessionId) {
+    const jsonlPath = path.join(PROJECT_DIR, `${pinnedSessionId}.jsonl`)
+    if (fs.existsSync(jsonlPath)) return { sessionId: pinnedSessionId, jsonlPath }
+  }
+
+  // Strategy 2: active VS Code session (most recent subdir under /tmp/claude-1000)
+  try {
+    const tmpDir = path.join('/tmp/claude-1000', CWD_KEY)
+    const entries = fs.readdirSync(tmpDir, { withFileTypes: true })
+    const dirs = entries.filter(e => e.isDirectory()).map(e => ({
+      name: e.name,
+      mtime: fs.statSync(path.join(tmpDir, e.name)).mtimeMs,
+    }))
+    if (dirs.length) {
+      dirs.sort((a, b) => b.mtime - a.mtime)
+      const sessionId = dirs[0].name
+      const jsonlPath = path.join(PROJECT_DIR, `${sessionId}.jsonl`)
+      if (fs.existsSync(jsonlPath)) return { sessionId, jsonlPath }
+    }
+  } catch {}
+
+  // Strategy 3: most recently modified JSONL in ~/.claude/projects/{CWD_KEY}/
+  try {
+    fs.mkdirSync(PROJECT_DIR, { recursive: true })
+    const files = fs.readdirSync(PROJECT_DIR)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => ({ sessionId: f.slice(0, -6), mtime: fs.statSync(path.join(PROJECT_DIR, f)).mtimeMs }))
+    if (files.length) {
+      files.sort((a, b) => b.mtime - a.mtime)
+      const { sessionId } = files[0]
+      return { sessionId, jsonlPath: path.join(PROJECT_DIR, `${sessionId}.jsonl`) }
+    }
+  } catch {}
+
+  return null // no prior session — first message will create one
+}
+
+// media.content stores JSON: { sessionId?, model, effort }
+// Backward compat: plain session ID string → treat as sessionId
+function parseSessionContent(raw) {
+  const defaults = { sessionId: null, model: 'claude-fable-5', effort: 'normal' }
+  if (!raw) return defaults
+  if (!raw.startsWith('{')) return { ...defaults, sessionId: raw }
+  try { return { ...defaults, ...JSON.parse(raw) } } catch { return defaults }
+}
+
+function formatSessionContent(obj) {
+  return JSON.stringify(obj)
+}
+
+function parseLiveMessages(content) {
+  const messages = []
+  for (const line of content.split('\n').filter(Boolean)) {
+    try {
+      const d = JSON.parse(line)
+      if (d.isSidechain) continue
+      const msg = d.message
+      if (!msg) continue
+      const blocks = Array.isArray(msg.content) ? msg.content : []
+
+      if (msg.role === 'user') {
+        // --print mode writes user content as a plain string, not blocks
+        if (typeof msg.content === 'string' && msg.content.trim() && !msg.content.startsWith('<')) {
+          messages.push({ role: 'user', text: msg.content, id: d.uuid })
+        }
+        for (const b of blocks) {
+          if (b.type === 'text' && b.text?.trim()) {
+            messages.push({ role: 'user', text: b.text, id: d.uuid })
+          }
+          if (b.type === 'tool_result') {
+            const out = Array.isArray(b.content)
+              ? b.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
+              : (typeof b.content === 'string' ? b.content : '')
+            if (out.trim()) {
+              messages.push({ role: 'tool_result', text: out, id: `tr-${b.tool_use_id}` })
+            }
+          }
+        }
+      }
+
+      if (msg.role === 'assistant') {
+        for (const b of blocks) {
+          if (b.type === 'text' && b.text?.trim()) {
+            messages.push({ role: 'assistant', text: b.text, id: `${d.uuid}-text` })
+          }
+          if (b.type === 'tool_use') {
+            const cmd = b.input?.command || b.input?.description || b.name
+            messages.push({ role: 'tool_call', text: cmd, toolName: b.name, id: `${d.uuid}-${b.id}` })
+          }
+        }
+      }
+    } catch {}
+  }
+  return messages
+}
+
+app.get('/api/session/live', (req, res) => {
+  const info = getLiveSession()
+  if (!info) {
+    return res.status(404).json({ error: 'Aktif Claude Code session bulunamadı' })
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+
+  // Send all existing messages as init
+  try {
+    const content = fs.existsSync(info.jsonlPath) ? fs.readFileSync(info.jsonlPath, 'utf8') : ''
+    const messages = parseLiveMessages(content)
+    res.write(`data: ${JSON.stringify({ type: 'init', messages })}\n\n`)
+    var lineCount = content.split('\n').filter(Boolean).length
+  } catch { var lineCount = 0 }
+
+  // Watch for new lines
+  let lastLineCount = lineCount
+  let watcher = null
+  try {
+    watcher = fs.watch(info.jsonlPath, () => {
+      try {
+        const content = fs.readFileSync(info.jsonlPath, 'utf8')
+        const lines = content.split('\n').filter(Boolean)
+        if (lines.length > lastLineCount) {
+          const newContent = lines.slice(lastLineCount).join('\n')
+          lastLineCount = lines.length
+          const newMessages = parseLiveMessages(newContent)
+          for (const m of newMessages) {
+            res.write(`data: ${JSON.stringify({ type: 'update', message: m })}\n\n`)
+          }
+        }
+      } catch {}
+    })
+  } catch {}
+
+  res.on('close', () => watcher?.close())
+})
+
+app.post('/api/session/live/message', (req, res) => {
+  const { message } = req.body
+  if (!message?.trim()) return res.status(400).json({ error: 'Mesaj gerekli' })
+
+  const info = getLiveSession()
+  if (!info) return res.status(404).json({ error: 'Aktif session yok' })
+
+  streamClaudeToSSE(res, [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--resume', info.sessionId, '--dangerously-skip-permissions',
+    message.trim()
+  ])
+})
+
+// Spawns the claude CLI and streams its stream-json output to an SSE response.
+// Handles both normal stdout mode and "background task" mode (when the CLI
+// detects it's running inside an active session it writes output to a task
+// file instead of stdout — we detect the path and poll the file).
+// opts.onEvent(ev) is called for every forwarded event.
+function streamClaudeToSSE(res, args, opts = {}) {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+
+  const spawnEnv = { ...process.env, ...(opts.envOverrides || {}) }
+  for (const v of ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']) {
+    delete spawnEnv[v]
+  }
+
+  let finished = false
+  let pollInterval = null
+  let idleTimer = null
+
+  function finish() {
+    if (finished) return
+    finished = true
+    if (pollInterval) clearInterval(pollInterval)
+    if (idleTimer) clearTimeout(idleTimer)
+    res.write('data: {"type":"done"}\n\n')
+    res.end()
+  }
+
+  function resetIdleTimer() {
+    if (idleTimer) clearTimeout(idleTimer)
+    // 3s no new content → done
+    idleTimer = setTimeout(finish, 3000)
+  }
+
+  function forwardLine(line) {
+    if (!line.trim()) return false
+    try {
+      const ev = JSON.parse(line)
+      opts.onEvent?.(ev)
+      if (['assistant', 'tool', 'result', 'system'].includes(ev.type)) {
+        res.write(`data: ${JSON.stringify(ev)}\n\n`)
+        return true
+      }
+    } catch {}
+    return false
+  }
+
+  const proc = spawn(CLAUDE_CLI, args, { cwd: process.cwd(), env: spawnEnv })
+  let stdoutBuf = ''
+  let taskFilePath = null
+  let taskOffset = 0
+  let taskLineBuf = ''
+
+  function pollTaskFile() {
+    if (finished || !taskFilePath) return
+    try {
+      const content = fs.readFileSync(taskFilePath, 'utf8')
+      if (content.length > taskOffset) {
+        const newText = content.slice(taskOffset)
+        taskOffset = content.length
+        taskLineBuf += newText
+        const lines = taskLineBuf.split('\n')
+        taskLineBuf = lines.pop() ?? ''
+        let gotContent = false
+        for (const line of lines) {
+          if (forwardLine(line)) gotContent = true
+        }
+        if (gotContent) resetIdleTimer()
+      }
+    } catch {}
+  }
+
+  proc.stdout.on('data', chunk => {
+    stdoutBuf += chunk.toString()
+    // Detect background task file path (CLI is running inside an active session)
+    const m = stdoutBuf.match(/Output is being written to: ([^\n]+?)\.?\n/)
+    if (m && !taskFilePath) {
+      taskFilePath = m[1].trim()
+      taskOffset = 0
+      taskLineBuf = ''
+      resetIdleTimer()
+      pollInterval = setInterval(pollTaskFile, 250)
+      return
+    }
+    if (taskFilePath) return  // already in background-task mode
+    const lines = stdoutBuf.split('\n')
+    stdoutBuf = lines.pop() ?? ''
+    for (const line of lines) forwardLine(line)
+  })
+
+  proc.stderr.on('data', chunk => {
+    console.error('[claude-sse stderr]', chunk.toString().slice(0, 200))
+  })
+
+  proc.on('close', () => {
+    if (!taskFilePath) {
+      // Normal mode: process exited → stream is complete
+      finish()
+    } else {
+      // Background task mode: process exited after submitting the task,
+      // but the task file is still being written to. Use idle timer.
+      resetIdleTimer()
+    }
+  })
+
+  proc.on('error', err => {
+    res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`)
+    finish()
+  })
+
+  res.on('close', () => {
+    finished = true
+    if (pollInterval) clearInterval(pollInterval)
+    if (idleTimer) clearTimeout(idleTimer)
+    if (!proc.killed) proc.kill()
+  })
+}
+
+// ─── AI Session ──────────────────────────────────────────────────────────────
+
+app.post('/api/session', async (req, res) => {
+  const { tileId, width, height, position, rotation, model, effort } = req.body;
+  const id = BigInt(Date.now());
+  try {
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId: String(tileId),
+        type: 'session',
+        width: parseFloat(width) || 6,
+        height: parseFloat(height) || 4,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal' }),
+      },
+    });
+    res.json(serializeMedia(media));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Returns session history + current settings for this tile
+app.get('/api/ai-session/:mediaId/history', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'session') {
+      return res.status(404).json({ error: 'Session bulunamadı' })
+    }
+    const { sessionId, model, effort } = parseSessionContent(media.content)
+    if (!sessionId) return res.json({ sessionId: null, messages: [], model, effort })
+
+    const jsonlPath = path.join(PROJECT_DIR, `${sessionId}.jsonl`)
+    if (!fs.existsSync(jsonlPath)) return res.json({ sessionId, messages: [], model, effort })
+
+    const content = fs.readFileSync(jsonlPath, 'utf8')
+    res.json({ sessionId, messages: parseLiveMessages(content), model, effort })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Update model/effort settings without touching the session
+app.patch('/api/ai-session/:mediaId/settings', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'session') return res.status(404).json({ error: 'Session bulunamadı' })
+    const current = parseSessionContent(media.content)
+    const updated = { ...current, ...req.body }
+    await prisma.media.update({
+      where: { id: BigInt(req.params.mediaId) },
+      data: { content: formatSessionContent(updated) },
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/ai-session/message', async (req, res) => {
+  const { mediaId, message } = req.body;
+  if (!message?.trim()) return res.status(400).json({ error: 'Mesaj gerekli' });
+
+  let settings = { sessionId: null, model: 'claude-fable-5', effort: 'normal' }
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } })
+    if (media) settings = parseSessionContent(media.content)
+  } catch {}
+
+  const args = [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', settings.model,
+    '--dangerously-skip-permissions',
+  ];
+  if (settings.sessionId) args.push('--resume', settings.sessionId);
+  args.push(message.trim());
+
+  const spawnEnvOverrides = {}
+  if (settings.effort && settings.effort !== 'normal') {
+    spawnEnvOverrides.CLAUDE_EFFORT = settings.effort
+  }
+
+  streamClaudeToSSE(res, args, {
+    envOverrides: spawnEnvOverrides,
+    onEvent: (ev) => {
+      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
+        settings.sessionId = ev.session_id
+        const newContent = formatSessionContent({ ...settings, sessionId: ev.session_id })
+        prisma.media.update({
+          where: { id: BigInt(mediaId) },
+          data: { content: newContent },
+        }).catch(err => console.error('[ai-session] kayıt hatası:', err.message))
+      }
+    }
+  })
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
