@@ -1195,7 +1195,7 @@ app.post('/api/ai-session/message', async (req, res) => {
 
   const args = [
     '--print', '--output-format=stream-json', '--verbose',
-    '--model', settings.model,
+    '--model', cliModel(settings.model),
     '--dangerously-skip-permissions',
   ];
   if (settings.sessionId) args.push('--resume', settings.sessionId);
