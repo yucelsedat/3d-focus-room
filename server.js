@@ -875,7 +875,7 @@ function getLiveSession() {
 // media.content stores JSON: { sessionId?, model, effort }
 // Backward compat: plain session ID string → treat as sessionId
 function parseSessionContent(raw) {
-  const defaults = { sessionId: null, model: 'claude-fable-5', effort: 'normal' }
+  const defaults = { sessionId: null, model: 'claude-fable-5', effort: 'normal', permissionMode: 'bypassPermissions' }
   if (!raw) return defaults
   if (!raw.startsWith('{')) return { ...defaults, sessionId: raw }
   try { return { ...defaults, ...JSON.parse(raw) } } catch { return defaults }
@@ -883,6 +883,15 @@ function parseSessionContent(raw) {
 
 function formatSessionContent(obj) {
   return JSON.stringify(obj)
+}
+
+// İzin modunu CLI bayraklarına çevirir. --print modunda "ask/default" soracak
+// muhatap olmadığı için sunmuyoruz; "Ask" gerçek anlamda Faz 2'nin işi.
+// bypass için kanıtlanmış --dangerously-skip-permissions yolunu koruyoruz.
+function permissionArgs(mode) {
+  if (mode === 'plan')        return ['--permission-mode', 'plan']
+  if (mode === 'acceptEdits') return ['--permission-mode', 'acceptEdits']
+  return ['--dangerously-skip-permissions']
 }
 
 // Standalone claude CLI bazı UI model adlarını (ör. claude-fable-5) tanımıyor.
@@ -1117,7 +1126,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
 // ─── AI Session ──────────────────────────────────────────────────────────────
 
 app.post('/api/session', async (req, res) => {
-  const { tileId, width, height, position, rotation, model, effort } = req.body;
+  const { tileId, width, height, position, rotation, model, effort, permissionMode } = req.body;
   const id = BigInt(Date.now());
   try {
     const pos = JSON.parse(position);
@@ -1137,7 +1146,7 @@ app.post('/api/session', async (req, res) => {
         rotY: parseFloat(rot[1]) || 0,
         rotZ: parseFloat(rot[2]) || 0,
         rotOrder: String(rot[3] || 'XYZ'),
-        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal' }),
+        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal', permissionMode: permissionMode || 'bypassPermissions' }),
       },
     });
     res.json(serializeMedia(media));
@@ -1153,14 +1162,14 @@ app.get('/api/ai-session/:mediaId/history', async (req, res) => {
     if (!media || media.type !== 'session') {
       return res.status(404).json({ error: 'Session bulunamadı' })
     }
-    const { sessionId, model, effort } = parseSessionContent(media.content)
-    if (!sessionId) return res.json({ sessionId: null, messages: [], model, effort })
+    const { sessionId, model, effort, permissionMode } = parseSessionContent(media.content)
+    if (!sessionId) return res.json({ sessionId: null, messages: [], model, effort, permissionMode })
 
     const jsonlPath = path.join(PROJECT_DIR, `${sessionId}.jsonl`)
-    if (!fs.existsSync(jsonlPath)) return res.json({ sessionId, messages: [], model, effort })
+    if (!fs.existsSync(jsonlPath)) return res.json({ sessionId, messages: [], model, effort, permissionMode })
 
     const content = fs.readFileSync(jsonlPath, 'utf8')
-    res.json({ sessionId, messages: parseLiveMessages(content), model, effort })
+    res.json({ sessionId, messages: parseLiveMessages(content), model, effort, permissionMode })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -1187,7 +1196,7 @@ app.post('/api/ai-session/message', async (req, res) => {
   const { mediaId, message } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: 'Mesaj gerekli' });
 
-  let settings = { sessionId: null, model: 'claude-fable-5', effort: 'normal' }
+  let settings = { sessionId: null, model: 'claude-fable-5', effort: 'normal', permissionMode: 'bypassPermissions' }
   try {
     const media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } })
     if (media) settings = parseSessionContent(media.content)
@@ -1196,7 +1205,7 @@ app.post('/api/ai-session/message', async (req, res) => {
   const args = [
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(settings.model),
-    '--dangerously-skip-permissions',
+    ...permissionArgs(settings.permissionMode),
   ];
   if (settings.sessionId) args.push('--resume', settings.sessionId);
   args.push(message.trim());
@@ -1293,7 +1302,7 @@ function roomGraphStatus(roomId, builtAt = null) {
 
 // roomchat tile oluştur (session tile ile aynı şema, type='roomchat')
 app.post('/api/roomchat', async (req, res) => {
-  const { tileId, width, height, position, rotation, model, effort } = req.body
+  const { tileId, width, height, position, rotation, model, effort, permissionMode } = req.body
   const id = BigInt(Date.now())
   try {
     const pos = JSON.parse(position)
@@ -1313,7 +1322,7 @@ app.post('/api/roomchat', async (req, res) => {
         rotY: parseFloat(rot[1]) || 0,
         rotZ: parseFloat(rot[2]) || 0,
         rotOrder: String(rot[3] || 'XYZ'),
-        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal' }),
+        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal', permissionMode: permissionMode || 'bypassPermissions' }),
       },
     })
     res.json(serializeMedia(media))
@@ -1330,7 +1339,7 @@ app.get('/api/roomchat/:mediaId/history', async (req, res) => {
       return res.status(404).json({ error: 'Oda sohbeti bulunamadı' })
     }
     const settings = parseSessionContent(media.content)
-    const { sessionId, model, effort } = settings
+    const { sessionId, model, effort, permissionMode } = settings
     const graph = roomGraphStatus(media.roomId, settings.graphBuiltAt || null)
 
     let messages = []
@@ -1340,7 +1349,7 @@ app.get('/api/roomchat/:mediaId/history', async (req, res) => {
         messages = parseLiveMessages(fs.readFileSync(jsonlPath, 'utf8'))
       }
     }
-    res.json({ sessionId, messages, model, effort, graph })
+    res.json({ sessionId, messages, model, effort, permissionMode, graph })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -1446,7 +1455,7 @@ app.post('/api/roomchat/message', async (req, res) => {
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(settings.model),
     '--append-system-prompt', sys,
-    '--dangerously-skip-permissions',
+    ...permissionArgs(settings.permissionMode),
   ]
   if (settings.sessionId) args.push('--resume', settings.sessionId)
   args.push(message.trim())
