@@ -885,6 +885,13 @@ function formatSessionContent(obj) {
   return JSON.stringify(obj)
 }
 
+// Standalone claude CLI bazı UI model adlarını (ör. claude-fable-5) tanımıyor.
+// --model'e geçmeden önce desteklenen bir ada normalize et. Fable 5 ≈ Opus.
+function cliModel(model) {
+  if (!model || /fable/i.test(model)) return 'opus'
+  return model
+}
+
 function parseLiveMessages(content) {
   const messages = []
   for (const line of content.split('\n').filter(Boolean)) {
@@ -1036,7 +1043,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
     return false
   }
 
-  const proc = spawn(CLAUDE_CLI, args, { cwd: process.cwd(), env: spawnEnv })
+  const proc = spawn(CLAUDE_CLI, args, { cwd: opts.cwd || process.cwd(), env: spawnEnv })
   let stdoutBuf = ''
   let taskFilePath = null
   let taskOffset = 0
@@ -1213,6 +1220,255 @@ app.post('/api/ai-session/message', async (req, res) => {
     }
   })
 });
+
+// ─── Room Chat (her oda için ayrı graphify grafı) ────────────────────────────
+// roomchat tile, session tile'a benzer ama sohbet o odanın metin/canvas
+// içeriğinden graphify ile üretilen ayrı bir bilgi grafıyla beslenir.
+// Her odanın grafı izole bir klasörde tutulur: room-graphs/<roomId>/
+
+function roomGraphDir(roomId) {
+  return path.join(__dirname, 'room-graphs', String(roomId))
+}
+
+// Bir odadaki metin/canvas/başlık medyalarından düz metin çıkarır
+async function extractRoomTexts(roomId) {
+  const media = await prisma.media.findMany({ where: { roomId: String(roomId) } })
+  const docs = []
+  for (const m of media) {
+    if (m.type === 'markdown' && m.content?.trim()) {
+      docs.push({ id: String(m.id), tileId: m.tileId, kind: 'metin', text: m.content.trim() })
+    } else if (m.type === 'header' && m.content) {
+      try {
+        const h = JSON.parse(m.content)
+        if (h.text?.trim()) docs.push({ id: String(m.id), tileId: m.tileId, kind: 'baslik', text: h.text.trim() })
+      } catch {}
+    } else if (m.type === 'canvas' && m.content) {
+      try {
+        const c = JSON.parse(m.content)
+        const texts = (c.items || [])
+          .filter(it => it.type === 'text' && it.content?.trim())
+          .map(it => it.content.trim())
+        if (texts.length) docs.push({ id: String(m.id), tileId: m.tileId, kind: 'canvas', text: texts.join('\n\n') })
+      } catch {}
+    }
+  }
+  return docs
+}
+
+// Çıkarılan metinleri room-graphs/<roomId>/raw/ altına .md dosyaları olarak yazar
+function writeRoomRaw(roomId, docs) {
+  const rawDir = path.join(roomGraphDir(roomId), 'raw')
+  fs.rmSync(rawDir, { recursive: true, force: true })
+  fs.mkdirSync(rawDir, { recursive: true })
+  for (const d of docs) {
+    fs.writeFileSync(path.join(rawDir, `${d.kind}-${d.id}.md`), d.text + '\n')
+  }
+  return rawDir
+}
+
+// Sohbet için odadaki ham metinleri (bütçeli) tek bir bağlam metnine birleştirir
+function roomCorpusText(docs, budgetChars = 24000) {
+  let out = ''
+  for (const d of docs) {
+    const block = `\n\n## ${d.kind} (tile ${d.tileId})\n${d.text}`
+    if (out.length + block.length > budgetChars) { out += '\n\n…(kısaltıldı)'; break }
+    out += block
+  }
+  return out.trim()
+}
+
+// Odanın grafının disk durumunu okur
+function roomGraphStatus(roomId, builtAt = null) {
+  const graphPath = path.join(roomGraphDir(roomId), 'graphify-out', 'graph.json')
+  const status = { exists: false, nodeCount: 0, builtAt }
+  if (fs.existsSync(graphPath)) {
+    try {
+      const g = JSON.parse(fs.readFileSync(graphPath, 'utf8'))
+      status.exists = true
+      status.nodeCount = (g.nodes || []).length
+    } catch {}
+  }
+  return status
+}
+
+// roomchat tile oluştur (session tile ile aynı şema, type='roomchat')
+app.post('/api/roomchat', async (req, res) => {
+  const { tileId, width, height, position, rotation, model, effort } = req.body
+  const id = BigInt(Date.now())
+  try {
+    const pos = JSON.parse(position)
+    const rot = JSON.parse(rotation)
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId: String(tileId),
+        type: 'roomchat',
+        width: parseFloat(width) || 6,
+        height: parseFloat(height) || 4,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal' }),
+      },
+    })
+    res.json(serializeMedia(media))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// roomchat geçmişi + ayarları + graf durumu
+app.get('/api/roomchat/:mediaId/history', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'roomchat') {
+      return res.status(404).json({ error: 'Oda sohbeti bulunamadı' })
+    }
+    const settings = parseSessionContent(media.content)
+    const { sessionId, model, effort } = settings
+    const graph = roomGraphStatus(media.roomId, settings.graphBuiltAt || null)
+
+    let messages = []
+    if (sessionId) {
+      const jsonlPath = path.join(PROJECT_DIR, `${sessionId}.jsonl`)
+      if (fs.existsSync(jsonlPath)) {
+        messages = parseLiveMessages(fs.readFileSync(jsonlPath, 'utf8'))
+      }
+    }
+    res.json({ sessionId, messages, model, effort, graph })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// model/effort ayarlarını güncelle (sohbeti bozmadan)
+app.patch('/api/roomchat/:mediaId/settings', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'roomchat') return res.status(404).json({ error: 'Oda sohbeti bulunamadı' })
+    const current = parseSessionContent(media.content)
+    const updated = { ...current, ...req.body }
+    await prisma.media.update({
+      where: { id: BigInt(req.params.mediaId) },
+      data: { content: formatSessionContent(updated) },
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// "Güncelle" butonu — odanın metinlerini topla, raw/'a yaz, graphify ile graf kur
+app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } }) } catch {}
+  if (!media || media.type !== 'roomchat') return res.status(404).json({ error: 'Oda sohbeti bulunamadı' })
+
+  const roomId = media.roomId
+  const docs = await extractRoomTexts(roomId)
+
+  if (!docs.length) {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.flushHeaders()
+    res.write(`data: ${JSON.stringify({ type: 'error', message: 'Bu odada metin/canvas yazısı yok. Önce metin veya canvas ekleyin.' })}\n\n`)
+    res.write('data: {"type":"done"}\n\n')
+    return res.end()
+  }
+
+  const dir = roomGraphDir(roomId)
+  fs.mkdirSync(dir, { recursive: true })
+  writeRoomRaw(roomId, docs)
+
+  // Graf zaten varsa artımlı (--update) modda çalış: yalnızca yeni/değişen
+  // metinleri yeniden işle, silinenleri grafdan çıkar. İlk kurulumda full build.
+  const hasGraph = fs.existsSync(path.join(dir, 'graphify-out', 'graph.json'))
+  const { model } = parseSessionContent(media.content)
+  const prompt = hasGraph
+    ? `graphify skill'ini (Skill tool, skill adı "graphify") --update (artımlı) modunda geçerli çalışma dizinindeki ./raw klasörü üzerinde çalıştır. Yalnızca yeni eklenen veya içeriği değişen dosyaları yeniden işle, silinen dosyaların düğümlerini mevcut grafdan çıkar ve sonucu mevcut graphify-out/graph.json ile birleştir; ardından clustering ve GRAPH_REPORT.md'yi tazele. Bana hiçbir şey sorma, onay bekleme — doğrudan yap. Bittiğinde tek satırla kaç node ve kaç community olduğunu söyle.`
+    : `graphify skill'ini (Skill tool, skill adı "graphify") geçerli çalışma dizinindeki ./raw klasörü üzerinde çalıştır ve bilgi grafını kur. Tam pipeline'ı uygula: detect → extract → cluster → report → graph.json + GRAPH_REPORT.md üret. Çıktılar graphify-out/ altına yazılmalı. Bana hiçbir şey sorma, onay bekleme — doğrudan kur. Bittiğinde tek satırla kaç node ve kaç community oluştuğunu söyle.`
+
+  streamClaudeToSSE(res, [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', cliModel(model),
+    '--dangerously-skip-permissions',
+    prompt,
+  ], {
+    cwd: dir,
+    onEvent: (ev) => {
+      if (ev.type === 'result') {
+        const cur = parseSessionContent(media.content)
+        const status = roomGraphStatus(roomId)
+        prisma.media.update({
+          where: { id: media.id },
+          data: { content: formatSessionContent({ ...cur, graphBuiltAt: new Date().toISOString(), nodeCount: status.nodeCount }) },
+        }).catch(err => console.error('[roomchat] graf kaydı hatası:', err.message))
+      }
+    },
+  })
+})
+
+// roomchat mesajı — odanın grafı + ham metni system prompt'a enjekte edilir
+app.post('/api/roomchat/message', async (req, res) => {
+  const { mediaId, message } = req.body
+  if (!message?.trim()) return res.status(400).json({ error: 'Mesaj gerekli' })
+
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } }) } catch {}
+  if (!media || media.type !== 'roomchat') return res.status(404).json({ error: 'Oda sohbeti bulunamadı' })
+
+  const settings = parseSessionContent(media.content)
+  const roomId = media.roomId
+  const dir = roomGraphDir(roomId)
+
+  let sys = `Sen bu sanal odanın asistanısın. Yalnızca bu odadaki metin ve canvas yazılarından oluşturulan bilgiyle konuş. Genel bilgini yalnızca odanın içeriğinde cevap yoksa kullan ve bunu açıkça belirt. Cevaplarını Türkçe ver, kısa ve net ol.`
+
+  const reportPath = path.join(dir, 'graphify-out', 'GRAPH_REPORT.md')
+  if (fs.existsSync(reportPath)) {
+    try { sys += `\n\n# Oda Bilgi Grafı Raporu\n${fs.readFileSync(reportPath, 'utf8')}` } catch {}
+  }
+
+  const docs = await extractRoomTexts(roomId)
+  if (docs.length) sys += `\n\n# Oda İçeriği (kaynak metinler)\n${roomCorpusText(docs)}`
+
+  const graphJson = path.join(dir, 'graphify-out', 'graph.json')
+  if (fs.existsSync(graphJson)) {
+    sys += `\n\nDaha derin ilişkiler için odanın grafı: ${graphJson} — gerekirse \`graphify query "<soru>"\` çalıştırabilirsin.`
+  }
+
+  const args = [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', cliModel(settings.model),
+    '--append-system-prompt', sys,
+    '--dangerously-skip-permissions',
+  ]
+  if (settings.sessionId) args.push('--resume', settings.sessionId)
+  args.push(message.trim())
+
+  const envOverrides = {}
+  if (settings.effort && settings.effort !== 'normal') {
+    envOverrides.CLAUDE_EFFORT = settings.effort
+  }
+
+  streamClaudeToSSE(res, args, {
+    envOverrides,
+    onEvent: (ev) => {
+      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
+        settings.sessionId = ev.session_id
+        prisma.media.update({
+          where: { id: BigInt(mediaId) },
+          data: { content: formatSessionContent({ ...settings, sessionId: ev.session_id }) },
+        }).catch(err => console.error('[roomchat] kayıt hatası:', err.message))
+      }
+    },
+  })
+})
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 await bootMigrate();
