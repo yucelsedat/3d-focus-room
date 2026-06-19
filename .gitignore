@@ -27,7 +27,8 @@ dist-ssr
 public/uploads/*
 public/data/media.json
 
-# SQLite journal files (dev.db itself is kept for data persistence)
+# SQLite database & journal files (untracked — local dev data; recreate via `npm run migrate`)
+prisma/dev.db
 prisma/*.db-journal
 prisma/*.db-shm
 prisma/*.db-wal
