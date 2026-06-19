@@ -35,3 +35,6 @@ prisma/*.db-wal
 # Graphify generated outputs (regeneratable artifacts)
 graphify-out/*
 !graphify-out/GRAPH_REPORT.md
+
+# Per-room roomchat knowledge graphs (regeneratable from room content)
+room-graphs/

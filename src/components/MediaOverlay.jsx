@@ -726,6 +726,430 @@ function SessionMesh({ id, width, height }) {
   )
 }
 
+function RoomChatMesh({ id, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+  const pxWidth  = Math.round(w * SESSION_PX_PER_UNIT)
+  const pxHeight = Math.round(h * SESSION_PX_PER_UNIT)
+  const scaleFactor = w * 40 / pxWidth
+
+  const MODELS = [
+    { value: 'claude-fable-5',           label: 'Fable 5' },
+    { value: 'claude-opus-4-8',          label: 'Opus 4.8' },
+    { value: 'claude-sonnet-4-6',        label: 'Sonnet 4.6' },
+    { value: 'claude-haiku-4-5-20251001',label: 'Haiku 4.5' },
+  ]
+
+  const [messages, setMessages]       = useState([])
+  const [streaming, setStreaming]     = useState(false)
+  const [thinking, setThinking]       = useState(false)
+  const [connected, setConnected]     = useState(false)
+  const [error, setError]             = useState(null)
+  const [model, setModel]             = useState('claude-fable-5')
+  const [effort, setEffort]           = useState('normal')
+  const [contextTokens, setContextTokens] = useState(null)
+  const [graph, setGraph]             = useState({ exists: false, nodeCount: 0, builtAt: null })
+  const [rebuilding, setRebuilding]   = useState(false)
+  const [rebuildLog, setRebuildLog]   = useState('')
+  const msgListRef  = useRef(null)
+  const inputRef    = useRef(null)
+  const activeAiRef = useRef(null)
+
+  useEffect(() => {
+    const el = msgListRef.current
+    if (!el) return
+    const raf = requestAnimationFrame(() => { el.scrollTop = el.scrollHeight })
+    return () => cancelAnimationFrame(raf)
+  }, [messages, thinking])
+
+  const saveSetting = (key, value) => {
+    fetch(`/api/roomchat/${id}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    }).catch(() => {})
+  }
+
+  const loadHistory = (signal) => {
+    fetch(`/api/roomchat/${id}/history`, signal ? { signal } : undefined)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { setError(data.error); return }
+        setConnected(true)
+        if (data.model)  setModel(data.model)
+        if (data.effort) setEffort(data.effort)
+        if (data.graph)  setGraph(data.graph)
+        setMessages((data.messages || []).map(m => ({
+          id: m.id, role: m.role === 'assistant' ? 'ai' : m.role,
+          content: m.text, toolName: m.toolName
+        })))
+      })
+      .catch(() => {})
+  }
+
+  useEffect(() => {
+    const ctrl = new AbortController()
+    loadHistory(ctrl.signal)
+    return () => ctrl.abort()
+  }, [id])
+
+  // "Güncelle" — odanın metinlerinden grafı yeniden kur
+  const rebuild = async () => {
+    if (rebuilding || streaming) return
+    setRebuilding(true)
+    setRebuildLog('Oda metinleri toplanıyor…')
+    try {
+      const resp = await fetch(`/api/roomchat/${id}/rebuild`, { method: 'POST' })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        setRebuildLog('Hata: ' + (err.error || `HTTP ${resp.status}`))
+        return
+      }
+      const reader  = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          try {
+            const ev = JSON.parse(raw)
+            if (ev.type === 'done') break
+            if (ev.type === 'error') { setRebuildLog('Hata: ' + ev.message); continue }
+            if (ev.type === 'assistant') {
+              const blocks = ev.message?.content ?? []
+              const text = blocks.find(b => b.type === 'text' && b.text)?.text
+              if (text) setRebuildLog(text.slice(0, 160))
+              const tool = blocks.find(b => b.type === 'tool_use')
+              if (tool) setRebuildLog('⚙ ' + (tool.input?.command || tool.input?.description || tool.name || 'çalışıyor…').slice(0, 140))
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setRebuildLog('Hata: ' + err.message)
+    } finally {
+      setRebuilding(false)
+      loadHistory()
+    }
+  }
+
+  const submit = async () => {
+    const msg = inputRef.current?.value?.trim() ?? ''
+    if (!msg || streaming || rebuilding) return
+    if (inputRef.current) inputRef.current.value = ''
+
+    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: msg }])
+    setStreaming(true)
+    setThinking(false)
+    activeAiRef.current = null
+    const streamSeenIds = new Set()
+
+    try {
+      const resp = await fetch('/api/roomchat/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaId: id, message: msg }),
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        setMessages(prev => [...prev, { id: `e-${Date.now()}`, role: 'error', content: err.error || `HTTP ${resp.status}` }])
+        return
+      }
+
+      const reader  = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          try {
+            const ev = JSON.parse(raw)
+            if (ev.type === 'done') break
+
+            if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
+
+            if (ev.type === 'assistant') {
+              const msgId  = ev.message?.id
+              const blocks = ev.message?.content ?? []
+              const hasText  = blocks.some(b => b.type === 'text' && b.text)
+              const hasThink = blocks.some(b => b.type === 'thinking')
+
+              if (hasThink && !hasText) setThinking(true)
+
+              if (hasText) {
+                setThinking(false)
+                const text = blocks.find(b => b.type === 'text').text
+                if (!streamSeenIds.has(msgId)) {
+                  streamSeenIds.add(msgId)
+                  const newId = `stream-${msgId}`
+                  activeAiRef.current = { id: newId, msgId }
+                  setMessages(prev =>
+                    prev.some(m => m.id === newId) ? prev
+                      : [...prev, { id: newId, role: 'ai', content: text }]
+                  )
+                } else if (activeAiRef.current?.msgId === msgId) {
+                  const eid = activeAiRef.current.id
+                  setMessages(prev => prev.map(m => m.id === eid ? { ...m, content: text } : m))
+                }
+              }
+
+              for (const b of blocks.filter(b => b.type === 'tool_use')) {
+                const tid = `stream-tc-${b.id}`
+                const cmd = b.input?.command || b.input?.description || b.name
+                setMessages(prev =>
+                  prev.some(m => m.id === tid) ? prev
+                    : [...prev, { id: tid, role: 'tool_call', content: cmd, toolName: b.name }]
+                )
+              }
+            }
+
+            if (ev.type === 'tool') {
+              const tid = `stream-tr-${ev.tool_use_id}`
+              const out = ev.content?.[0]?.text ?? ''
+              setMessages(prev =>
+                prev.some(m => m.id === tid) ? prev
+                  : [...prev, { id: tid, role: 'tool_result', content: out }]
+              )
+            }
+
+            if (ev.type === 'result' && ev.usage) {
+              const used = (ev.usage.input_tokens || 0) + (ev.usage.cache_read_input_tokens || 0) + (ev.usage.cache_creation_input_tokens || 0)
+              setContextTokens({ used, window: 200000 })
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { id: `e-${Date.now()}`, role: 'error', content: err.message }])
+    } finally {
+      setStreaming(false)
+      setThinking(false)
+      activeAiRef.current = null
+      setTimeout(() => inputRef.current?.focus(), 50)
+    }
+  }
+
+  const onKeyDown = (e) => {
+    e.stopPropagation()
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
+  }
+
+  const fmtBuilt = (iso) => {
+    if (!iso) return null
+    try {
+      const d = new Date(iso)
+      return d.toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    } catch { return null }
+  }
+
+  const px = { pointerEvents: 'auto' }
+  const ACC = '#a78bfa'
+
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      <Html transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
+        <style>{`
+          @keyframes sBar{0%{left:-40%}100%{left:110%}}
+          @keyframes sDot{0%,80%,100%{opacity:0.2}40%{opacity:1}}
+          @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+
+          .session-markdown h1, .session-markdown h2, .session-markdown h3 { margin: 12px 0 6px 0; font-weight: bold; }
+          .session-markdown h1 { font-size: 1.4em; }
+          .session-markdown h2 { font-size: 1.2em; }
+          .session-markdown h3 { font-size: 1.1em; }
+          .session-markdown strong { color: ${ACC}; font-weight: bold; }
+          .session-markdown em { color: #c4b5fd; font-style: italic; }
+          .session-markdown code { background: #0a0a0a; border: 1px solid #3a2e5e; padding: 2px 4px; border-radius: 3px; color: #c4b5fd; font-family: monospace; }
+          .session-markdown pre { background: #0a0a0a; border: 1px solid #3a2e5e; border-radius: 4px; padding: 8px 10px; overflow-x: auto; margin: 8px 0; }
+          .session-markdown pre code { background: none; border: none; padding: 0; color: #c4b5fd; }
+          .session-markdown ul, .session-markdown ol { margin: 6px 0; padding-left: 20px; }
+          .session-markdown li { margin: 3px 0; }
+          .session-markdown blockquote { border-left: 3px solid #5a2a8a; padding-left: 10px; margin: 6px 0; color: #a0a0a0; }
+          .session-markdown a { color: ${ACC}; text-decoration: underline; }
+          .session-markdown p { margin: 4px 0; }
+        `}</style>
+        <div
+          style={{
+            width: `${pxWidth}px`, height: `${pxHeight}px`,
+            backgroundColor: '#0d0a14', borderRadius: '8px',
+            border: `1px solid ${connected ? '#3a2e5e' : '#2a1a1a'}`,
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            fontFamily: 'system-ui, sans-serif', pointerEvents: 'auto',
+          }}
+          onClick={e => e.stopPropagation()}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div style={{ padding: '6px 10px', background: 'linear-gradient(135deg,#2a1a3a,#1a0d2d)', borderBottom: `1px solid #3a2e5e`, display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, flexWrap: 'wrap', ...px }}>
+            <span style={{ fontSize: '26px' }}>🧠</span>
+            <span style={{ color: ACC, fontWeight: 600, fontSize: '22px' }}>Oda Sohbeti</span>
+            <span style={{ color: '#3a2e5e', fontSize: '20px' }}>#{ String(id).slice(-4) }</span>
+
+            <select
+              value={model}
+              onChange={e => { setModel(e.target.value); saveSetting('model', e.target.value) }}
+              onClick={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
+              style={{ background: '#1a0d2d', border: `1px solid #5a3a8a`, color: ACC, borderRadius: '4px', fontSize: '20px', padding: '2px 6px', cursor: 'pointer', pointerEvents: 'auto', outline: 'none' }}
+            >
+              {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+
+            <div style={{ display: 'flex', gap: '3px', ...px }}>
+              {[['low','↓'],['normal','→'],['high','↑']].map(([val, icon]) => (
+                <button
+                  key={val}
+                  onClick={e => { e.stopPropagation(); setEffort(val); saveSetting('effort', val) }}
+                  onPointerDown={e => e.stopPropagation()}
+                  title={val === 'low' ? 'Düşük effort' : val === 'normal' ? 'Normal effort' : 'Yüksek effort'}
+                  style={{
+                    padding: '2px 6px', borderRadius: '4px', fontSize: '20px', cursor: 'pointer',
+                    border: effort === val ? `1px solid ${ACC}` : '1px solid #3a2e5e',
+                    background: effort === val ? 'rgba(167,139,250,0.2)' : 'transparent',
+                    color: effort === val ? ACC : '#6a5a8a', pointerEvents: 'auto',
+                  }}
+                >{icon} {val}</button>
+              ))}
+            </div>
+
+            <button
+              onClick={e => { e.stopPropagation(); rebuild() }}
+              onPointerDown={e => e.stopPropagation()}
+              disabled={rebuilding || streaming}
+              title="Odanın metinlerinden bilgi grafını yeniden oluştur"
+              style={{
+                marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px',
+                padding: '3px 10px', borderRadius: '5px', fontSize: '20px',
+                border: `1px solid ${ACC}`, cursor: (rebuilding || streaming) ? 'not-allowed' : 'pointer',
+                background: rebuilding ? 'rgba(167,139,250,0.25)' : 'rgba(167,139,250,0.1)',
+                color: ACC, pointerEvents: 'auto', opacity: (rebuilding || streaming) ? 0.6 : 1,
+              }}
+            >
+              <span style={{ display: 'inline-block', animation: rebuilding ? 'spin 1s linear infinite' : 'none' }}>⟳</span>
+              {rebuilding ? 'Kuruluyor…' : 'Güncelle'}
+            </button>
+          </div>
+
+          {/* Graf durumu / rebuild log */}
+          <div style={{ padding: '4px 10px 5px', background: '#0a0712', borderBottom: `1px solid #3a2e5e`, flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px', ...px }}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: graph.exists ? '#4ade80' : '#6a5a8a', display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ color: graph.exists ? '#9a8ac0' : '#6a5a8a', fontSize: '18px', flexShrink: 0 }}>
+              {graph.exists ? `graf: ${graph.nodeCount} düğüm${fmtBuilt(graph.builtAt) ? ' · ' + fmtBuilt(graph.builtAt) : ''}` : 'graf yok — Güncelle ile kur'}
+            </span>
+            {rebuilding && rebuildLog && (
+              <span style={{ color: ACC, fontSize: '18px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, fontFamily: 'monospace' }}>
+                {rebuildLog}
+              </span>
+            )}
+          </div>
+
+          {/* Loading bar */}
+          {(streaming || rebuilding) && (
+            <div style={{ position: 'relative', height: '3px', background: '#3a2e5e', flexShrink: 0, overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', top: 0, height: '100%', width: '40%', background: `linear-gradient(90deg,transparent,${ACC},transparent)`, animation: 'sBar 1.4s linear infinite' }} />
+            </div>
+          )}
+
+          {/* Context used bar */}
+          {contextTokens && (() => {
+            const pct = Math.min(contextTokens.used / contextTokens.window, 1)
+            const pctRound = Math.round(pct * 100)
+            const barColor = pct < 0.6 ? '#4ade80' : pct < 0.85 ? '#fbbf24' : '#f87171'
+            const kStr = contextTokens.used >= 1000 ? `${(contextTokens.used / 1000).toFixed(1)}k` : String(contextTokens.used)
+            return (
+              <div style={{ padding: '4px 10px 5px', background: '#0a0712', borderBottom: `1px solid #3a2e5e`, flexShrink: 0, ...px }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                  <span style={{ color: '#6a5a8a', fontSize: '18px' }}>context</span>
+                  <span style={{ color: barColor, fontSize: '18px', fontVariantNumeric: 'tabular-nums' }}>{kStr} / 200k &nbsp;{pctRound}%</span>
+                </div>
+                <div style={{ height: '4px', background: '#3a2e5e', borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${pct * 100}%`, background: barColor, borderRadius: '2px', transition: 'width 0.4s ease, background 0.4s ease' }} />
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Messages */}
+          <div ref={msgListRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', ...px }}>
+            {messages.length === 0 && !streaming && (
+              <div style={{ color: error ? '#f87171' : '#5a4a7a', fontSize: '22px', textAlign: 'center', marginTop: '16px' }}>
+                {error || (graph.exists
+                  ? 'Bu odanın içeriği hakkında soru sor.'
+                  : 'Önce ⟳ Güncelle ile odanın grafını kur, sonra sohbet et.')}
+              </div>
+            )}
+            {messages.map(m => <SessionMessageBubble key={m.id} msg={m} />)}
+            {thinking && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 10px', background: '#150a20', border: `1px solid #3a2e5e`, borderRadius: '10px 10px 10px 2px', width: 'fit-content' }}>
+                <span style={{ color: ACC, fontSize: '22px' }}>🧠</span>
+                {[0, 150, 300].map(delay => (
+                  <span key={delay} style={{ width: '5px', height: '5px', borderRadius: '50%', background: ACC, display: 'inline-block', animation: `sDot 1.2s ${delay}ms ease-in-out infinite` }} />
+                ))}
+              </div>
+            )}
+            {streaming && !thinking && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 10px', background: '#150a20', border: `1px solid #3a2e5e`, borderRadius: '10px 10px 10px 2px', width: 'fit-content' }}>
+                <span style={{ color: '#6a5a8a', fontSize: '22px' }}>⏳ Yanıt bekleniyor...</span>
+              </div>
+            )}
+          </div>
+
+          {/* Input */}
+          <div style={{ padding: '8px 10px', borderTop: `1px solid #3a2e5e`, display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0, background: '#0a0712', ...px }}>
+            <textarea
+              ref={inputRef}
+              onKeyDown={onKeyDown}
+              onClick={e => e.stopPropagation()}
+              placeholder={streaming ? 'Yanıt bekleniyor...' : rebuilding ? 'Graf kuruluyor...' : 'Oda hakkında soru sor... (Enter: gönder)'}
+              disabled={streaming || rebuilding || !connected}
+              style={{
+                flex: 1, background: '#1a0d2d',
+                border: `1px solid ${(streaming || rebuilding) ? '#3a2e5e' : '#5a3a8a'}`,
+                borderRadius: '5px', color: (streaming || rebuilding) ? '#6a5a8a' : '#e0e0e0', fontSize: '24px',
+                padding: '7px 9px', resize: 'none', outline: 'none',
+                fontFamily: 'system-ui, sans-serif', lineHeight: '1.4', height: '52px',
+                boxSizing: 'border-box', pointerEvents: 'auto',
+              }}
+            />
+            <button
+              onClick={(e) => { e.stopPropagation(); submit() }}
+              disabled={streaming || rebuilding || !connected}
+              style={{
+                background: (streaming || rebuilding || !connected) ? '#3a2e5e' : 'linear-gradient(135deg,#7c3aed,#a78bfa)',
+                border: 'none', borderRadius: '5px', color: '#fff', padding: '0 14px',
+                cursor: (streaming || rebuilding || !connected) ? 'not-allowed' : 'pointer',
+                fontSize: '32px', height: '52px', flexShrink: 0, pointerEvents: 'auto',
+              }}
+            >
+              {streaming ? '⏳' : '→'}
+            </button>
+          </div>
+        </div>
+      </Html>
+    </mesh>
+  )
+}
+
 function GifMesh({ url, width, height }) {
   const pxWidth  = 600
   const pxHeight = 600 * (height / width)
@@ -759,7 +1183,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isCanvas   = type === 'canvas'
   const isHeader   = type === 'header'
   const isSession  = type === 'session'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession
+  const isRoomChat = type === 'roomchat'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -772,6 +1197,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
           <HeaderMesh id={id} content={content} width={width} height={height} />
         ) : isSession ? (
           <SessionMesh id={id} width={width} height={height} />
+        ) : isRoomChat ? (
+          <RoomChatMesh id={id} width={width} height={height} />
         ) : isCanvas ? (
           <CanvasMesh id={id} content={content} width={width} height={height} />
         ) : isMarkdown ? (
