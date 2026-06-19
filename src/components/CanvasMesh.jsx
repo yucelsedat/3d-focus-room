@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { Marked } from 'marked'
@@ -118,6 +119,11 @@ export default function CanvasMesh({ id, content, width, height }) {
   const [items, setItems]                   = useState(initial.items || [])
   const [bg]                                = useState(initial.bg || '#1a1a2e')
   const [isEditMode, setIsEditMode]         = useState(false)
+  const [isFullscreen, setIsFullscreen]     = useState(false)
+  const isFullscreenRef                     = useRef(false)
+  const [readerItemId, setReaderItemId]     = useState(null) // text item shown in fullscreen reader modal
+  const [readerEditing, setReaderEditing]   = useState(false) // reader modal in edit (textarea) mode
+  const readerItemIdRef                     = useRef(null)
 
   // viewport
   const [pan, setPan]                       = useState(initial.pan  || { x: 0, y: 0 })
@@ -189,6 +195,8 @@ export default function CanvasMesh({ id, content, width, height }) {
   useEffect(() => { itemsRef.current = items }, [items])
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
   useEffect(() => { isEditModeRef.current = isEditMode }, [isEditMode])
+  useEffect(() => { isFullscreenRef.current = isFullscreen }, [isFullscreen])
+  useEffect(() => { readerItemIdRef.current = readerItemId }, [readerItemId])
   useEffect(() => { showColorPickerRef.current = showColorPicker }, [showColorPicker])
   useEffect(() => {
     panRef.current = pan
@@ -224,6 +232,8 @@ export default function CanvasMesh({ id, content, width, height }) {
   useEffect(() => {
     const handler = (e) => {
       if (!isEditModeRef.current) return
+      // reader modal open → let the wheel scroll the modal, don't pan/zoom the canvas
+      if (readerItemIdRef.current) return
       const el = containerRef.current
       // canvas sınırları dışındaki wheel'leri yoksay
       if (el) {
@@ -252,7 +262,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   useEffect(() => {
     if (!isEditMode) return
     const onKey = e => {
-      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); if (showColorPickerRef.current) { setShowColorPicker(null); return } exitEdit(); return }
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); if (readerItemIdRef.current) { setReaderItemId(null); setReaderEditing(false); return } if (showColorPickerRef.current) { setShowColorPicker(null); return } if (isFullscreenRef.current) { setIsFullscreen(false); return } exitEdit(); return }
       const active = document.activeElement
       if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') return
       const ctrl = e.ctrlKey || e.metaKey
@@ -418,7 +428,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   }, [isEditMode])
 
   const exitEdit = () => {
-    setIsEditMode(false); setEditingItemId(null)
+    setIsEditMode(false); setIsFullscreen(false); setReaderItemId(null); setReaderEditing(false); setEditingItemId(null)
     setShowUrlInput(false); setUrlValue('')
     setShowRoomSearch(false); setRoomSearchText('')
     setIsPanning(false); setDragState(null); setResizeState(null)
@@ -720,6 +730,10 @@ export default function CanvasMesh({ id, content, width, height }) {
   const markerId = `arr-${id}`, markerIdPre = `arr-pre-${id}`
   const surfTx = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
 
+  // In fullscreen the editor escapes the 3D <Html> transform and renders as a
+  // fixed full-window overlay via a portal to <body>.
+  const renderEdit = (el) => (isFullscreen ? createPortal(el, document.body) : el)
+
   // bounding box for current selection (box items only)
   const bounds       = getBounds(selectedIds, items)
   const hasBoxSel    = selectedIds.size > 0 && bounds !== null
@@ -731,6 +745,9 @@ export default function CanvasMesh({ id, content, width, height }) {
   const commonTextColor = selTextItems.length > 0 && selTextItems.every(it => it.color === selTextItems[0].color) ? (selTextItems[0].color || '#e2e8f0') : null
   const commonBgColor   = selTextItems.length > 0 && selTextItems.every(it => it.bgColor === selTextItems[0].bgColor) ? (selTextItems[0].bgColor ?? null) : null
   const markdownActive  = selTextItems.length > 0 && selTextItems.every(it => it.markdown)
+
+  // text item currently shown in the fullscreen reader modal
+  const readerItem = readerItemId ? items.find(it => it.id === readerItemId && it.type === 'text') : null
 
   // ── Arrow SVG layer ───────────────────────────────────────────────────────
   const ArrowLayer = ({ editMode }) => (
@@ -893,13 +910,18 @@ export default function CanvasMesh({ id, content, width, height }) {
         )}
 
         {/* ══ EDIT MODE ════════════════════════════════════════════════════ */}
-        {isEditMode && (
+        {isEditMode && renderEdit(
           <div ref={containerRef}
-            style={{ width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', boxShadow: '0 0 0 3px rgba(96,165,250,0.45)' }}
+            style={isFullscreen
+              ? { position: 'fixed', inset: 0, width: '100vw', height: '100vh', backgroundColor: bg, overflow: 'hidden', pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', zIndex: 2147483600 }
+              : { width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', boxShadow: '0 0 0 3px rgba(96,165,250,0.45)' }}
             onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onClick={stop}
           >
             {/* ── Toolbar ───────────────────────────────────────────────── */}
-            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: tbH, background: 'rgba(5,5,15,0.92)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', gap: 14, padding: '0 20px', zIndex: 20, boxSizing: 'border-box', borderBottom: '1px solid rgba(96,165,250,0.18)' }}
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: tbH, background: 'rgba(5,5,15,0.92)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', gap: 14, padding: '0 20px', zIndex: 20, boxSizing: 'border-box', borderBottom: '1px solid rgba(96,165,250,0.18)', overflowX: isFullscreen ? 'auto' : 'visible', overflowY: 'hidden',
+              // fullscreen: buttons are rendered 1:1 so the row is physically large — zoom the
+              // whole bar down (width/height compensated so the bar still fills the top edge).
+              ...(isFullscreen ? { zoom: FS_TB_ZOOM, width: `${100 / FS_TB_ZOOM}%`, height: tbH / FS_TB_ZOOM } : {}) }}
               onMouseDown={stop}>
 
               <button onMouseDown={stop} onClick={addText} style={tbBtn}>✏️ Metin</button>
@@ -919,6 +941,14 @@ export default function CanvasMesh({ id, content, width, height }) {
                 {Math.round(zoom * 100)}%
               </span>
               <button onMouseDown={stop} onClick={(e) => { stop(e); zoomStep(1) }} style={{ ...tbBtn, padding: '0 16px', fontSize: 30 }}>+</button>
+
+              <div style={div} />
+
+              <button onMouseDown={stop} onClick={(e) => { stop(e); setIsFullscreen(v => !v) }}
+                title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
+                style={{ ...tbBtn, padding: '0 16px', ...(isFullscreen ? act : {}) }}>
+                {isFullscreen ? '🗗 Çık' : '⛶ Tam ekran'}
+              </button>
 
               {/* selected items actions */}
               {hasBoxSel && !drawMode && !showUrlInput && !showRoomSearch && (
@@ -954,6 +984,12 @@ export default function CanvasMesh({ id, content, width, height }) {
                           color: markdownActive ? '#93c5fd' : 'rgba(148,163,184,0.55)',
                         }}>
                         <span style={{ fontSize: 22, fontWeight: 700, fontFamily: 'monospace', letterSpacing: -1 }}>M↓</span>
+                      </button>
+                      {/* fullscreen reader button — opens the text in a centered, scrollable modal */}
+                      <button onMouseDown={stop} onClick={(e) => { stop(e); setReaderEditing(false); setReaderItemId(selTextItems[0].id) }}
+                        title="Tam ekran oku"
+                        style={{ ...tbBtn, padding: '0 16px' }}>
+                        <span style={{ fontSize: 24 }}>⛶</span>
                       </button>
                     </>
                   )}
@@ -1157,11 +1193,84 @@ export default function CanvasMesh({ id, content, width, height }) {
             </div>
           </div>
         )}
+
+        {/* ══ FULLSCREEN TEXT READER MODAL ══════════════════════════════════ */}
+        {/* Rendered inside <Html> so createPortal runs in the react-dom (not R3F)
+            reconciler — otherwise <button>/<div> are treated as THREE objects. */}
+        {readerItem && createPortal((() => {
+          const readerFs = Math.max(16, Math.round((readerItem.fontSize || 30) * 0.62))
+          const closeReader = () => { setReaderItemId(null); setReaderEditing(false) }
+          return (
+        <div
+          onMouseDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) closeReader() }}
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 2147483646,
+            background: 'rgba(8,8,18,0.82)',
+            display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
+            pointerEvents: 'auto',
+          }}
+        >
+          {/* edit / preview toggle */}
+          <button onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); setReaderEditing(v => !v) }}
+            title={readerEditing ? 'Önizle' : 'Düzenle'}
+            style={{ position: 'fixed', top: 24, right: 96, height: 56, padding: '0 18px', borderRadius: 12, border: '1px solid rgba(96,165,250,0.4)', background: readerEditing ? 'rgba(96,165,250,0.22)' : 'rgba(20,20,32,0.7)', color: readerEditing ? '#93c5fd' : '#e2e8f0', fontSize: 22, cursor: 'pointer', lineHeight: 1, zIndex: 1 }}>
+            {readerEditing ? '👁 Önizle' : '✎ Düzenle'}
+          </button>
+
+          {/* close button */}
+          <button onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); closeReader() }}
+            title="Kapat (ESC)"
+            style={{ position: 'fixed', top: 24, right: 28, width: 56, height: 56, borderRadius: 12, border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(20,20,32,0.7)', color: '#e2e8f0', fontSize: 30, cursor: 'pointer', lineHeight: 1, zIndex: 1 }}>
+            ✕
+          </button>
+
+          {/* scrollable column — 50% viewport width, centered */}
+          <div
+            style={{
+              width: '50%', minWidth: 320, maxHeight: '100vh', overflowY: 'auto',
+              boxSizing: 'border-box', padding: '64px 8px 96px',
+              color: readerItem.color || '#e2e8f0',
+              fontSize: readerFs,
+              lineHeight: 1.6, wordBreak: 'break-word',
+            }}
+          >
+            {readerEditing ? (
+              <textarea autoFocus defaultValue={readerItem.content}
+                ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }}
+                placeholder="Metin yazın…"
+                onMouseDown={(e) => e.stopPropagation()}
+                onInput={(e) => {
+                  e.target.style.height = 'auto'
+                  e.target.style.height = e.target.scrollHeight + 'px'
+                  const val = e.target.value
+                  setItems(prev => { const next = prev.map(it => it.id === readerItem.id ? { ...it, content: val } : it); scheduleSave(next, bgRef.current); return next })
+                }}
+                style={{
+                  width: '100%', minHeight: '60vh', boxSizing: 'border-box',
+                  background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(96,165,250,0.4)', borderRadius: 8,
+                  color: readerItem.color || '#e2e8f0', fontSize: readerFs, lineHeight: 1.6,
+                  padding: 18, resize: 'none', outline: 'none', overflow: 'hidden', display: 'block',
+                  fontFamily: 'inherit',
+                }}
+              />
+            ) : readerItem.markdown && readerItem.content
+              ? <div className="cvmd" dangerouslySetInnerHTML={{ __html: parseMd(readerItem.content) }} />
+              : <div style={{ whiteSpace: 'pre-wrap' }}>{readerItem.content}</div>}
+          </div>
+        </div>
+          )
+        })(),
+        document.body
+      )}
       </Html>
     </>
   )
 }
 
+// fullscreen toolbar zoom factor — shrinks the 1:1-rendered button row so all buttons fit
+const FS_TB_ZOOM = 0.6
 const tbBtn = { height: 54, padding: '0 22px', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', borderRadius: 8, color: '#e2e8f0', fontSize: 26, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }
 const act   = { background: 'rgba(96,165,250,0.22)', borderColor: 'rgba(96,165,250,0.55)', color: '#93c5fd' }
 const div   = { width: 1, height: 36, background: 'rgba(255,255,255,0.12)', flexShrink: 0 }
