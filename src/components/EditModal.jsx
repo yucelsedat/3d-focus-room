@@ -54,6 +54,7 @@ export function EditModal() {
   const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label }
   const [sessionModel, setSessionModel]   = useState('claude-fable-5')
   const [sessionEffort, setSessionEffort] = useState('normal')
+  const [sessionPermMode, setSessionPermMode] = useState('bypassPermissions')
   const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
@@ -243,6 +244,7 @@ export function EditModal() {
             rotation: JSON.stringify(selectedTile.rotation),
             model: sessionModel,
             effort: sessionEffort,
+            permissionMode: sessionPermMode,
           })
         })
         const d = await r.json()
@@ -275,6 +277,7 @@ export function EditModal() {
             rotation: JSON.stringify(selectedTile.rotation),
             model: sessionModel,
             effort: sessionEffort,
+            permissionMode: sessionPermMode,
           })
         })
         const d = await r.json()
@@ -849,6 +852,18 @@ export function EditModal() {
                     ))}
                   </div>
                 </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>İzin modu</label>
+                  <select
+                    value={sessionPermMode}
+                    onChange={e => setSessionPermMode(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    <option value="bypassPermissions">Bypass — tüm izinleri atla</option>
+                    <option value="acceptEdits">Accept edits — düzenlemeleri otomatik kabul</option>
+                    <option value="plan">Plan — değişiklik yapmaz, yalnızca planlar</option>
+                  </select>
+                </div>
               </div>
             </div>
           )}
@@ -891,6 +906,18 @@ export function EditModal() {
                       >{label}</button>
                     ))}
                   </div>
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>İzin modu</label>
+                  <select
+                    value={sessionPermMode}
+                    onChange={e => setSessionPermMode(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    <option value="bypassPermissions">Bypass — tüm izinleri atla</option>
+                    <option value="acceptEdits">Accept edits — düzenlemeleri otomatik kabul</option>
+                    <option value="plan">Plan — değişiklik yapmaz, yalnızca planlar</option>
+                  </select>
                 </div>
               </div>
             </div>

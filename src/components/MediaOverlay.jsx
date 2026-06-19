@@ -406,6 +406,7 @@ function SessionMesh({ id, width, height }) {
   const [error, setError]             = useState(null)
   const [model, setModel]             = useState('claude-fable-5')
   const [effort, setEffort]           = useState('normal')
+  const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
@@ -439,6 +440,7 @@ function SessionMesh({ id, width, height }) {
         setConnected(true)
         if (data.model)  setModel(data.model)
         if (data.effort) setEffort(data.effort)
+        if (data.permissionMode) setPermMode(data.permissionMode)
         setMessages((data.messages || []).map(m => ({
           id: m.id, role: m.role === 'assistant' ? 'ai' : m.role,
           content: m.text, toolName: m.toolName
@@ -633,6 +635,20 @@ function SessionMesh({ id, width, height }) {
               ))}
             </div>
 
+            {/* Permission mode selector */}
+            <select
+              value={permMode}
+              onChange={e => { setPermMode(e.target.value); saveSetting('permissionMode', e.target.value) }}
+              onClick={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
+              title="İzin modu"
+              style={{ background: '#0d1f2d', border: '1px solid #2a5a8a', color: '#60a5fa', borderRadius: '4px', fontSize: '20px', padding: '2px 6px', cursor: 'pointer', pointerEvents: 'auto', outline: 'none' }}
+            >
+              <option value="bypassPermissions">🔓 bypass</option>
+              <option value="acceptEdits">✎ accept edits</option>
+              <option value="plan">📋 plan</option>
+            </select>
+
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: connected ? '#4ade80' : '#ef4444', display: 'inline-block' }} />
               <span style={{ color: connected ? '#4ade80' : '#ef4444', fontSize: '18px' }}>
@@ -747,6 +763,7 @@ function RoomChatMesh({ id, width, height }) {
   const [error, setError]             = useState(null)
   const [model, setModel]             = useState('claude-fable-5')
   const [effort, setEffort]           = useState('normal')
+  const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
   const [graph, setGraph]             = useState({ exists: false, nodeCount: 0, builtAt: null })
   const [rebuilding, setRebuilding]   = useState(false)
@@ -778,6 +795,7 @@ function RoomChatMesh({ id, width, height }) {
         setConnected(true)
         if (data.model)  setModel(data.model)
         if (data.effort) setEffort(data.effort)
+        if (data.permissionMode) setPermMode(data.permissionMode)
         if (data.graph)  setGraph(data.graph)
         setMessages((data.messages || []).map(m => ({
           id: m.id, role: m.role === 'assistant' ? 'ai' : m.role,
@@ -1031,6 +1049,20 @@ function RoomChatMesh({ id, width, height }) {
                 >{icon} {val}</button>
               ))}
             </div>
+
+            {/* Permission mode selector */}
+            <select
+              value={permMode}
+              onChange={e => { setPermMode(e.target.value); saveSetting('permissionMode', e.target.value) }}
+              onClick={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
+              title="İzin modu"
+              style={{ background: '#1a0d2d', border: `1px solid #5a3a8a`, color: ACC, borderRadius: '4px', fontSize: '20px', padding: '2px 6px', cursor: 'pointer', pointerEvents: 'auto', outline: 'none' }}
+            >
+              <option value="bypassPermissions">🔓 bypass</option>
+              <option value="acceptEdits">✎ accept edits</option>
+              <option value="plan">📋 plan</option>
+            </select>
 
             <button
               onClick={e => { e.stopPropagation(); rebuild() }}
