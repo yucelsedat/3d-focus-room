@@ -35,7 +35,7 @@ function serializeMedia(m) {
 
 // ─── Express setup ────────────────────────────────────────────────────────────
 const app = express();
-const port = 5001;
+const port = Number(process.env.PORT) || 5001;
 
 app.use(cors());
 app.use(express.json());
@@ -885,14 +885,89 @@ function formatSessionContent(obj) {
   return JSON.stringify(obj)
 }
 
-// İzin modunu CLI bayraklarına çevirir. --print modunda "ask/default" soracak
-// muhatap olmadığı için sunmuyoruz; "Ask" gerçek anlamda Faz 2'nin işi.
-// bypass için kanıtlanmış --dangerously-skip-permissions yolunu koruyoruz.
+// İzin modunu CLI bayraklarına çevirir.
+// - plan/acceptEdits: doğrudan CLI modu
+// - ask: default mod + PreToolUse hook (Faz 2). Hook her tool öncesi izin köprüsüne
+//   sorar; kullanıcı tarayıcıdan onaylar/redder. (bkz. permission-hook.js)
+// - bypass (varsayılan): kanıtlanmış --dangerously-skip-permissions
 function permissionArgs(mode) {
   if (mode === 'plan')        return ['--permission-mode', 'plan']
   if (mode === 'acceptEdits') return ['--permission-mode', 'acceptEdits']
+  if (mode === 'ask')         return ['--permission-mode', 'default', '--settings', permSettingsJson()]
   return ['--dangerously-skip-permissions']
 }
+
+// "ask" modu için CLI'a verilecek inline settings (PreToolUse hook'u kaydeder)
+function permSettingsJson() {
+  const hookPath = path.join(__dirname, 'permission-hook.js')
+  return JSON.stringify({
+    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] },
+  })
+}
+
+// ── İnteraktif izin köprüsü (PreToolUse hook ↔ tarayıcı) ──────────────────────
+// Hook (ayrı süreç) /api/permission/ask'a POST atıp bloklanır; biz isteği aktif
+// SSE akışına "permission_request" olarak yazarız, kullanıcı kararı gelince hook'a
+// yanıt döneriz. session_id ile doğru tile'a eşleriz.
+const sessionStreams = new Map()      // session_id → aktif SSE res
+const pendingPermissions = new Map()  // tool_use_id → { resolve }
+const AUTO_ALLOW_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'TodoWrite'])
+const PERM_TIMEOUT_MS = 5 * 60 * 1000
+
+// onEvent sarmalayıcı: init'te SSE akışını session_id ile kaydeder, kapanışta siler
+function withStreamRegistry(res, inner) {
+  let sid = null
+  res.on('close', () => { if (sid && sessionStreams.get(sid) === res) sessionStreams.delete(sid) })
+  return (ev) => {
+    if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
+      sid = ev.session_id
+      sessionStreams.set(sid, res)
+    }
+    inner?.(ev)
+  }
+}
+
+// Hook bunu çağırır ve kullanıcı karar verene (ya da zaman aşımına) kadar bloklanır
+app.post('/api/permission/ask', (req, res) => {
+  const { session_id, tool_name, tool_input, tool_use_id } = req.body || {}
+
+  // Salt-okunur araçları kullanıcıyı yormadan otomatik onayla ("ask for edits" mantığı)
+  if (AUTO_ALLOW_TOOLS.has(tool_name)) {
+    return res.json({ decision: 'allow', reason: 'salt-okunur araç otomatik onaylandı' })
+  }
+  if (!tool_use_id) return res.json({ decision: 'deny', reason: 'tool_use_id yok' })
+
+  const stream = session_id && sessionStreams.get(session_id)
+  if (!stream) return res.json({ decision: 'deny', reason: 'Onaylayacak aktif arayüz yok' })
+
+  // İsteği tarayıcıya bas
+  try {
+    stream.write(`data: ${JSON.stringify({
+      type: 'permission_request', toolUseId: tool_use_id, toolName: tool_name, toolInput: tool_input,
+    })}\n\n`)
+  } catch {}
+
+  const timer = setTimeout(() => {
+    if (pendingPermissions.delete(tool_use_id)) res.json({ decision: 'deny', reason: 'Zaman aşımı' })
+  }, PERM_TIMEOUT_MS)
+
+  pendingPermissions.set(tool_use_id, {
+    resolve: (decision, reason) => {
+      clearTimeout(timer)
+      res.json({ decision, reason: reason || '' })
+    },
+  })
+})
+
+// Tarayıcı kullanıcının kararını buraya yollar
+app.post('/api/permission/decision', (req, res) => {
+  const { toolUseId, decision, reason } = req.body || {}
+  const pending = pendingPermissions.get(toolUseId)
+  if (!pending) return res.status(404).json({ error: 'Bekleyen izin isteği yok' })
+  pendingPermissions.delete(toolUseId)
+  pending.resolve(decision === 'allow' ? 'allow' : 'deny', reason)
+  res.json({ ok: true })
+})
 
 // Standalone claude CLI bazı UI model adlarını (ör. claude-fable-5) tanımıyor.
 // --model'e geçmeden önce desteklenen bir ada normalize et. Fable 5 ≈ Opus.
@@ -1014,7 +1089,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders()
 
-  const spawnEnv = { ...process.env, ...(opts.envOverrides || {}) }
+  const spawnEnv = { ...process.env, ...(opts.envOverrides || {}), FOCUS_ROOM_PORT: String(port) }
   for (const v of ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
     'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']) {
     delete spawnEnv[v]
@@ -1217,7 +1292,7 @@ app.post('/api/ai-session/message', async (req, res) => {
 
   streamClaudeToSSE(res, args, {
     envOverrides: spawnEnvOverrides,
-    onEvent: (ev) => {
+    onEvent: withStreamRegistry(res, (ev) => {
       if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
         settings.sessionId = ev.session_id
         const newContent = formatSessionContent({ ...settings, sessionId: ev.session_id })
@@ -1226,7 +1301,7 @@ app.post('/api/ai-session/message', async (req, res) => {
           data: { content: newContent },
         }).catch(err => console.error('[ai-session] kayıt hatası:', err.message))
       }
-    }
+    })
   })
 });
 
@@ -1467,7 +1542,7 @@ app.post('/api/roomchat/message', async (req, res) => {
 
   streamClaudeToSSE(res, args, {
     envOverrides,
-    onEvent: (ev) => {
+    onEvent: withStreamRegistry(res, (ev) => {
       if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
         settings.sessionId = ev.session_id
         prisma.media.update({
@@ -1475,7 +1550,7 @@ app.post('/api/roomchat/message', async (req, res) => {
           data: { content: formatSessionContent({ ...settings, sessionId: ev.session_id }) },
         }).catch(err => console.error('[roomchat] kayıt hatası:', err.message))
       }
-    },
+    }),
   })
 })
 
