@@ -861,6 +861,7 @@ export function EditModal() {
                   >
                     <option value="bypassPermissions">Bypass — tüm izinleri atla</option>
                     <option value="acceptEdits">Accept edits — düzenlemeleri otomatik kabul</option>
+                    <option value="ask">Ask — her tool için onay iste</option>
                     <option value="plan">Plan — değişiklik yapmaz, yalnızca planlar</option>
                   </select>
                 </div>
@@ -916,6 +917,7 @@ export function EditModal() {
                   >
                     <option value="bypassPermissions">Bypass — tüm izinleri atla</option>
                     <option value="acceptEdits">Accept edits — düzenlemeleri otomatik kabul</option>
+                    <option value="ask">Ask — her tool için onay iste</option>
                     <option value="plan">Plan — değişiklik yapmaz, yalnızca planlar</option>
                   </select>
                 </div>

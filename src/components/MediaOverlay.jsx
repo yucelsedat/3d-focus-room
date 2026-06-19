@@ -385,6 +385,63 @@ function SessionMessageBubble({ msg }) {
   return null
 }
 
+// "ask" modunda CLI bir tool kullanmak istediğinde gösterilen onay kartı.
+// req = { toolUseId, toolName, toolInput }
+function PermissionPrompt({ req, onAllow, onDeny }) {
+  const t = req.toolName || 'Tool'
+  const inp = req.toolInput || {}
+
+  // Tool tipine göre özet
+  let preview = null
+  if ((t === 'Edit' || t === 'Write') && inp.file_path) {
+    preview = (
+      <>
+        <div style={{ color: '#fbbf24', fontFamily: 'monospace', fontSize: '22px', marginBottom: '4px' }}>{inp.file_path}</div>
+        <pre style={{ margin: 0, maxHeight: '160px', overflow: 'auto', color: '#9ca3af', fontFamily: 'monospace', fontSize: '20px', whiteSpace: 'pre-wrap' }}>
+          {t === 'Edit' ? `- ${inp.old_string ?? ''}\n+ ${inp.new_string ?? ''}` : String(inp.content ?? '').slice(0, 1200)}
+        </pre>
+      </>
+    )
+  } else if (t === 'Bash') {
+    preview = (
+      <pre style={{ margin: 0, maxHeight: '160px', overflow: 'auto', color: '#4ade80', fontFamily: 'monospace', fontSize: '22px', whiteSpace: 'pre-wrap' }}>
+        $ {inp.command || ''}
+      </pre>
+    )
+  } else {
+    preview = (
+      <pre style={{ margin: 0, maxHeight: '160px', overflow: 'auto', color: '#9ca3af', fontFamily: 'monospace', fontSize: '20px', whiteSpace: 'pre-wrap' }}>
+        {JSON.stringify(inp, null, 2).slice(0, 1200)}
+      </pre>
+    )
+  }
+
+  return (
+    <div style={{ background: '#1a1405', border: '1px solid #5a4a15', borderRadius: '8px', padding: '10px 12px', margin: '0 10px 8px', pointerEvents: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+        <span style={{ fontSize: '24px' }}>🙋</span>
+        <span style={{ color: '#fbbf24', fontWeight: 600, fontSize: '24px' }}>İzin isteği</span>
+        <span style={{ color: '#a08020', fontSize: '22px' }}>· {t}</span>
+      </div>
+      <div style={{ background: '#0d0a02', border: '1px solid #3a2e10', borderRadius: '5px', padding: '6px 8px', marginBottom: '8px' }}>
+        {preview}
+      </div>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button
+          onClick={e => { e.stopPropagation(); onAllow() }}
+          onPointerDown={e => e.stopPropagation()}
+          style={{ flex: 1, background: 'linear-gradient(135deg,#15803d,#22c55e)', border: 'none', borderRadius: '5px', color: '#fff', padding: '8px', fontSize: '24px', cursor: 'pointer', pointerEvents: 'auto' }}
+        >✓ İzin ver</button>
+        <button
+          onClick={e => { e.stopPropagation(); onDeny() }}
+          onPointerDown={e => e.stopPropagation()}
+          style={{ flex: 1, background: '#3a1515', border: '1px solid #5a2525', borderRadius: '5px', color: '#f87171', padding: '8px', fontSize: '24px', cursor: 'pointer', pointerEvents: 'auto' }}
+        >✗ Reddet</button>
+      </div>
+    </div>
+  )
+}
+
 function SessionMesh({ id, width, height }) {
   const w = parseFloat(width)
   const h = parseFloat(height)
@@ -408,9 +465,19 @@ function SessionMesh({ id, width, height }) {
   const [effort, setEffort]           = useState('normal')
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
+  const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
   const activeAiRef = useRef(null)
+
+  const decidePermission = (toolUseId, decision) => {
+    setPendingPerms(prev => prev.filter(p => p.toolUseId !== toolUseId))
+    fetch('/api/permission/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolUseId, decision }),
+    }).catch(() => {})
+  }
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -492,6 +559,13 @@ function SessionMesh({ id, width, height }) {
           try {
             const ev = JSON.parse(raw)
             if (ev.type === 'done') break
+
+            if (ev.type === 'permission_request') {
+              setPendingPerms(prev =>
+                prev.some(p => p.toolUseId === ev.toolUseId) ? prev
+                  : [...prev, { toolUseId: ev.toolUseId, toolName: ev.toolName, toolInput: ev.toolInput }]
+              )
+            }
 
             if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
 
@@ -646,6 +720,7 @@ function SessionMesh({ id, width, height }) {
             >
               <option value="bypassPermissions">🔓 bypass</option>
               <option value="acceptEdits">✎ accept edits</option>
+              <option value="ask">🙋 ask</option>
               <option value="plan">📋 plan</option>
             </select>
 
@@ -705,6 +780,20 @@ function SessionMesh({ id, width, height }) {
               </div>
             )}
           </div>
+
+          {/* Bekleyen izin istekleri (ask modu) */}
+          {pendingPerms.length > 0 && (
+            <div style={{ flexShrink: 0, paddingTop: '8px', ...px }}>
+              {pendingPerms.map(p => (
+                <PermissionPrompt
+                  key={p.toolUseId}
+                  req={p}
+                  onAllow={() => decidePermission(p.toolUseId, 'allow')}
+                  onDeny={() => decidePermission(p.toolUseId, 'deny')}
+                />
+              ))}
+            </div>
+          )}
 
           {/* Input */}
           <div style={{ padding: '8px 10px', borderTop: '1px solid #1e3a5f', display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0, background: '#0a0f1a', ...px }}>
@@ -768,9 +857,19 @@ function RoomChatMesh({ id, width, height }) {
   const [graph, setGraph]             = useState({ exists: false, nodeCount: 0, builtAt: null })
   const [rebuilding, setRebuilding]   = useState(false)
   const [rebuildLog, setRebuildLog]   = useState('')
+  const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
   const activeAiRef = useRef(null)
+
+  const decidePermission = (toolUseId, decision) => {
+    setPendingPerms(prev => prev.filter(p => p.toolUseId !== toolUseId))
+    fetch('/api/permission/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolUseId, decision }),
+    }).catch(() => {})
+  }
 
   useEffect(() => {
     const el = msgListRef.current
@@ -901,6 +1000,13 @@ function RoomChatMesh({ id, width, height }) {
           try {
             const ev = JSON.parse(raw)
             if (ev.type === 'done') break
+
+            if (ev.type === 'permission_request') {
+              setPendingPerms(prev =>
+                prev.some(p => p.toolUseId === ev.toolUseId) ? prev
+                  : [...prev, { toolUseId: ev.toolUseId, toolName: ev.toolName, toolInput: ev.toolInput }]
+              )
+            }
 
             if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
 
@@ -1061,6 +1167,7 @@ function RoomChatMesh({ id, width, height }) {
             >
               <option value="bypassPermissions">🔓 bypass</option>
               <option value="acceptEdits">✎ accept edits</option>
+              <option value="ask">🙋 ask</option>
               <option value="plan">📋 plan</option>
             </select>
 
@@ -1145,6 +1252,20 @@ function RoomChatMesh({ id, width, height }) {
               </div>
             )}
           </div>
+
+          {/* Bekleyen izin istekleri (ask modu) */}
+          {pendingPerms.length > 0 && (
+            <div style={{ flexShrink: 0, paddingTop: '8px', ...px }}>
+              {pendingPerms.map(p => (
+                <PermissionPrompt
+                  key={p.toolUseId}
+                  req={p}
+                  onAllow={() => decidePermission(p.toolUseId, 'allow')}
+                  onDeny={() => decidePermission(p.toolUseId, 'deny')}
+                />
+              ))}
+            </div>
+          )}
 
           {/* Input */}
           <div style={{ padding: '8px 10px', borderTop: `1px solid #3a2e5e`, display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0, background: '#0a0712', ...px }}>
