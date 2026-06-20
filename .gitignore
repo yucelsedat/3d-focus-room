@@ -39,3 +39,6 @@ graphify-out/*
 
 # Per-room roomchat knowledge graphs (regeneratable from room content)
 room-graphs/
+
+# Per-room roomsession project workspaces (her oda kendi web projesini burada geliştirir)
+room-projects/

@@ -295,6 +295,39 @@ export function EditModal() {
       return
     }
 
+    if (activeTab === 'roomsession') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/roomsession', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+            model: sessionModel,
+            effort: sessionEffort,
+            permissionMode: sessionPermMode,
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Oda projesi oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setWidth(6)
+        setHeight(4)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (activeTab === 'canvas') {
       setLoading(true)
       setLoadingStep('saving')
@@ -583,8 +616,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -694,7 +727,7 @@ export function EditModal() {
                       style={{ ...s.deleteBtn, background: clonedMedia?.id === m.id ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${clonedMedia?.id === m.id ? '#60a5fa' : '#333'}`, color: clonedMedia?.id === m.id ? '#60a5fa' : '#888' }}
                       title="Bu medyayı başka bir duvara kopyala"
                       onClick={() => {
-                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti' }
+                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi' }
                         setClonedMedia(clonedMedia?.id === m.id ? null : { id: m.id, type: m.type, label: typeLabel[m.type] || m.type })
                       }}
                     >
@@ -793,6 +826,12 @@ export function EditModal() {
             onClick={() => { setActiveTab('roomchat'); setWidth(6); setHeight(4) }}
           >
             🧠 RoomChat
+          </button>
+          <button
+            style={activeTab === 'roomsession' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('roomsession'); setWidth(6); setHeight(4) }}
+          >
+            🏗 RoomProject
           </button>
         </div>
 
@@ -925,6 +964,62 @@ export function EditModal() {
             </div>
           )}
 
+          {/* RoomProject (roomsession) */}
+          {activeTab === 'roomsession' && (
+            <div style={s.inputGroup}>
+              <p style={{ color: '#34d399', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>🏗 Oda Projesi (RoomProject)</p>
+              <p style={{ color: '#777', fontSize: '11px', margin: '0 0 12px', lineHeight: 1.5 }}>
+                Bu tile, bu odaya özel <b>izole bir proje klasöründe</b> (room-projects/&lt;oda&gt;/) çalışır.
+                Oda burada kendi web projesini (ör. Next.js) kurabilir, dosya yazıp düzenleyebilir, bağımlılık yükleyebilir.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Model</label>
+                  <select
+                    value={sessionModel}
+                    onChange={e => setSessionModel(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    <option value="claude-fable-5">Claude Fable 5 (Opus 4.7)</option>
+                    <option value="claude-opus-4-8">Claude Opus 4.8</option>
+                    <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                    <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Effort (Düşünce derinliği)</label>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {[['low','Düşük'],['normal','Normal'],['high','Yüksek']].map(([val, label]) => (
+                      <button
+                        key={val}
+                        onClick={() => setSessionEffort(val)}
+                        style={{
+                          flex: 1, padding: '6px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer',
+                          border: sessionEffort === val ? '1px solid #34d399' : '1px solid #333',
+                          background: sessionEffort === val ? 'rgba(52,211,153,0.15)' : '#1a1a2e',
+                          color: sessionEffort === val ? '#34d399' : '#888',
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>İzin modu</label>
+                  <select
+                    value={sessionPermMode}
+                    onChange={e => setSessionPermMode(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    <option value="bypassPermissions">Bypass — tüm izinleri atla</option>
+                    <option value="acceptEdits">Accept edits — düzenlemeleri otomatik kabul</option>
+                    <option value="ask">Ask — her tool için onay iste</option>
+                    <option value="plan">Plan — değişiklik yapmaz, yalnızca planlar</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Canvas */}
           {activeTab === 'canvas' && (
             <div style={s.inputGroup}>
@@ -969,7 +1064,7 @@ export function EditModal() {
           )}
 
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -998,7 +1093,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}

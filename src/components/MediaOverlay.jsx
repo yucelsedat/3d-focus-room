@@ -442,7 +442,7 @@ function PermissionPrompt({ req, onAllow, onDeny }) {
   )
 }
 
-function SessionMesh({ id, width, height }) {
+function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '🤖', label = 'Claude' }) {
   const w = parseFloat(width)
   const h = parseFloat(height)
   const pxWidth  = Math.round(w * SESSION_PX_PER_UNIT)
@@ -489,7 +489,7 @@ function SessionMesh({ id, width, height }) {
 
   // Persist settings change to DB
   const saveSetting = (key, value) => {
-    fetch(`/api/ai-session/${id}/settings`, {
+    fetch(`${apiBase}/${id}/settings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: value }),
@@ -499,7 +499,7 @@ function SessionMesh({ id, width, height }) {
   // Load this tile's persistent session history + settings on mount
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/ai-session/${id}/history`)
+    fetch(`${apiBase}/${id}/history`)
       .then(r => r.json())
       .then(data => {
         if (cancelled) return
@@ -529,7 +529,7 @@ function SessionMesh({ id, width, height }) {
     const streamSeenIds = new Set()
 
     try {
-      const resp = await fetch('/api/ai-session/message', {
+      const resp = await fetch(`${apiBase}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mediaId: id, message: msg }),
@@ -676,8 +676,8 @@ function SessionMesh({ id, width, height }) {
         >
           {/* Header */}
           <div style={{ padding: '6px 10px', background: 'linear-gradient(135deg,#1a2a3a,#0d1f2d)', borderBottom: '1px solid #1e3a5f', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, flexWrap: 'wrap', ...px }}>
-            <span style={{ fontSize: '26px' }}>🤖</span>
-            <span style={{ color: '#60a5fa', fontWeight: 600, fontSize: '22px' }}>Claude</span>
+            <span style={{ fontSize: '26px' }}>{icon}</span>
+            <span style={{ color: '#60a5fa', fontWeight: 600, fontSize: '22px' }}>{label}</span>
             <span style={{ color: '#1e3a5f', fontSize: '20px' }}>#{ String(id).slice(-4) }</span>
 
             {/* Model selector */}
@@ -829,6 +829,12 @@ function SessionMesh({ id, width, height }) {
       </Html>
     </mesh>
   )
+}
+
+// roomsession tile — SessionMesh ile aynı arayüz, ama odaya özel proje klasöründe
+// çalışan /api/roomsession endpoint'lerine bağlanır.
+function RoomSessionMesh({ id, width, height }) {
+  return <SessionMesh id={id} width={width} height={height} apiBase="/api/roomsession" icon="🏗" label="Proje" />
 }
 
 function RoomChatMesh({ id, width, height }) {
@@ -1337,7 +1343,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isHeader   = type === 'header'
   const isSession  = type === 'session'
   const isRoomChat = type === 'roomchat'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat
+  const isRoomSession = type === 'roomsession'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -1352,6 +1359,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
           <SessionMesh id={id} width={width} height={height} />
         ) : isRoomChat ? (
           <RoomChatMesh id={id} width={width} height={height} />
+        ) : isRoomSession ? (
+          <RoomSessionMesh id={id} width={width} height={height} />
         ) : isCanvas ? (
           <CanvasMesh id={id} content={content} width={width} height={height} />
         ) : isMarkdown ? (
