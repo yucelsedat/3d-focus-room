@@ -1198,6 +1198,24 @@ function streamClaudeToSSE(res, args, opts = {}) {
   })
 }
 
+// ─── Room Session (her oda için izole proje klasörü) ─────────────────────────
+// roomsession tile, session tile'a benzer ama Claude CLI odaya özel bir proje
+// klasöründe (cwd) çalışır: room-projects/<roomId>/. Böylece her oda kendi web
+// projesini bu izole klasörde geliştirir. Session geçmişi (JSONL), CLI'ın
+// çalıştığı cwd'ye göre ~/.claude/projects/<cwd-key>/ altına yazılır.
+
+function roomProjectDir(roomId) {
+  return path.join(__dirname, 'room-projects', String(roomId))
+}
+
+// roomsession geçmişinin (JSONL) bulunduğu ~/.claude/projects/<cwd-key>/ dizini.
+// cwd-key, proje klasörünün mutlak yolunun '/' → '-' ile kodlanmış hâlidir
+// (bkz. CWD_KEY türetimi).
+function roomProjectJsonlDir(roomId) {
+  const key = roomProjectDir(roomId).replace(/\//g, '-')
+  return path.join(os.homedir(), '.claude', 'projects', key)
+}
+
 // ─── AI Session ──────────────────────────────────────────────────────────────
 
 app.post('/api/session', async (req, res) => {
@@ -1553,6 +1571,120 @@ app.post('/api/roomchat/message', async (req, res) => {
     }),
   })
 })
+
+// ─── Room Session endpoints (izole proje klasöründe çalışan AI session) ──────
+
+app.post('/api/roomsession', async (req, res) => {
+  const { tileId, width, height, position, rotation, model, effort, permissionMode } = req.body;
+  const id = BigInt(Date.now());
+  try {
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId: String(tileId),
+        type: 'roomsession',
+        width: parseFloat(width) || 6,
+        height: parseFloat(height) || 4,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal', permissionMode: permissionMode || 'bypassPermissions' }),
+      },
+    });
+    // Odanın izole proje klasörünü oluştur
+    try { fs.mkdirSync(roomProjectDir(activeRoomId), { recursive: true }) } catch {}
+    res.json(serializeMedia(media));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// roomsession geçmişi + ayarları (JSONL proje klasörünün cwd-key'i altından okunur)
+app.get('/api/roomsession/:mediaId/history', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'roomsession') {
+      return res.status(404).json({ error: 'Oda projesi bulunamadı' })
+    }
+    const { sessionId, model, effort, permissionMode } = parseSessionContent(media.content)
+    if (!sessionId) return res.json({ sessionId: null, messages: [], model, effort, permissionMode })
+
+    const jsonlPath = path.join(roomProjectJsonlDir(media.roomId), `${sessionId}.jsonl`)
+    if (!fs.existsSync(jsonlPath)) return res.json({ sessionId, messages: [], model, effort, permissionMode })
+
+    const content = fs.readFileSync(jsonlPath, 'utf8')
+    res.json({ sessionId, messages: parseLiveMessages(content), model, effort, permissionMode })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// model/effort/izin ayarlarını güncelle (sohbeti bozmadan)
+app.patch('/api/roomsession/:mediaId/settings', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'roomsession') return res.status(404).json({ error: 'Oda projesi bulunamadı' })
+    const current = parseSessionContent(media.content)
+    const updated = { ...current, ...req.body }
+    await prisma.media.update({
+      where: { id: BigInt(req.params.mediaId) },
+      data: { content: formatSessionContent(updated) },
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/roomsession/message', async (req, res) => {
+  const { mediaId, message } = req.body;
+  if (!message?.trim()) return res.status(400).json({ error: 'Mesaj gerekli' });
+
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } }) } catch {}
+  if (!media || media.type !== 'roomsession') return res.status(404).json({ error: 'Oda projesi bulunamadı' })
+
+  const settings = parseSessionContent(media.content)
+  const dir = roomProjectDir(media.roomId)
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+
+  const sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri (ör. Next.js) burada kurulabilir ve geliştirilebilir.`
+
+  const args = [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', cliModel(settings.model),
+    '--append-system-prompt', sys,
+    ...permissionArgs(settings.permissionMode),
+  ];
+  if (settings.sessionId) args.push('--resume', settings.sessionId);
+  args.push(message.trim());
+
+  const envOverrides = {}
+  if (settings.effort && settings.effort !== 'normal') {
+    envOverrides.CLAUDE_EFFORT = settings.effort
+  }
+
+  streamClaudeToSSE(res, args, {
+    cwd: dir,
+    envOverrides,
+    onEvent: withStreamRegistry(res, (ev) => {
+      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
+        settings.sessionId = ev.session_id
+        prisma.media.update({
+          where: { id: BigInt(mediaId) },
+          data: { content: formatSessionContent({ ...settings, sessionId: ev.session_id }) },
+        }).catch(err => console.error('[roomsession] kayıt hatası:', err.message))
+      }
+    })
+  })
+});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 await bootMigrate();
