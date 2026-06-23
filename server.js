@@ -1686,6 +1686,319 @@ app.post('/api/roomsession/message', async (req, res) => {
   })
 });
 
+// ─── Bluprint (oda projesini reconstruct PRD'sine çeviren tile) ──────────────
+// bluprint tile, roomchat ile aynı kalıp ama besleyen skill graphify değil
+// reconstruct: odanın roomsession proje klasörünü (room-projects/<roomId>/)
+// analiz edip sıfırdan yeniden inşa edilebilir PRD takımı + tek dosyalık SPECS.md
+// üretir. Çıktılar izole bir klasörde tutulur: room-blueprints/<roomId>/
+// Reconstruct skill'i bu klasörde (cwd) çalıştığından session geçmişi (JSONL)
+// bu klasörün cwd-key'i altına yazılır.
+
+function roomBlueprintDir(roomId) {
+  return path.join(__dirname, 'room-blueprints', String(roomId))
+}
+
+function roomBlueprintJsonlDir(roomId) {
+  const key = roomBlueprintDir(roomId).replace(/\//g, '-')
+  return path.join(os.homedir(), '.claude', 'projects', key)
+}
+
+// Blueprint çıktısının disk durumunu okur (SPECS.md / RECONSTRUCTION.md var mı)
+// ── Blueprint skill kayıt defteri ─────────────────────────────────────────────
+// Her giriş bir analiz skill'ini soyutlar. `dir` kuruluysa seçilebilir; `outputs`
+// sohbet enjeksiyonu + durum tespiti için (sıralı: ilk var olan birincil çıktı);
+// `prompt(repo, out, scope)` skill'i çalıştıran Türkçe yönergeyi üretir.
+const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills')
+const BLUEPRINT_SKILLS = {
+  reconstruct: {
+    label: 'reconstruct — kurulabilir PRD/kit',
+    dir: path.join(SKILLS_DIR, 'reconstruct'),
+    install: 'maxgfr/reconstruct',
+    outputs: ['SPECS.md', 'RECONSTRUCTION.md', 'FEATURES.md', 'SUMMARY.md'],
+    prompt: (repo, out, scope) => scope
+      ? `reconstruct skill'ini (Skill tool, skill adı "reconstruct") şu repo üzerinde çalıştır: ${repo}. Çıktıyı bu klasöre yaz: ${out}. SADECE şu özelliğe/akışa odaklan: "${scope}". İlgili dosyaları kendin bul. Komut: \`node scripts/analyze.mjs --repo ${repo} --out ${out} --mode preserve --level light --features --specs\`. Sonra YALNIZCA "${scope}" ile ilgili feature PRD'lerini tam doldur, ilgisiz feature'ları atla/sil. Amaç: bu özelliği başka bir projede sıfırdan kurmaya yetecek tek-dosya kurulum kiti (FEATURES.md/SPECS.md). Yakınsama döngüsünü (--check / --review) yalnızca bu özellik için buildable olana kadar koş. Bana hiçbir şey sorma, onay bekleme. Bittiğinde tek satırla özet ver.`
+      : `reconstruct skill'ini (Skill tool, skill adı "reconstruct") şu repo üzerinde çalıştır: ${repo}. Çıktıyı bu klasöre yaz: ${out}. mode=preserve, level=light. Tam prosedürü uygula: önce \`node scripts/analyze.mjs --repo ${repo} --out ${out} --mode preserve --level light --specs --summary\`, ardından PRD'leri zenginleştir ve yakınsama döngüsünü (--check / --review) buildable olana kadar otomatik koş. Bana hiçbir şey sorma, onay bekleme — doğrudan kur. Bittiğinde tek satırla kaç feature PRD ve kaç interface üretildiğini söyle.`,
+  },
+  'codebase-analysis': {
+    label: 'codebase-analysis — doğrulanmış teknik doküman',
+    dir: path.join(SKILLS_DIR, 'codebase-analysis'),
+    install: 'Ycsyyds/codebase-analysis-skill',
+    outputs: ['ANALYSIS_00-SystemOverview.md', 'ANALYSIS_01-DataStructures.md'],
+    prompt: (repo, out, scope) => `codebase-analysis skill'ini (Skill tool, skill adı "codebase-analysis") çalıştır. Analiz edilecek yol: ${repo}${scope ? ` — ANCAK yalnızca "${scope}" ile ilgili kısmı analiz et.` : '.'} ÖNEMLİ: ürettiğin TÜM analiz dokümanlarını (ANALYSIS_*, ALGORITHM_*, KEY_QUESTIONS_* vb.) kaynak proje klasörüne DEĞİL, şu çıktı klasörüne yaz: ${out}. Otonom çalış, bana hiçbir şey sorma, onay bekleme. Bittiğinde tek satırla kaç doküman ürettiğini söyle.`,
+  },
+  'repo-insight': {
+    label: 'repo-insight — neden böyle tasarlanmış (best-effort)',
+    dir: path.join(SKILLS_DIR, 'repo-insight'),
+    install: 'AliceLJY/repo-insight',
+    outputs: ['ANALYSIS_REPORT.md'],
+    bestEffort: true,
+    prompt: (repo, out, scope) => `repo-insight skill'ini (Skill tool, skill adı "repo-insight") çalıştır. Hedef: ${repo}${scope ? ` — yalnızca "${scope}" ile ilgili kısma/akışa odaklan.` : '.'} INTERAKTİF OLMA: bana derinlik veya başka bir şey SORMA, "Standard" derinlikle doğrudan ilerle. Raporu (ANALYSIS_REPORT.md) şu klasöre yaz: ${out}. Bittiğinde tek satırla özet ver.`,
+  },
+}
+
+function blueprintSkill(id) {
+  return BLUEPRINT_SKILLS[id] || BLUEPRINT_SKILLS.reconstruct
+}
+
+function isSkillInstalled(entry) {
+  try { return fs.existsSync(entry.dir) } catch { return false }
+}
+
+// UI dropdown'u için skill meta listesi (kurulu mu bilgisiyle)
+function blueprintSkillsMeta() {
+  return Object.entries(BLUEPRINT_SKILLS).map(([id, e]) => ({
+    id, label: e.label, installed: isSkillInstalled(e), install: e.install, bestEffort: !!e.bestEffort,
+  }))
+}
+
+// repo-insight gibi çıktıyı ~/repo-analyses'e yazan skiller için fallback:
+// en yeni analiz klasörünün .md dosyalarını out'a kopyala
+function importBestEffortOutputs(out) {
+  try {
+    const base = path.join(os.homedir(), 'repo-analyses')
+    if (!fs.existsSync(base)) return
+    const dirs = fs.readdirSync(base, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => ({ name: d.name, t: fs.statSync(path.join(base, d.name)).mtimeMs }))
+      .sort((a, b) => b.t - a.t)
+    if (!dirs.length) return
+    const newest = path.join(base, dirs[0].name)
+    for (const f of fs.readdirSync(newest)) {
+      if (f.endsWith('.md')) {
+        try { fs.copyFileSync(path.join(newest, f), path.join(out, f)) } catch {}
+      }
+    }
+  } catch {}
+}
+
+// Seçili skill'in çıktısına göre blueprint durumu
+function roomBlueprintStatus(roomId, skillId = 'reconstruct', builtAt = null) {
+  const dir = roomBlueprintDir(roomId)
+  const entry = blueprintSkill(skillId)
+  const status = { exists: false, builtAt, featureCount: 0 }
+  status.exists = entry.outputs.some(name => fs.existsSync(path.join(dir, name)))
+  if (status.exists && skillId === 'reconstruct') {
+    try {
+      const featuresDir = path.join(dir, 'features')
+      if (fs.existsSync(featuresDir)) {
+        status.featureCount = fs.readdirSync(featuresDir, { withFileTypes: true })
+          .filter(d => d.isDirectory()).length
+      }
+    } catch {}
+  }
+  return status
+}
+
+// Seçili skill'in birincil çıktısını sohbete enjekte etmek için okur (bütçeli)
+function readBlueprintSpec(roomId, skillId = 'reconstruct', budgetChars = 24000) {
+  const dir = roomBlueprintDir(roomId)
+  const entry = blueprintSkill(skillId)
+  for (const name of entry.outputs) {
+    const p = path.join(dir, name)
+    if (fs.existsSync(p)) {
+      try {
+        let txt = fs.readFileSync(p, 'utf8')
+        if (txt.length > budgetChars) txt = txt.slice(0, budgetChars) + '\n\n…(kısaltıldı)'
+        return { name, text: txt }
+      } catch {}
+    }
+  }
+  return null
+}
+
+// bluprint tile oluştur (roomsession ile aynı şema, type='bluprint')
+app.post('/api/bluprint', async (req, res) => {
+  const { tileId, width, height, position, rotation, model, effort, permissionMode, skill, scope } = req.body
+  const id = BigInt(Date.now())
+  try {
+    const pos = JSON.parse(position)
+    const rot = JSON.parse(rotation)
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId: String(tileId),
+        type: 'bluprint',
+        width: parseFloat(width) || 6,
+        height: parseFloat(height) || 4,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal', permissionMode: permissionMode || 'bypassPermissions', skill: BLUEPRINT_SKILLS[skill] ? skill : 'reconstruct', scope: (scope || '').trim() }),
+      },
+    })
+    // Odanın izole proje klasörünü garanti et (reconstruct'ın kaynağı)
+    try { fs.mkdirSync(roomProjectDir(activeRoomId), { recursive: true }) } catch {}
+    res.json(serializeMedia(media))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Kullanılabilir blueprint skill'leri (kurulu mu bilgisiyle) — UI dropdown'u için
+app.get('/api/bluprint/skills', (req, res) => {
+  res.json({ skills: blueprintSkillsMeta() })
+})
+
+// bluprint geçmişi + ayarları + blueprint durumu
+app.get('/api/bluprint/:mediaId/history', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'bluprint') {
+      return res.status(404).json({ error: 'Blueprint bulunamadı' })
+    }
+    const settings = parseSessionContent(media.content)
+    const { sessionId, model, effort, permissionMode } = settings
+    const skill = BLUEPRINT_SKILLS[settings.skill] ? settings.skill : 'reconstruct'
+    const scope = settings.scope || ''
+    const blueprint = roomBlueprintStatus(media.roomId, skill, settings.blueprintBuiltAt || null)
+
+    let messages = []
+    if (sessionId) {
+      const jsonlPath = path.join(roomBlueprintJsonlDir(media.roomId), `${sessionId}.jsonl`)
+      if (fs.existsSync(jsonlPath)) {
+        messages = parseLiveMessages(fs.readFileSync(jsonlPath, 'utf8'))
+      }
+    }
+    res.json({ sessionId, messages, model, effort, permissionMode, skill, scope, blueprint, skills: blueprintSkillsMeta() })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// model/effort/izin ayarlarını güncelle (sohbeti bozmadan)
+app.patch('/api/bluprint/:mediaId/settings', async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'bluprint') return res.status(404).json({ error: 'Blueprint bulunamadı' })
+    const current = parseSessionContent(media.content)
+    const updated = { ...current, ...req.body }
+    await prisma.media.update({
+      where: { id: BigInt(req.params.mediaId) },
+      data: { content: formatSessionContent(updated) },
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// "Blueprint üret" butonu — oda proje klasörünü reconstruct ile PRD takımına çevir
+app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } }) } catch {}
+  if (!media || media.type !== 'bluprint') return res.status(404).json({ error: 'Blueprint bulunamadı' })
+
+  const roomId = media.roomId
+  const repo = roomProjectDir(roomId)
+  const out = roomBlueprintDir(roomId)
+  const settings = parseSessionContent(media.content)
+  const skillId = BLUEPRINT_SKILLS[settings.skill] ? settings.skill : 'reconstruct'
+  const entry = blueprintSkill(skillId)
+  const scope = (settings.scope || '').trim()
+
+  // SSE üzerinden tek seferlik hata döndür
+  const sseError = (message) => {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.flushHeaders()
+    res.write(`data: ${JSON.stringify({ type: 'error', message })}\n\n`)
+    res.write('data: {"type":"done"}\n\n')
+    res.end()
+  }
+
+  // Seçili skill kurulu değilse
+  if (!isSkillInstalled(entry)) {
+    return sseError(`Seçili skill kurulu değil: ${skillId}. Kurmak için: npx skills add ${entry.install}`)
+  }
+
+  // Kaynak proje klasörü boş/yoksa
+  const repoEmpty = !fs.existsSync(repo) || fs.readdirSync(repo).length === 0
+  if (repoEmpty) {
+    return sseError('Bu odanın proje klasörü boş. Önce roomSession (Oda Projesi) tile ile bir proje geliştirin.')
+  }
+
+  fs.mkdirSync(out, { recursive: true })
+  const { model } = settings
+  const prompt = entry.prompt(repo, out, scope)
+
+  streamClaudeToSSE(res, [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', cliModel(model),
+    '--dangerously-skip-permissions',
+    prompt,
+  ], {
+    cwd: out,
+    onEvent: (ev) => {
+      if (ev.type === 'result') {
+        if (entry.bestEffort) importBestEffortOutputs(out)
+        const cur = parseSessionContent(media.content)
+        const status = roomBlueprintStatus(roomId, skillId)
+        prisma.media.update({
+          where: { id: media.id },
+          data: { content: formatSessionContent({ ...cur, blueprintBuiltAt: new Date().toISOString(), featureCount: status.featureCount }) },
+        }).catch(err => console.error('[bluprint] blueprint kaydı hatası:', err.message))
+      }
+    },
+  })
+})
+
+// bluprint mesajı — üretilen reconstruction spec'i system prompt'a enjekte edilir
+app.post('/api/bluprint/message', async (req, res) => {
+  const { mediaId, message } = req.body
+  if (!message?.trim()) return res.status(400).json({ error: 'Mesaj gerekli' })
+
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } }) } catch {}
+  if (!media || media.type !== 'bluprint') return res.status(404).json({ error: 'Blueprint bulunamadı' })
+
+  const settings = parseSessionContent(media.content)
+  const roomId = media.roomId
+  const dir = roomBlueprintDir(roomId)
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+
+  const skillId = BLUEPRINT_SKILLS[settings.skill] ? settings.skill : 'reconstruct'
+  const scope = (settings.scope || '').trim()
+
+  let sys = `Sen bu odanın projesinin reconstruction asistanısın. Kullanıcı bu projeyi başka bir Claude projesinde sıfırdan kurmak istiyor.${scope ? ` Özellikle "${scope}" özelliği/akışı üzerine odaklan.` : ''} Üretilen analiz/spec çıktısı hakkındaki soruları yanıtla, eksikleri tamamla, istenirse başka bir ajana verilebilecek tek-dosya kur-prompt'u üret. Cevaplarını Türkçe ver, kısa ve net ol.`
+
+  const spec = readBlueprintSpec(roomId, skillId)
+  if (spec) sys += `\n\n# Proje Analiz/Spec Çıktısı (${spec.name})\n${spec.text}`
+
+  const args = [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', cliModel(settings.model),
+    '--append-system-prompt', sys,
+    ...permissionArgs(settings.permissionMode),
+  ]
+  if (settings.sessionId) args.push('--resume', settings.sessionId)
+  args.push(message.trim())
+
+  const envOverrides = {}
+  if (settings.effort && settings.effort !== 'normal') {
+    envOverrides.CLAUDE_EFFORT = settings.effort
+  }
+
+  streamClaudeToSSE(res, args, {
+    cwd: dir,
+    envOverrides,
+    onEvent: withStreamRegistry(res, (ev) => {
+      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
+        settings.sessionId = ev.session_id
+        prisma.media.update({
+          where: { id: BigInt(mediaId) },
+          data: { content: formatSessionContent({ ...settings, sessionId: ev.session_id }) },
+        }).catch(err => console.error('[bluprint] kayıt hatası:', err.message))
+      }
+    }),
+  })
+})
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 await bootMigrate();
 app.listen(port, () => {
