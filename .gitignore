@@ -42,3 +42,9 @@ room-graphs/
 
 # Per-room roomsession project workspaces (her oda kendi web projesini burada geliştirir)
 room-projects/
+
+# Per-room bluprint reconstruction çıktıları (proje klasöründen reconstruct ile üretilir)
+room-blueprints/
+
+# Claude Code yerel ajan durumu (planlar, hafıza, yerel ayarlar)
+.claude/

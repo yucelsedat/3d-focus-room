@@ -853,7 +853,49 @@ function RoomSessionMesh({ id, width, height }) {
   return <SessionMesh id={id} width={width} height={height} apiBase="/api/roomsession" icon="🏗" label="Proje" />
 }
 
-function RoomChatMesh({ id, width, height }) {
+// roomchat ve bluprint tile'ları aynı sohbet/üret iskeletini paylaşır; tek fark
+// besledikleri skill (graphify ↔ reconstruct) ve durum/etiket metinleridir.
+// Farklar bir variant nesnesinde toplanır.
+const ROOMCHAT_VARIANT = {
+  apiBase: '/api/roomchat',
+  statusField: 'graph',
+  icon: '🧠',
+  title: 'Oda Sohbeti',
+  rebuildIdle: 'Güncelle',
+  rebuildBusy: 'Kuruluyor…',
+  rebuildTitle: 'Odanın metinlerinden bilgi grafını yeniden oluştur',
+  rebuildStartLog: 'Oda metinleri toplanıyor…',
+  rebuildingPlaceholder: 'Graf kuruluyor...',
+  inputPlaceholder: 'Oda hakkında soru sor... (Enter: gönder)',
+  statusLabel: (s, fmt) => s.exists
+    ? `graf: ${s.nodeCount} düğüm${fmt(s.builtAt) ? ' · ' + fmt(s.builtAt) : ''}`
+    : 'graf yok — Güncelle ile kur',
+  emptyReady: 'Bu odanın içeriği hakkında soru sor.',
+  emptyHint:  'Önce ⟳ Güncelle ile odanın grafını kur, sonra sohbet et.',
+}
+const BLUPRINT_VARIANT = {
+  apiBase: '/api/bluprint',
+  statusField: 'blueprint',
+  icon: '📐',
+  title: 'Blueprint',
+  rebuildIdle: 'Üret',
+  rebuildBusy: 'Üretiliyor…',
+  rebuildTitle: 'Oda proje klasörünü seçili skill ile yeniden-kurulabilir kurulum kitine çevir',
+  hasSkillControls: true,
+  rebuildStartLog: 'Proje klasörü analiz ediliyor…',
+  rebuildingPlaceholder: 'Blueprint üretiliyor...',
+  inputPlaceholder: 'Blueprint hakkında soru sor / kur-prompt iste... (Enter: gönder)',
+  statusLabel: (s, fmt) => s.exists
+    ? `blueprint: ${s.featureCount} feature${fmt(s.builtAt) ? ' · ' + fmt(s.builtAt) : ''}`
+    : 'blueprint yok — Üret ile oluştur',
+  emptyReady: 'Bu projeyi başka bir projede nasıl kuracağını sor (kur-prompt isteyebilirsin).',
+  emptyHint:  'Önce ⟳ Üret ile proje klasörünü reconstruct et, sonra sohbet et.',
+}
+
+function RoomChatMesh(props) { return <SkillChatMesh {...props} variant={ROOMCHAT_VARIANT} /> }
+function BluprintMesh(props) { return <SkillChatMesh {...props} variant={BLUPRINT_VARIANT} /> }
+
+function SkillChatMesh({ id, width, height, variant }) {
   const w = parseFloat(width)
   const h = parseFloat(height)
   const pxWidth  = Math.round(w * SESSION_PX_PER_UNIT)
@@ -876,7 +918,10 @@ function RoomChatMesh({ id, width, height }) {
   const [effort, setEffort]           = useState('normal')
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
-  const [graph, setGraph]             = useState({ exists: false, nodeCount: 0, builtAt: null })
+  const [status, setStatus]           = useState({ exists: false, nodeCount: 0, featureCount: 0, builtAt: null })
+  const [skill, setSkill]             = useState('reconstruct')
+  const [scope, setScope]             = useState('')
+  const [skillList, setSkillList]     = useState([])
   const [rebuilding, setRebuilding]   = useState(false)
   const [rebuildLog, setRebuildLog]   = useState('')
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
@@ -901,7 +946,7 @@ function RoomChatMesh({ id, width, height }) {
   }, [messages, thinking])
 
   const saveSetting = (key, value) => {
-    fetch(`/api/roomchat/${id}/settings`, {
+    fetch(`${variant.apiBase}/${id}/settings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: value }),
@@ -909,7 +954,7 @@ function RoomChatMesh({ id, width, height }) {
   }
 
   const loadHistory = (signal) => {
-    fetch(`/api/roomchat/${id}/history`, signal ? { signal } : undefined)
+    fetch(`${variant.apiBase}/${id}/history`, signal ? { signal } : undefined)
       .then(r => r.json())
       .then(data => {
         if (data.error) { setError(data.error); return }
@@ -917,7 +962,10 @@ function RoomChatMesh({ id, width, height }) {
         if (data.model)  setModel(data.model)
         if (data.effort) setEffort(data.effort)
         if (data.permissionMode) setPermMode(data.permissionMode)
-        if (data.graph)  setGraph(data.graph)
+        if (data[variant.statusField]) setStatus(data[variant.statusField])
+        if (data.skill) setSkill(data.skill)
+        if (typeof data.scope === 'string') setScope(data.scope)
+        if (Array.isArray(data.skills)) setSkillList(data.skills)
         setMessages((data.messages || []).map(m => ({
           id: m.id, role: m.role === 'assistant' ? 'ai' : m.role,
           content: m.text, toolName: m.toolName
@@ -932,13 +980,13 @@ function RoomChatMesh({ id, width, height }) {
     return () => ctrl.abort()
   }, [id])
 
-  // "Güncelle" — odanın metinlerinden grafı yeniden kur
+  // "Üret/Güncelle" — kaynak içeriği toplayıp skill ile çıktıyı yeniden kur
   const rebuild = async () => {
     if (rebuilding || streaming) return
     setRebuilding(true)
-    setRebuildLog('Oda metinleri toplanıyor…')
+    setRebuildLog(variant.rebuildStartLog)
     try {
-      const resp = await fetch(`/api/roomchat/${id}/rebuild`, { method: 'POST' })
+      const resp = await fetch(`${variant.apiBase}/${id}/rebuild`, { method: 'POST' })
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}))
         setRebuildLog('Hata: ' + (err.error || `HTTP ${resp.status}`))
@@ -992,7 +1040,7 @@ function RoomChatMesh({ id, width, height }) {
     const streamSeenIds = new Set()
 
     try {
-      const resp = await fetch('/api/roomchat/message', {
+      const resp = await fetch(`${variant.apiBase}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mediaId: id, message: msg }),
@@ -1147,8 +1195,8 @@ function RoomChatMesh({ id, width, height }) {
         >
           {/* Header */}
           <div style={{ padding: '6px 10px', background: 'linear-gradient(135deg,#2a1a3a,#1a0d2d)', borderBottom: `1px solid #3a2e5e`, display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, flexWrap: 'wrap', ...px }}>
-            <span style={{ fontSize: '26px' }}>🧠</span>
-            <span style={{ color: ACC, fontWeight: 600, fontSize: '22px' }}>Oda Sohbeti</span>
+            <span style={{ fontSize: '26px' }}>{variant.icon}</span>
+            <span style={{ color: ACC, fontWeight: 600, fontSize: '22px' }}>{variant.title}</span>
             <span style={{ color: '#3a2e5e', fontSize: '20px' }}>#{ String(id).slice(-4) }</span>
 
             <select
@@ -1193,11 +1241,42 @@ function RoomChatMesh({ id, width, height }) {
               <option value="plan">📋 plan</option>
             </select>
 
+            {/* Blueprint: analiz skill'i + kapsam (yalnızca bluprint variant'ında) */}
+            {variant.hasSkillControls && (
+              <>
+                <select
+                  value={skill}
+                  onChange={e => { setSkill(e.target.value); saveSetting('skill', e.target.value) }}
+                  onClick={e => e.stopPropagation()}
+                  onPointerDown={e => e.stopPropagation()}
+                  title="Analiz skill'i"
+                  style={{ background: '#1a0d2d', border: `1px solid #5a3a8a`, color: ACC, borderRadius: '4px', fontSize: '20px', padding: '2px 6px', cursor: 'pointer', pointerEvents: 'auto', outline: 'none', maxWidth: '180px' }}
+                >
+                  {(skillList.length ? skillList : [{ id: 'reconstruct', label: 'reconstruct', installed: true }]).map(sk => (
+                    <option key={sk.id} value={sk.id} disabled={!sk.installed}>
+                      {sk.id}{sk.installed ? '' : ' (yok)'}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={scope}
+                  onChange={e => setScope(e.target.value)}
+                  onBlur={e => saveSetting('scope', e.target.value.trim())}
+                  onClick={e => e.stopPropagation()}
+                  onPointerDown={e => e.stopPropagation()}
+                  onKeyDown={e => e.stopPropagation()}
+                  placeholder="kapsam: tüm proje (ör. login)"
+                  title="Boş = tüm proje; özellik adı yazarsan yalnızca o özelliğe odaklanır"
+                  style={{ background: '#1a0d2d', border: `1px solid #5a3a8a`, color: '#e0e0e0', borderRadius: '4px', fontSize: '20px', padding: '2px 6px', pointerEvents: 'auto', outline: 'none', width: '200px' }}
+                />
+              </>
+            )}
+
             <button
               onClick={e => { e.stopPropagation(); rebuild() }}
               onPointerDown={e => e.stopPropagation()}
               disabled={rebuilding || streaming}
-              title="Odanın metinlerinden bilgi grafını yeniden oluştur"
+              title={variant.rebuildTitle}
               style={{
                 marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px',
                 padding: '3px 10px', borderRadius: '5px', fontSize: '20px',
@@ -1207,15 +1286,15 @@ function RoomChatMesh({ id, width, height }) {
               }}
             >
               <span style={{ display: 'inline-block', animation: rebuilding ? 'spin 1s linear infinite' : 'none' }}>⟳</span>
-              {rebuilding ? 'Kuruluyor…' : 'Güncelle'}
+              {rebuilding ? variant.rebuildBusy : (variant.hasSkillControls && scope.trim() ? 'Özellik kiti üret' : variant.rebuildIdle)}
             </button>
           </div>
 
-          {/* Graf durumu / rebuild log */}
+          {/* Durum / rebuild log */}
           <div style={{ padding: '4px 10px 5px', background: '#0a0712', borderBottom: `1px solid #3a2e5e`, flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px', ...px }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: graph.exists ? '#4ade80' : '#6a5a8a', display: 'inline-block', flexShrink: 0 }} />
-            <span style={{ color: graph.exists ? '#9a8ac0' : '#6a5a8a', fontSize: '18px', flexShrink: 0 }}>
-              {graph.exists ? `graf: ${graph.nodeCount} düğüm${fmtBuilt(graph.builtAt) ? ' · ' + fmtBuilt(graph.builtAt) : ''}` : 'graf yok — Güncelle ile kur'}
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: status.exists ? '#4ade80' : '#6a5a8a', display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ color: status.exists ? '#9a8ac0' : '#6a5a8a', fontSize: '18px', flexShrink: 0 }}>
+              {variant.statusLabel(status, fmtBuilt)}
             </span>
             {rebuilding && rebuildLog && (
               <span style={{ color: ACC, fontSize: '18px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, fontFamily: 'monospace' }}>
@@ -1254,9 +1333,7 @@ function RoomChatMesh({ id, width, height }) {
           <div ref={msgListRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', ...px }}>
             {messages.length === 0 && !streaming && (
               <div style={{ color: error ? '#f87171' : '#5a4a7a', fontSize: '22px', textAlign: 'center', marginTop: '16px' }}>
-                {error || (graph.exists
-                  ? 'Bu odanın içeriği hakkında soru sor.'
-                  : 'Önce ⟳ Güncelle ile odanın grafını kur, sonra sohbet et.')}
+                {error || (status.exists ? variant.emptyReady : variant.emptyHint)}
               </div>
             )}
             {messages.map(m => <SessionMessageBubble key={m.id} msg={m} />)}
@@ -1295,7 +1372,7 @@ function RoomChatMesh({ id, width, height }) {
               ref={inputRef}
               onKeyDown={onKeyDown}
               onClick={e => e.stopPropagation()}
-              placeholder={streaming ? 'Yanıt bekleniyor...' : rebuilding ? 'Graf kuruluyor...' : 'Oda hakkında soru sor... (Enter: gönder)'}
+              placeholder={streaming ? 'Yanıt bekleniyor...' : rebuilding ? variant.rebuildingPlaceholder : variant.inputPlaceholder}
               disabled={streaming || rebuilding || !connected}
               style={{
                 flex: 1, background: '#1a0d2d',
@@ -1360,7 +1437,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isSession  = type === 'session'
   const isRoomChat = type === 'roomchat'
   const isRoomSession = type === 'roomsession'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession
+  const isBluprint = type === 'bluprint'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -1377,6 +1455,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
           <RoomChatMesh id={id} width={width} height={height} />
         ) : isRoomSession ? (
           <RoomSessionMesh id={id} width={width} height={height} />
+        ) : isBluprint ? (
+          <BluprintMesh id={id} width={width} height={height} />
         ) : isCanvas ? (
           <CanvasMesh id={id} content={content} width={width} height={height} />
         ) : isMarkdown ? (

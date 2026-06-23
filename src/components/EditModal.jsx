@@ -55,9 +55,26 @@ export function EditModal() {
   const [sessionModel, setSessionModel]   = useState('claude-fable-5')
   const [sessionEffort, setSessionEffort] = useState('normal')
   const [sessionPermMode, setSessionPermMode] = useState('bypassPermissions')
+  const [bluprintSkill, setBluprintSkill] = useState('reconstruct')
+  const [bluprintScopeOn, setBluprintScopeOn] = useState(false)
+  const [bluprintScope, setBluprintScope] = useState('')
+  const [bluprintSkills, setBluprintSkills] = useState([
+    { id: 'reconstruct', label: 'reconstruct — kurulabilir PRD/kit', installed: true },
+    { id: 'codebase-analysis', label: 'codebase-analysis — doğrulanmış teknik doküman', installed: true },
+    { id: 'repo-insight', label: 'repo-insight — neden böyle tasarlanmış (best-effort)', installed: true },
+  ])
   const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
+
+  // bluprint tab açılınca kurulu skill listesini getir
+  useEffect(() => {
+    if (activeTab !== 'bluprint') return
+    fetch('/api/bluprint/skills')
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d.skills) && d.skills.length) setBluprintSkills(d.skills) })
+      .catch(() => {})
+  }, [activeTab])
 
   // Markdown: h=5 sabit, içerik ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*2
   const MD_COL_PX_W = 600   // her sütunun CSS piksel genişliği
@@ -315,6 +332,41 @@ export function EditModal() {
         })
         const d = await r.json()
         if (!r.ok) throw new Error(d.error || 'Oda projesi oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setWidth(6)
+        setHeight(4)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
+    if (activeTab === 'bluprint') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/bluprint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+            model: sessionModel,
+            effort: sessionEffort,
+            permissionMode: sessionPermMode,
+            skill: bluprintSkill,
+            scope: bluprintScopeOn ? bluprintScope.trim() : '',
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Blueprint oluşturulamadı')
         addMedia(d)
         closeModal()
         setWidth(6)
@@ -616,8 +668,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'bluprint' ? '📐' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'bluprint' ? 'Blueprint' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -727,7 +779,7 @@ export function EditModal() {
                       style={{ ...s.deleteBtn, background: clonedMedia?.id === m.id ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${clonedMedia?.id === m.id ? '#60a5fa' : '#333'}`, color: clonedMedia?.id === m.id ? '#60a5fa' : '#888' }}
                       title="Bu medyayı başka bir duvara kopyala"
                       onClick={() => {
-                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi' }
+                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', bluprint: 'Blueprint' }
                         setClonedMedia(clonedMedia?.id === m.id ? null : { id: m.id, type: m.type, label: typeLabel[m.type] || m.type })
                       }}
                     >
@@ -832,6 +884,12 @@ export function EditModal() {
             onClick={() => { setActiveTab('roomsession'); setWidth(6); setHeight(4) }}
           >
             🏗 RoomProject
+          </button>
+          <button
+            style={activeTab === 'bluprint' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('bluprint'); setWidth(6); setHeight(4) }}
+          >
+            📐 Blueprint
           </button>
         </div>
 
@@ -1020,6 +1078,102 @@ export function EditModal() {
             </div>
           )}
 
+          {/* Blueprint (bluprint) */}
+          {activeTab === 'bluprint' && (
+            <div style={s.inputGroup}>
+              <p style={{ color: '#a78bfa', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>📐 Blueprint (reconstruct)</p>
+              <p style={{ color: '#777', fontSize: '11px', margin: '0 0 12px', lineHeight: 1.5 }}>
+                Bu tile, odanın <b>proje klasörünü</b> (room-projects/&lt;oda&gt;/) seçtiğin <b>analiz skill'iyle</b> tarar ve
+                projeyi (veya tek bir özelliği) başka bir Claude projesinde sıfırdan kurmaya yetecek <b>tek-dosya kurulum kiti</b> üretir.
+                Çıktıyı başka projeye verip tarif etmeden yeniden kurabilirsin. Önce RoomProject ile bir proje geliştir.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Analiz skill'i</label>
+                  <select
+                    value={bluprintSkill}
+                    onChange={e => setBluprintSkill(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    {bluprintSkills.map(sk => (
+                      <option key={sk.id} value={sk.id} disabled={!sk.installed}>
+                        {sk.label}{sk.installed ? '' : ' (kurulu değil)'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Kapsam</label>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: bluprintScopeOn ? '8px' : 0 }}>
+                    {[[false, 'Tüm proje'], [true, 'Belirli özellik']].map(([val, label]) => (
+                      <button
+                        key={String(val)}
+                        onClick={() => setBluprintScopeOn(val)}
+                        style={{
+                          flex: 1, padding: '6px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer',
+                          border: bluprintScopeOn === val ? '1px solid #a78bfa' : '1px solid #333',
+                          background: bluprintScopeOn === val ? 'rgba(167,139,250,0.15)' : '#1a1a2e',
+                          color: bluprintScopeOn === val ? '#a78bfa' : '#888',
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
+                  {bluprintScopeOn && (
+                    <input
+                      value={bluprintScope}
+                      onChange={e => setBluprintScope(e.target.value)}
+                      placeholder="ör. login / kimlik doğrulama akışı"
+                      style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px', boxSizing: 'border-box' }}
+                    />
+                  )}
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Model</label>
+                  <select
+                    value={sessionModel}
+                    onChange={e => setSessionModel(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    <option value="claude-fable-5">Claude Fable 5 (Opus 4.7)</option>
+                    <option value="claude-opus-4-8">Claude Opus 4.8</option>
+                    <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                    <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>Effort (Düşünce derinliği)</label>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {[['low','Düşük'],['normal','Normal'],['high','Yüksek']].map(([val, label]) => (
+                      <button
+                        key={val}
+                        onClick={() => setSessionEffort(val)}
+                        style={{
+                          flex: 1, padding: '6px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer',
+                          border: sessionEffort === val ? '1px solid #a78bfa' : '1px solid #333',
+                          background: sessionEffort === val ? 'rgba(167,139,250,0.15)' : '#1a1a2e',
+                          color: sessionEffort === val ? '#a78bfa' : '#888',
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ ...s.label, marginBottom: '4px' }}>İzin modu</label>
+                  <select
+                    value={sessionPermMode}
+                    onChange={e => setSessionPermMode(e.target.value)}
+                    style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}
+                  >
+                    <option value="bypassPermissions">Bypass — tüm izinleri atla</option>
+                    <option value="acceptEdits">Accept edits — düzenlemeleri otomatik kabul</option>
+                    <option value="ask">Ask — her tool için onay iste</option>
+                    <option value="plan">Plan — değişiklik yapmaz, yalnızca planlar</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Canvas */}
           {activeTab === 'canvas' && (
             <div style={s.inputGroup}>
@@ -1064,7 +1218,7 @@ export function EditModal() {
           )}
 
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -1093,7 +1247,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
@@ -1313,6 +1467,8 @@ const s = {
   },
   tabs: {
     display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
     marginBottom: '18px',
     backgroundColor: '#0d0d0d',
     padding: '3px',
@@ -1320,7 +1476,8 @@ const s = {
     gap: '3px',
   },
   tab: {
-    flex: 1,
+    flex: '0 0 auto',
+    whiteSpace: 'nowrap',
     padding: '9px',
     background: 'transparent',
     border: 'none',
@@ -1330,7 +1487,8 @@ const s = {
     fontSize: '13px',
   },
   activeTab: {
-    flex: 1,
+    flex: '0 0 auto',
+    whiteSpace: 'nowrap',
     padding: '9px',
     background: '#2a2a2a',
     border: 'none',
