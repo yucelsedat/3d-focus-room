@@ -346,6 +346,14 @@ const SESSION_PX_PER_UNIT = 200
 
 function SessionMessageBubble({ msg }) {
   const base = { fontSize: '26px', lineHeight: '1.5', maxWidth: '90%', wordBreak: 'break-word' }
+  const [copied, setCopied] = useState(false)
+
+  const copyMarkdown = (e) => {
+    e.stopPropagation()
+    navigator.clipboard.writeText(msg.content || '')
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   if (msg.role === 'user') return (
     <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -356,10 +364,18 @@ function SessionMessageBubble({ msg }) {
   )
 
   if (msg.role === 'ai') return (
-    <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
       <div style={{ ...base, background: '#111', border: '1px solid #1e3a2e', borderRadius: '12px 12px 12px 2px', padding: '8px 12px', color: '#d0f0d0' }}>
         <div className="session-markdown" style={{ fontSize: '26px' }} dangerouslySetInnerHTML={{ __html: marked(msg.content) }} />
       </div>
+      <button
+        onClick={copyMarkdown}
+        onPointerDown={e => e.stopPropagation()}
+        title="Markdown'ı panoya kopyala"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', marginTop: '2px', marginLeft: '2px', color: copied ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
+      >
+        {copied ? '✓ kopyalandı' : '⧉'}
+      </button>
     </div>
   )
 
