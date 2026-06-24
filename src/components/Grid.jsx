@@ -11,7 +11,7 @@ export function OutdoorFloor() {
   const texture = useTexture('/textures/grass.png', (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping
     t.repeat.set(OUTDOOR_SIZE / 4, OUTDOOR_SIZE / 4)
-    t.anisotropy = 16
+    t.anisotropy = 4
   })
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
@@ -29,12 +29,13 @@ function GridInner({ gx, gz, floorTexture }) {
   const setHoveredTile = useStore((state) => state.setHoveredTile)
   const meshRef = useRef()
   const hoveredRef = useRef(-1)
+  const lastRayRef = useRef(0)
   const [ready, setReady] = useState(false)
   const COUNT = gx * gz
 
   const texture = useTexture(`/textures/${floorTexture}`, (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping
-    t.anisotropy = 16
+    t.anisotropy = 4
   })
 
   const tempObj = useMemo(() => new THREE.Object3D(), [])
@@ -67,6 +68,11 @@ function GridInner({ gx, gz, floorTexture }) {
   useFrame((state) => {
     const mesh = meshRef.current
     if (!mesh || !ready) return
+
+    // Hover raycast'ini ~20fps'e throttle et — her karede tüm tile'lara
+    // ray atmak CPU'yu sürekli yakar; hover/edit için bu hassasiyet fazlasıyla yeter
+    if (state.clock.elapsedTime - lastRayRef.current < 0.05) return
+    lastRayRef.current = state.clock.elapsedTime
 
     state.raycaster.setFromCamera({ x: 0, y: 0 }, state.camera)
     const intersects = state.raycaster.intersectObject(mesh)
