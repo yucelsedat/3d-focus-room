@@ -95,8 +95,6 @@ const storage = multer.diskStorage({
     let type = 'images';
     if (file.mimetype.startsWith('video/')) {
       type = 'videos';
-    } else if (file.mimetype === 'text/html' || file.originalname.endsWith('.html')) {
-      type = 'slides';
     }
     cb(null, `public/uploads/${type}/`);
   },
@@ -563,6 +561,59 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     res.json(serializeMedia(media));
   } catch (err) {
     console.error('[upload] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Yerel diskteki bir HTML dosyasını (örn. html-slides skill çıktısı) slayt tile'a
+// alır: dosyayı public/uploads/slides/ altına kopyalar ve type='slide' Media yaratır.
+// Yerel tek-kullanıcılık uygulama olduğundan mutlak yol okuması kabul edilir.
+app.post('/api/slide-from-path', async (req, res) => {
+  try {
+    const { tileId, filePath, width, height, position, rotation } = req.body;
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'Dosya yolu gerekli' });
+    }
+
+    const srcPath = filePath.trim();
+    if (!/\.html?$/i.test(srcPath)) {
+      return res.status(400).json({ error: 'Yalnızca .html/.htm dosyaları desteklenir' });
+    }
+    if (!fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) {
+      return res.status(400).json({ error: 'Dosya bulunamadı: ' + srcPath });
+    }
+
+    const baseName = path.basename(srcPath);
+    const fileName = `${Date.now()}-${baseName}`;
+    const destPath = path.join(__dirname, 'public', 'uploads', 'slides', fileName);
+    fs.copyFileSync(srcPath, destPath);
+
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const id = BigInt(Date.now());
+
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId,
+        type: 'slide',
+        url: `/uploads/slides/${fileName}`,
+        width: parseFloat(width) || 1,
+        height: parseFloat(height) || 1,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+      },
+    });
+
+    res.json(serializeMedia(media));
+  } catch (err) {
+    console.error('[slide-from-path] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1104,21 +1155,31 @@ function streamClaudeToSSE(res, args, opts = {}) {
   let finished = false
   let pollInterval = null
   let idleTimer = null
+  let heartbeat = null
+  let sawResult = false
 
   function finish() {
     if (finished) return
     finished = true
     if (pollInterval) clearInterval(pollInterval)
     if (idleTimer) clearTimeout(idleTimer)
+    if (heartbeat) clearInterval(heartbeat)
     res.write('data: {"type":"done"}\n\n')
     res.end()
   }
 
   function resetIdleTimer() {
     if (idleTimer) clearTimeout(idleTimer)
-    // 3s no new content → done
-    idleTimer = setTimeout(finish, 3000)
+    // Güvenlik ağı: 'result' olayı asıl bitiş sinyalidir (aşağıda forwardLine'da
+    // yakalanır). Bu sayaç yalnızca result hiç gelmezse (çökme vb.) devreye girer;
+    // bu yüzden uzun tool çağrılarını/düşünme duraklamalarını kesmeyecek kadar geniş.
+    idleTimer = setTimeout(finish, 120000)
   }
+
+  // SSE bağlantısını canlı tut: boşta kapanmayı ve ara katman buffer'lamasını önler.
+  heartbeat = setInterval(() => {
+    if (!finished) { try { res.write(': ping\n\n') } catch {} }
+  }, 15000)
 
   function forwardLine(line) {
     if (!line.trim()) return false
@@ -1127,6 +1188,8 @@ function streamClaudeToSSE(res, args, opts = {}) {
       opts.onEvent?.(ev)
       if (['assistant', 'tool', 'result', 'system'].includes(ev.type)) {
         res.write(`data: ${JSON.stringify(ev)}\n\n`)
+        // 'result' bir turun kanonik bitişi — her iki modda da deterministik kapanış.
+        if (ev.type === 'result') sawResult = true
         return true
       }
     } catch {}
@@ -1153,6 +1216,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
         for (const line of lines) {
           if (forwardLine(line)) gotContent = true
         }
+        if (sawResult) return finish()
         if (gotContent) resetIdleTimer()
       }
     } catch {}
@@ -1174,6 +1238,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
     const lines = stdoutBuf.split('\n')
     stdoutBuf = lines.pop() ?? ''
     for (const line of lines) forwardLine(line)
+    if (sawResult) finish()
   })
 
   proc.stderr.on('data', chunk => {
