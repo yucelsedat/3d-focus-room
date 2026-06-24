@@ -1325,8 +1325,8 @@ function streamClaudeToSSE(res, args, opts = {}) {
 // modunda process açık kalır; her mesaj stdin'e bir NDJSON satırı olarak yazılır,
 // her mesaj bir tur üretir ve `result` ile biter. Process açık kaldığı için cache
 // turlar arası SICAK kalır (spike'ta doğrulandı: tur2 input 4130→395, cache_read↑).
-const PERSIST_IDLE_MS = 10 * 60 * 1000   // boşta 10 dk sonra process'i kapat (RAM)
-const PERSIST_MAX = 4                       // eşzamanlı kalıcı process tavanı (LRU tahliye)
+const PERSIST_IDLE_MS = 60 * 60 * 1000   // boşta 60 dk sonra process'i kapat (RAM)
+const PERSIST_MAX = 4                      // eşzamanlı kalıcı process tavanı (LRU tahliye)
 
 // stream-json girdi zarfı (spike'ta doğrulanan şema)
 function userLine(text) {
@@ -1451,7 +1451,16 @@ class PersistentSession {
 
   _armIdle() {
     if (this.idleTimer) clearTimeout(this.idleTimer)
-    this.idleTimer = setTimeout(() => sessionPool.evict(this.key), PERSIST_IDLE_MS)
+    this.idleTimer = setTimeout(async () => {
+      if (this.sessionId) {
+        try {
+          await trimSessionJsonl(this.sessionId)
+        } catch (e) {
+          console.error('[session-trim-idle] hata:', e.message)
+        }
+      }
+      sessionPool.evict(this.key)
+    }, PERSIST_IDLE_MS)
   }
 
   _emitError(msg) {
@@ -1521,6 +1530,41 @@ class SessionPool {
 }
 
 const sessionPool = new SessionPool()
+
+// ─── Session JSONL Optimization ────────────────────────────────────────────
+// Resume sırasında geçmiş JSONL'ı gönderilir. Çok sayıda tur varsa, token overhead.
+// trimSessionJsonl: son N tur tut, öncesini sil (token tasarrufu).
+const TRIM_MAX_TURNS = 30
+
+async function findSessionJsonl(sessionId) {
+  const projectsDir = path.join(os.homedir(), '.claude', 'projects')
+  if (!fs.existsSync(projectsDir)) return null
+  for (const projDir of fs.readdirSync(projectsDir)) {
+    const sessionFile = path.join(projectsDir, projDir, 'sessions', `${sessionId}.jsonl`)
+    if (fs.existsSync(sessionFile)) return sessionFile
+  }
+  return null
+}
+
+async function trimSessionJsonl(sessionId) {
+  const jsonlPath = await findSessionJsonl(sessionId)
+  if (!jsonlPath) return
+
+  try {
+    const content = await fs.promises.readFile(jsonlPath, 'utf8')
+    const lines = content.trim().split('\n').filter(l => l.trim())
+
+    if (lines.length <= TRIM_MAX_TURNS) return
+
+    const trimmed = lines.slice(-TRIM_MAX_TURNS)
+    const oldCount = lines.length - trimmed.length
+
+    await fs.promises.writeFile(jsonlPath, trimmed.join('\n') + '\n')
+    console.error(`[session-trim] ${path.basename(jsonlPath)}: ${lines.length}→${trimmed.length} tur (${oldCount} silindi)`)
+  } catch (e) {
+    console.error('[session-trim] hata:', e.message)
+  }
+}
 
 // ─── Room Session (her oda için izole proje klasörü) ─────────────────────────
 // roomsession tile, session tile'a benzer ama Claude CLI odaya özel bir proje
