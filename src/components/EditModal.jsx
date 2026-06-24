@@ -479,7 +479,7 @@ export function EditModal() {
         formData.append('theme', slideTheme)
 
         setLoadingStep('saving')
-        const r = await fetch('/api/add-media', {
+        const r = await fetch('/api/upload', {
           method: 'POST',
           body: formData
         })
