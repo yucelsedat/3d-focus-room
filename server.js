@@ -1900,7 +1900,12 @@ app.post('/api/roomchat/message', async (req, res) => {
     sys = `Sen bu sanal odanın asistanısın. Yalnızca bu odadaki metin ve canvas yazılarından oluşturulan bilgiyle konuş. Genel bilgini yalnızca odanın içeriğinde cevap yoksa kullan ve bunu açıkça belirt. Cevaplarını Türkçe ver, kısa ve net ol.`
     const reportPath = path.join(dir, 'graphify-out', 'GRAPH_REPORT.md')
     if (fs.existsSync(reportPath)) {
-      try { sys += `\n\n# Oda Bilgi Grafı Raporu\n${fs.readFileSync(reportPath, 'utf8')}` } catch {}
+      try {
+        let report = fs.readFileSync(reportPath, 'utf8')
+        // Sistem prompt'u kontrol etmek için raporu ilk 3K char'la sınırla
+        if (report.length > 3000) report = report.slice(0, 3000) + '\n…(tam rapor için graphify query kullanın)'
+        sys += `\n\n# Oda Bilgi Grafı Raporu\n${report}`
+      } catch {}
     }
     const docs = await extractRoomTexts(roomId)
     if (docs.length) sys += `\n\n# Oda İçeriği (kaynak metinler)\n${roomCorpusText(docs)}`
