@@ -1534,7 +1534,8 @@ const sessionPool = new SessionPool()
 // ─── Session JSONL Optimization ────────────────────────────────────────────
 // Resume sırasında geçmiş JSONL'ı gönderilir. Çok sayıda tur varsa, token overhead.
 // trimSessionJsonl: son N tur tut, öncesini sil (token tasarrufu).
-const TRIM_MAX_TURNS = 30
+// 228K JSONL'ın son 30 tur hala ~40K (68K spike'a sebep) → 10 tur'a indirdik (~15K)
+const TRIM_MAX_TURNS = 10
 
 async function findSessionJsonl(sessionId) {
   const projectsDir = path.join(os.homedir(), '.claude', 'projects')
