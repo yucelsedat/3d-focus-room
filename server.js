@@ -1902,13 +1902,14 @@ app.post('/api/roomchat/message', async (req, res) => {
     if (fs.existsSync(reportPath)) {
       try {
         let report = fs.readFileSync(reportPath, 'utf8')
-        // Sistem prompt'u kontrol etmek için raporu ilk 3K char'la sınırla
-        if (report.length > 3000) report = report.slice(0, 3000) + '\n…(tam rapor için graphify query kullanın)'
-        sys += `\n\n# Oda Bilgi Grafı Raporu\n${report}`
+        // Sistem prompt'u token tasarrufu için ilk 1.5K char'la sınırla (oda grafı)
+        if (report.length > 1500) report = report.slice(0, 1500) + '\n…(graphify query kullanın)'
+        sys += `\n\n# Oda Bilgi Grafı\n${report}`
       } catch {}
     }
     const docs = await extractRoomTexts(roomId)
-    if (docs.length) sys += `\n\n# Oda İçeriği (kaynak metinler)\n${roomCorpusText(docs)}`
+    // Oda içeriğini 8K char'la sınırla (cache warm için)
+    if (docs.length) sys += `\n\n# Oda İçeriği\n${roomCorpusText(docs, 8000)}`
     const graphJson = path.join(dir, 'graphify-out', 'graph.json')
     if (fs.existsSync(graphJson)) {
       sys += `\n\nDaha derin ilişkiler için odanın grafı: ${graphJson} — gerekirse \`graphify query "<soru>"\` çalıştırabilirsin.`
