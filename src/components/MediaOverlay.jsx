@@ -86,6 +86,36 @@ function EmbedMesh({ url, width, height }) {
   )
 }
 
+function SlideMesh({ url, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+  const pxWidth = 1920
+  const pxHeight = Math.round(1920 * (h / w))
+  const scaleFactor = w * 40 / pxWidth
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0.1} color="#60a5fa" depthWrite={false} side={THREE.DoubleSide} />
+      <Html key={`slide-${w}-${h}`} transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
+        <iframe
+          src={url}
+          frameBorder="0"
+          allowFullScreen
+          style={{
+            width: `${pxWidth}px`,
+            height: `${pxHeight}px`,
+            border: 'none',
+            display: 'block',
+            pointerEvents: 'auto',
+            borderRadius: '8px',
+            boxShadow: '0 8px 24px rgba(96, 165, 250, 0.3)'
+          }}
+        />
+      </Html>
+    </mesh>
+  )
+}
+
 const MD_PX_PER_UNIT = 200
 const MD_COL_PX_W    = 600
 
@@ -1438,7 +1468,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isRoomChat = type === 'roomchat'
   const isRoomSession = type === 'roomsession'
   const isBluprint = type === 'bluprint'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint
+  const isSlide    = type === 'slide'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint && !isSlide
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -1457,6 +1488,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
           <RoomSessionMesh id={id} width={width} height={height} />
         ) : isBluprint ? (
           <BluprintMesh id={id} width={width} height={height} />
+        ) : isSlide ? (
+          <SlideMesh url={url} width={width} height={height} />
         ) : isCanvas ? (
           <CanvasMesh id={id} content={content} width={width} height={height} />
         ) : isMarkdown ? (

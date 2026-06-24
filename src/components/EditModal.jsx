@@ -63,6 +63,7 @@ export function EditModal() {
     { id: 'codebase-analysis', label: 'codebase-analysis — doğrulanmış teknik doküman', installed: true },
     { id: 'repo-insight', label: 'repo-insight — neden böyle tasarlanmış (best-effort)', installed: true },
   ])
+  const [slideFilePath, setSlideFilePath] = useState('')
   const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
@@ -439,6 +440,48 @@ export function EditModal() {
         setMarkdownContent('')
         setWidth(1)
         setHeight(1)
+      } catch (err) {
+        console.error(err)
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
+    if (activeTab === 'slide') {
+      if (!slideFilePath.trim()) {
+        alert('Lütfen bir HTML dosya yolu girin.')
+        return
+      }
+      setLoading(true)
+      setLoadingStep('saving')
+      // YouTube tile oranı (16:9)
+      const slideW = Number((5 * 16 / 9).toFixed(2)) // 8.89
+      const slideH = 5
+      try {
+        // Yerel HTML dosyasını (html-slides skill çıktısı) public/uploads/slides/
+        // altına kopyalayıp slayt tile olarak ekle.
+        const r = await fetch('/api/slide-from-path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            filePath: slideFilePath.trim(),
+            width: slideW,
+            height: slideH,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+          }),
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Slayt dosyası alınamadı')
+        addMedia(d)
+        closeModal()
+        setSlideFilePath('')
+        setWidth(slideW)
+        setHeight(slideH)
       } catch (err) {
         console.error(err)
         alert(err.message)
@@ -891,6 +934,12 @@ export function EditModal() {
           >
             📐 Blueprint
           </button>
+          <button
+            style={activeTab === 'slide' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('slide'); setWidth(8.89); setHeight(5) }}
+          >
+            🎯 Slayt
+          </button>
         </div>
 
         {/* Form */}
@@ -1217,8 +1266,26 @@ export function EditModal() {
             </div>
           )}
 
+          {/* Slide tab — yalnızca HTML dosya yolu */}
+          {activeTab === 'slide' && (
+            <div style={s.inputGroup}>
+              <label style={{ ...s.label, marginBottom: '6px' }}>Dosya yolu (HTML)</label>
+              <input
+                type="text"
+                value={slideFilePath}
+                onChange={e => setSlideFilePath(e.target.value)}
+                placeholder="/ev/.../sunus.html — html-slides skill'inin paylaştığı yolu yapıştırın"
+                style={{ ...s.input, fontFamily: 'monospace', fontSize: '13px' }}
+              />
+              <p style={s.note}>
+                html-slides skill'inin ürettiği .html dosyasının mutlak yolunu yapıştırın.
+                Dosya <code>public/uploads/slides/</code> altına kopyalanır ve 16:9 (8.89×5) olarak duvara eklenir.
+              </p>
+            </div>
+          )}
+
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -1247,7 +1314,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
@@ -1297,31 +1364,31 @@ export function EditModal() {
           <div style={s.row}>
             <div style={{ flex: 1 }}>
               <label style={s.label}>
-                Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 3' : ''}
+                Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 3' : activeTab === 'slide' ? '⚡ 8.89 (16:9)' : ''}
               </label>
               <input
-                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session') ? 0.5 : 1 }}
+                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide') ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={width}
                 onChange={(e) => handleWidthChange(e.target.value)}
-                readOnly={activeTab === 'markdown' || activeTab === 'session'}
+                readOnly={activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide'}
               />
             </div>
             <div style={{ width: 12 }} />
             <div style={{ flex: 1 }}>
               <label style={s.label}>
-                Yükseklik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 5' : naturalRatio ? '🔗' : ''}
+                Yükseklik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 5' : activeTab === 'slide' ? '⚡ 5' : naturalRatio ? '🔗' : ''}
               </label>
               <input
-                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session') ? 0.5 : 1 }}
+                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide') ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={height}
                 onChange={(e) => handleHeightChange(e.target.value)}
-                readOnly={activeTab === 'markdown' || activeTab === 'session'}
+                readOnly={activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide'}
               />
             </div>
           </div>
