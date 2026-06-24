@@ -1915,6 +1915,10 @@ app.post('/api/roomchat/message', async (req, res) => {
     }
   }
 
+  // Token estimate: sistem prompt uzunluğu (rough: 1 token ≈ 4 char)
+  const sysTokenEstimate = Math.ceil((sys?.length || 0) / 4)
+  console.log(`[roomchat] spawn: sys≈${sysTokenEstimate}tok, messages=${messages.length}`)
+
   const sess = sessionPool.ensure(key, { settings, cwd: process.cwd(), sys })
   sess.send(res, message.trim(), {
     onInit: (sessionId) => {

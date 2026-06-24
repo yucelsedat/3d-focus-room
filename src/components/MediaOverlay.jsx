@@ -1466,6 +1466,12 @@ function SkillChatMesh({ id, width, height, variant }) {
             const barColor = pct < 0.6 ? '#4ade80' : pct < 0.85 ? '#fbbf24' : '#f87171'
             const kStr = contextTokens.used >= 1000 ? `${(contextTokens.used / 1000).toFixed(1)}k` : String(contextTokens.used)
             const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+            const billable = contextTokens.fresh != null
+              ? Math.round(contextTokens.fresh + (contextTokens.created || 0) * 1.25 + contextTokens.cached * 0.1)
+              : null
+            const costColor = billable != null
+              ? billable < 4000 ? '#4ade80' : billable < 15000 ? '#fbbf24' : '#f87171'
+              : barColor
             return (
               <div style={{ padding: '4px 10px 5px', background: '#0a0712', borderBottom: `1px solid #3a2e5e`, flexShrink: 0, ...px }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
@@ -1475,6 +1481,12 @@ function SkillChatMesh({ id, width, height, variant }) {
                 <div style={{ height: '4px', background: '#3a2e5e', borderRadius: '2px', overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${pct * 100}%`, background: barColor, borderRadius: '2px', transition: 'width 0.4s ease, background 0.4s ease' }} />
                 </div>
+                {contextTokens.fresh != null && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '3px', fontSize: '15px', fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ color: costColor }} title="Bu turun faturalı ağırlığı: taze×1 + yeni-cache×1.25 + cache-okuma×0.1">ödenen ≈ {fmtK(billable)}</span>
+                    <span><span style={{ color: '#f59e0b' }}>pahalı {fmtK(contextTokens.fresh + (contextTokens.created || 0))}</span><span style={{ color: '#395873' }}> · </span><span style={{ color: '#4ade80' }}>cache {fmtK(contextTokens.cached)}</span></span>
+                  </div>
+                )}
               </div>
             )
           })()}
