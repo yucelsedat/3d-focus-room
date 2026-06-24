@@ -1903,9 +1903,9 @@ app.post('/api/roomchat/message', async (req, res) => {
     if (fs.existsSync(reportPath)) {
       try {
         let report = fs.readFileSync(reportPath, 'utf8')
-        // Sistem prompt'u token tasarrufu için ilk 1.5K char'la sınırla (oda grafı)
-        if (report.length > 1500) report = report.slice(0, 1500) + '\n…(graphify query kullanın)'
-        sys += `\n\n# Oda Bilgi Grafı\n${report}`
+        // Sistem prompt'u token tasarrufu için ilk 1K char'la sınırla (oda grafı)
+        if (report.length > 1000) report = report.slice(0, 1000) + '\n…'
+        sys += `\n\n# Oda Grafı\n${report}`
       } catch {}
     }
     const docs = await extractRoomTexts(roomId)
@@ -2169,7 +2169,7 @@ function roomBlueprintStatus(roomId, skillId = 'reconstruct', builtAt = null) {
 }
 
 // Seçili skill'in birincil çıktısını sohbete enjekte etmek için okur (bütçeli)
-function readBlueprintSpec(roomId, skillId = 'reconstruct', budgetChars = 24000) {
+function readBlueprintSpec(roomId, skillId = 'reconstruct', budgetChars = 8000) {
   const dir = roomBlueprintDir(roomId)
   const entry = blueprintSkill(skillId)
   for (const name of entry.outputs) {
