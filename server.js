@@ -67,6 +67,32 @@ const CLAUDE_CLI = (() => {
   return 'claude'
 })()
 
+// ─── MCP bütçesi: spawn edilen her claude turunda tüm MCP tool şemaları sistem
+// prompt'una girer. Global config'de 5 sunucu var (github ~60 tool, exa, tavily,
+// web-clone, context7) → ~30K token/tur, üstelik cache soğuyunca her turda tekrar.
+// Bir oda asistanının bunlara ihtiyacı yok; yalnızca context7'yi (2 tool, küçük,
+// context7-mcp skill'inin arka ucu) bırakıp gerisini --strict-mcp-config ile keseriz.
+// API key repoya girmesin diye context7 ayarını global ~/.claude.json'dan okuyup
+// minimal config'i os.tmpdir() altına yazarız; sadece o dosyanın yolunu kullanırız.
+const MIN_MCP_PATH = path.join(os.tmpdir(), 'focus-room-min-mcp.json')
+const MCP_ARGS = (() => {
+  try {
+    const globalCfg = path.join(os.homedir(), '.claude.json')
+    const cfg = JSON.parse(fs.readFileSync(globalCfg, 'utf8'))
+    const ctx7 = cfg.mcpServers?.context7
+    if (ctx7) {
+      fs.writeFileSync(MIN_MCP_PATH, JSON.stringify({ mcpServers: { context7: ctx7 } }))
+      return ['--strict-mcp-config', '--mcp-config', MIN_MCP_PATH]
+    }
+  } catch (err) {
+    console.error('[mcp] minimal config yazılamadı, tüm MCP kapatılıyor:', err.message)
+  }
+  // context7 bulunamazsa: hiç MCP yükleme (yine de büyük tasarruf)
+  return ['--strict-mcp-config']
+})()
+// Spawn arg dizilerine eklenir; skilleri etkilemez, sadece MCP kapsamını daraltır.
+function mcpArgs() { return MCP_ARGS }
+
 // ─── Boot-time: auto-migrate JSON → SQLite if DB is empty ────────────────────
 async function bootMigrate() {
   const count = await prisma.room.count();
@@ -1135,20 +1161,40 @@ app.post('/api/session/live/message', (req, res) => {
   ])
 })
 
+// ─── Ortak yardımcılar (hem tek-atış streamClaudeToSSE hem kalıcı oturum yolu) ──
+// CLI stream-json çıktısında tarayıcıya ilettiğimiz event türleri.
+const FORWARD_TYPES = new Set(['assistant', 'tool', 'result', 'system'])
+// Spawn edilen claude'a sızdırmamamız gereken oynak env değişkenleri.
+const CLAUDE_VOLATILE_ENV = ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']
+
+function sseLine(ev) { return `data: ${JSON.stringify(ev)}\n\n` }
+
+function setSSEHeaders(res) {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+}
+
+function buildSpawnEnv(envOverrides) {
+  const env = { ...process.env, ...(envOverrides || {}), FOCUS_ROOM_PORT: String(port) }
+  for (const v of CLAUDE_VOLATILE_ENV) delete env[v]
+  return env
+}
+
 // Spawns the claude CLI and streams its stream-json output to an SSE response.
 // Handles both normal stdout mode and "background task" mode (when the CLI
 // detects it's running inside an active session it writes output to a task
 // file instead of stdout — we detect the path and poll the file).
 // opts.onEvent(ev) is called for every forwarded event.
+// NOT: Tek-atış yol — VS Code köprüsü ve graf-build gibi gerçekten kısa ömürlü
+// spawn'lar için. Çok turlu sohbet tile'ları kalıcı havuzu (SessionPool) kullanır.
 function streamClaudeToSSE(res, args, opts = {}) {
-  res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('Connection', 'keep-alive')
-  res.flushHeaders()
+  setSSEHeaders(res)
 
   const spawnEnv = { ...process.env, ...(opts.envOverrides || {}), FOCUS_ROOM_PORT: String(port) }
-  for (const v of ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
-    'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']) {
+  for (const v of CLAUDE_VOLATILE_ENV) {
     delete spawnEnv[v]
   }
 
@@ -1186,7 +1232,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
     try {
       const ev = JSON.parse(line)
       opts.onEvent?.(ev)
-      if (['assistant', 'tool', 'result', 'system'].includes(ev.type)) {
+      if (FORWARD_TYPES.has(ev.type)) {
         res.write(`data: ${JSON.stringify(ev)}\n\n`)
         // 'result' bir turun kanonik bitişi — her iki modda da deterministik kapanış.
         if (ev.type === 'result') sawResult = true
@@ -1269,6 +1315,213 @@ function streamClaudeToSSE(res, args, opts = {}) {
   })
 }
 
+// ─── Kalıcı sıcak oturum havuzu (Persistent warm session) ────────────────────
+// Sorun: sohbet tile'ları her mesajda taze bir `claude --print --resume` process'i
+// başlatıyordu → Anthropic prompt cache'i (5dk TTL) process'ler arası taşınmadığı
+// ve odada gezerken turlar arası süre 5dk'yı aştığı için her tur SOĞUK (cache-miss)
+// gidiyor, tüm geçmiş tam ücretle yeniden okunuyordu (VS Code'a göre 4-5x token).
+//
+// Çözüm: her tile için TEK, uzun-ömürlü process. CLI'ın `--input-format stream-json`
+// modunda process açık kalır; her mesaj stdin'e bir NDJSON satırı olarak yazılır,
+// her mesaj bir tur üretir ve `result` ile biter. Process açık kaldığı için cache
+// turlar arası SICAK kalır (spike'ta doğrulandı: tur2 input 4130→395, cache_read↑).
+const PERSIST_IDLE_MS = 10 * 60 * 1000   // boşta 10 dk sonra process'i kapat (RAM)
+const PERSIST_MAX = 4                       // eşzamanlı kalıcı process tavanı (LRU tahliye)
+
+// stream-json girdi zarfı (spike'ta doğrulanan şema)
+function userLine(text) {
+  return JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }) + '\n'
+}
+
+class PersistentSession {
+  constructor(key, { settings, cwd, sys }) {
+    this.key = key
+    this.settings = { ...settings }          // { sessionId, model, effort, permissionMode }
+    this.cwd = cwd || process.cwd()
+    this.sys = sys || null                   // sabit append-system-prompt (variant'lar için)
+    this.proc = null
+    this.alive = false
+    this.sessionId = settings.sessionId || null
+    this.sink = null                         // o an bağlı SSE res (yoksa null)
+    this.busy = false
+    this.queue = []                          // bekleyen { res, message }
+    this.stdoutBuf = ''
+    this.idleTimer = null
+    this.heartbeat = null
+    this.lastUsed = Date.now()
+    this.onSessionId = null                  // ilk sessionId yakalanınca (persist için)
+  }
+
+  _spawn() {
+    const a = [
+      '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--model', cliModel(this.settings.model),
+      ...mcpArgs(),
+    ]
+    if (this.sys) a.push('--append-system-prompt', this.sys)
+    a.push(...permissionArgs(this.settings.permissionMode))
+    if (this.sessionId) a.push('--resume', this.sessionId)   // geçmişi koru
+
+    const envOverrides = {}
+    if (this.settings.effort && this.settings.effort !== 'normal') envOverrides.CLAUDE_EFFORT = this.settings.effort
+
+    this.proc = spawn(CLAUDE_CLI, a, { cwd: this.cwd, env: buildSpawnEnv(envOverrides) })
+    console.error(`[persist] SPAWN key=${this.key} pid=${this.proc.pid} resume=${this.sessionId || 'none'}`)
+    this.alive = true
+    this.stdoutBuf = ''
+    this.proc.stdout.on('data', (c) => this._onStdout(c))
+    this.proc.stderr.on('data', (c) => console.error('[persist stderr]', c.toString().slice(0, 200)))
+    this.proc.on('close', (code) => this._onClose(code))
+    this.proc.on('error', (e) => this._emitError(e.message))
+  }
+
+  _onStdout(chunk) {
+    this.stdoutBuf += chunk.toString()
+    const lines = this.stdoutBuf.split('\n')
+    this.stdoutBuf = lines.pop() ?? ''
+    for (const line of lines) this._onLine(line)
+  }
+
+  _onLine(line) {
+    if (!line.trim()) return
+    let ev
+    try { ev = JSON.parse(line) } catch { return }
+    // Her tur başında bir init gelir (aynı session_id) — idempotent ele al.
+    if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
+      if (!this.sessionId) {
+        this.sessionId = ev.session_id
+        if (this.onSessionId) { try { this.onSessionId(ev.session_id) } catch {} }
+      }
+      if (this.sink) sessionStreams.set(this.sessionId, this.sink)  // izin köprüsü
+    }
+    if (this.sink && FORWARD_TYPES.has(ev.type)) {
+      try { this.sink.write(sseLine(ev)) } catch {}
+    }
+    if (ev.type === 'result') this._finishTurn()   // tur sınırı
+  }
+
+  // Bir mesaj kuyruğa al; sıra gelince stdin'e yaz.
+  send(res, message, { onInit } = {}) {
+    setSSEHeaders(res)
+    if (onInit && !this.onSessionId) this.onSessionId = onInit
+    this.queue.push({ res, message })
+    this._next()
+  }
+
+  _next() {
+    if (this.busy) return
+    const job = this.queue.shift()
+    if (!job) return
+    this.busy = true
+    this.lastUsed = Date.now()
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null }
+    if (!this.alive || !this.proc) this._spawn()   // ilk tur ya da idle/çökme sonrası --resume ile yeniden doğ
+
+    this.sink = job.res
+    if (this.sessionId) sessionStreams.set(this.sessionId, this.sink)
+    // Kullanıcı sekmeyi kapatırsa turu bırak ama process'i yaşat.
+    job.res.on('close', () => { if (this.sink === job.res) this._detachSink() })
+
+    this.heartbeat = setInterval(() => {
+      if (this.sink) { try { this.sink.write(': ping\n\n') } catch {} }
+    }, 15000)
+
+    try {
+      this.proc.stdin.write(userLine(job.message))
+    } catch (e) {
+      this._emitError(e.message)
+      this.busy = false
+      this._next()
+    }
+  }
+
+  _finishTurn() {
+    if (this.sink) { try { this.sink.write('data: {"type":"done"}\n\n'); this.sink.end() } catch {} }
+    this._detachSink()
+    this.busy = false
+    this._armIdle()
+    this._next()   // kuyrukta bekleyen varsa işle
+  }
+
+  _detachSink() {
+    if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = null }
+    if (this.sessionId && sessionStreams.get(this.sessionId) === this.sink) sessionStreams.delete(this.sessionId)
+    this.sink = null
+  }
+
+  _armIdle() {
+    if (this.idleTimer) clearTimeout(this.idleTimer)
+    this.idleTimer = setTimeout(() => sessionPool.evict(this.key), PERSIST_IDLE_MS)
+  }
+
+  _emitError(msg) {
+    if (this.sink) { try { this.sink.write(sseLine({ type: 'error', message: msg })); this.sink.end() } catch {} }
+  }
+
+  _onClose(code) {
+    console.error(`[persist] CLOSE key=${this.key} code=${code} busy=${this.busy}`)
+    this.alive = false
+    this.proc = null
+    if (this.busy && this.sink) this._emitError(`oturum süreci kapandı (kod ${code})`)
+    this._detachSink()
+    this.busy = false
+    if (this.queue.length) this._next()   // beklenen kapanış değilse --resume ile yeniden doğ
+  }
+
+  // model/effort/izin değişti: ayarları güncelle ve process'i kapat.
+  // Sonraki mesaj --resume + yeni ayarlarla yeniden doğar (geçmiş korunur).
+  applySettings(patch) {
+    this.settings = { ...this.settings, ...patch }
+    this.dispose()
+  }
+
+  dispose() {
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null }
+    this._detachSink()
+    if (this.proc) {
+      try { this.proc.stdin.end() } catch {}
+      try { this.proc.kill() } catch {}
+    }
+    this.proc = null
+    this.alive = false
+    this.busy = false
+  }
+}
+
+class SessionPool {
+  constructor() { this.map = new Map() }
+
+  ensure(key, opts) {
+    let s = this.map.get(key)
+    if (!s) {
+      this._evictIfFull()
+      s = new PersistentSession(key, opts)
+      this.map.set(key, s)
+    }
+    return s
+  }
+
+  get(key) { return this.map.get(key) }
+
+  evict(key) {
+    const s = this.map.get(key)
+    if (s) { s.dispose(); this.map.delete(key) }
+  }
+
+  // Tavan dolduysa, meşgul olmayan en eski oturumu tahliye et.
+  _evictIfFull() {
+    if (this.map.size < PERSIST_MAX) return
+    let victim = null
+    for (const s of this.map.values()) {
+      if (s.busy) continue
+      if (!victim || s.lastUsed < victim.lastUsed) victim = s
+    }
+    if (victim) this.evict(victim.key)
+  }
+}
+
+const sessionPool = new SessionPool()
+
 // ─── Room Session (her oda için izole proje klasörü) ─────────────────────────
 // roomsession tile, session tile'a benzer ama Claude CLI odaya özel bir proje
 // klasöründe (cwd) çalışır: room-projects/<roomId>/. Böylece her oda kendi web
@@ -1350,6 +1603,8 @@ app.patch('/api/ai-session/:mediaId/settings', async (req, res) => {
       where: { id: BigInt(req.params.mediaId) },
       data: { content: formatSessionContent(updated) },
     })
+    // Canlı kalıcı oturum varsa: yeni ayarlarla yeniden başlat (geçmiş --resume ile korunur).
+    sessionPool.get(`ai-session:${req.params.mediaId}`)?.applySettings(req.body)
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1366,31 +1621,18 @@ app.post('/api/ai-session/message', async (req, res) => {
     if (media) settings = parseSessionContent(media.content)
   } catch {}
 
-  const args = [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(settings.model),
-    ...permissionArgs(settings.permissionMode),
-  ];
-  if (settings.sessionId) args.push('--resume', settings.sessionId);
-  args.push(message.trim());
-
-  const spawnEnvOverrides = {}
-  if (settings.effort && settings.effort !== 'normal') {
-    spawnEnvOverrides.CLAUDE_EFFORT = settings.effort
-  }
-
-  streamClaudeToSSE(res, args, {
-    envOverrides: spawnEnvOverrides,
-    onEvent: withStreamRegistry(res, (ev) => {
-      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
-        settings.sessionId = ev.session_id
-        const newContent = formatSessionContent({ ...settings, sessionId: ev.session_id })
-        prisma.media.update({
-          where: { id: BigInt(mediaId) },
-          data: { content: newContent },
-        }).catch(err => console.error('[ai-session] kayıt hatası:', err.message))
-      }
-    })
+  // Kalıcı sıcak oturum: ilk mesajda process doğar, sonraki mesajlar aynı sıcak
+  // process'e stdin'den akar → prompt cache turlar arası korunur (token tasarrufu).
+  // İlk init'te yakalanan sessionId media.content'e bir kez kaydedilir (eviction/
+  // çökme sonrası --resume ile geçmiş korunsun diye).
+  const sess = sessionPool.ensure(`ai-session:${mediaId}`, { settings, cwd: process.cwd() })
+  sess.send(res, message.trim(), {
+    onInit: (sessionId) => {
+      prisma.media.update({
+        where: { id: BigInt(mediaId) },
+        data: { content: formatSessionContent({ ...settings, sessionId }) },
+      }).catch(err => console.error('[ai-session] kayıt hatası:', err.message))
+    },
   })
 });
 
@@ -1530,6 +1772,7 @@ app.patch('/api/roomchat/:mediaId/settings', async (req, res) => {
       where: { id: BigInt(req.params.mediaId) },
       data: { content: formatSessionContent(updated) },
     })
+    sessionPool.get(`roomchat:${req.params.mediaId}`)?.applySettings(req.body)
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1570,6 +1813,7 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
   streamClaudeToSSE(res, [
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
+    ...mcpArgs(),
     '--dangerously-skip-permissions',
     prompt,
   ], {
@@ -1582,6 +1826,8 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
           where: { id: media.id },
           data: { content: formatSessionContent({ ...cur, graphBuiltAt: new Date().toISOString(), nodeCount: status.nodeCount }) },
         }).catch(err => console.error('[roomchat] graf kaydı hatası:', err.message))
+        // Graf tazelendi → kalıcı oturumu düşür ki sonraki mesaj yeni sys'i kursun.
+        sessionPool.evict(`roomchat:${media.id}`)
       }
     },
   })
@@ -1598,48 +1844,35 @@ app.post('/api/roomchat/message', async (req, res) => {
 
   const settings = parseSessionContent(media.content)
   const roomId = media.roomId
-  const dir = roomGraphDir(roomId)
+  const key = `roomchat:${mediaId}`
 
-  let sys = `Sen bu sanal odanın asistanısın. Yalnızca bu odadaki metin ve canvas yazılarından oluşturulan bilgiyle konuş. Genel bilgini yalnızca odanın içeriğinde cevap yoksa kullan ve bunu açıkça belirt. Cevaplarını Türkçe ver, kısa ve net ol.`
-
-  const reportPath = path.join(dir, 'graphify-out', 'GRAPH_REPORT.md')
-  if (fs.existsSync(reportPath)) {
-    try { sys += `\n\n# Oda Bilgi Grafı Raporu\n${fs.readFileSync(reportPath, 'utf8')}` } catch {}
+  // Dinamik sys (oda grafı + korpus) yalnızca havuzda canlı oturum yokken kurulur;
+  // spawn anında sabitlenir. Oda içeriği değişince rebuild endpoint'i evict eder →
+  // sonraki mesaj sys'i tazeler. Sıcak oturumda gereksiz DB/dosya okuması yapılmaz.
+  let sys
+  if (!sessionPool.get(key)) {
+    const dir = roomGraphDir(roomId)
+    sys = `Sen bu sanal odanın asistanısın. Yalnızca bu odadaki metin ve canvas yazılarından oluşturulan bilgiyle konuş. Genel bilgini yalnızca odanın içeriğinde cevap yoksa kullan ve bunu açıkça belirt. Cevaplarını Türkçe ver, kısa ve net ol.`
+    const reportPath = path.join(dir, 'graphify-out', 'GRAPH_REPORT.md')
+    if (fs.existsSync(reportPath)) {
+      try { sys += `\n\n# Oda Bilgi Grafı Raporu\n${fs.readFileSync(reportPath, 'utf8')}` } catch {}
+    }
+    const docs = await extractRoomTexts(roomId)
+    if (docs.length) sys += `\n\n# Oda İçeriği (kaynak metinler)\n${roomCorpusText(docs)}`
+    const graphJson = path.join(dir, 'graphify-out', 'graph.json')
+    if (fs.existsSync(graphJson)) {
+      sys += `\n\nDaha derin ilişkiler için odanın grafı: ${graphJson} — gerekirse \`graphify query "<soru>"\` çalıştırabilirsin.`
+    }
   }
 
-  const docs = await extractRoomTexts(roomId)
-  if (docs.length) sys += `\n\n# Oda İçeriği (kaynak metinler)\n${roomCorpusText(docs)}`
-
-  const graphJson = path.join(dir, 'graphify-out', 'graph.json')
-  if (fs.existsSync(graphJson)) {
-    sys += `\n\nDaha derin ilişkiler için odanın grafı: ${graphJson} — gerekirse \`graphify query "<soru>"\` çalıştırabilirsin.`
-  }
-
-  const args = [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(settings.model),
-    '--append-system-prompt', sys,
-    ...permissionArgs(settings.permissionMode),
-  ]
-  if (settings.sessionId) args.push('--resume', settings.sessionId)
-  args.push(message.trim())
-
-  const envOverrides = {}
-  if (settings.effort && settings.effort !== 'normal') {
-    envOverrides.CLAUDE_EFFORT = settings.effort
-  }
-
-  streamClaudeToSSE(res, args, {
-    envOverrides,
-    onEvent: withStreamRegistry(res, (ev) => {
-      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
-        settings.sessionId = ev.session_id
-        prisma.media.update({
-          where: { id: BigInt(mediaId) },
-          data: { content: formatSessionContent({ ...settings, sessionId: ev.session_id }) },
-        }).catch(err => console.error('[roomchat] kayıt hatası:', err.message))
-      }
-    }),
+  const sess = sessionPool.ensure(key, { settings, cwd: process.cwd(), sys })
+  sess.send(res, message.trim(), {
+    onInit: (sessionId) => {
+      prisma.media.update({
+        where: { id: BigInt(mediaId) },
+        data: { content: formatSessionContent({ ...settings, sessionId }) },
+      }).catch(err => console.error('[roomchat] kayıt hatası:', err.message))
+    },
   })
 })
 
@@ -1708,6 +1941,7 @@ app.patch('/api/roomsession/:mediaId/settings', async (req, res) => {
       where: { id: BigInt(req.params.mediaId) },
       data: { content: formatSessionContent(updated) },
     })
+    sessionPool.get(`roomsession:${req.params.mediaId}`)?.applySettings(req.body)
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1725,35 +1959,22 @@ app.post('/api/roomsession/message', async (req, res) => {
   const settings = parseSessionContent(media.content)
   const dir = roomProjectDir(media.roomId)
   try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+  const key = `roomsession:${mediaId}`
 
-  const sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri (ör. Next.js) burada kurulabilir ve geliştirilebilir.`
-
-  const args = [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(settings.model),
-    '--append-system-prompt', sys,
-    ...permissionArgs(settings.permissionMode),
-  ];
-  if (settings.sessionId) args.push('--resume', settings.sessionId);
-  args.push(message.trim());
-
-  const envOverrides = {}
-  if (settings.effort && settings.effort !== 'normal') {
-    envOverrides.CLAUDE_EFFORT = settings.effort
+  // sys statik (yalnızca çalışma klasörü yönergesi) — ilk spawn'da sabitlenir.
+  let sys
+  if (!sessionPool.get(key)) {
+    sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri (ör. Next.js) burada kurulabilir ve geliştirilebilir.`
   }
 
-  streamClaudeToSSE(res, args, {
-    cwd: dir,
-    envOverrides,
-    onEvent: withStreamRegistry(res, (ev) => {
-      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
-        settings.sessionId = ev.session_id
-        prisma.media.update({
-          where: { id: BigInt(mediaId) },
-          data: { content: formatSessionContent({ ...settings, sessionId: ev.session_id }) },
-        }).catch(err => console.error('[roomsession] kayıt hatası:', err.message))
-      }
-    })
+  const sess = sessionPool.ensure(key, { settings, cwd: dir, sys })
+  sess.send(res, message.trim(), {
+    onInit: (sessionId) => {
+      prisma.media.update({
+        where: { id: BigInt(mediaId) },
+        data: { content: formatSessionContent({ ...settings, sessionId }) },
+      }).catch(err => console.error('[roomsession] kayıt hatası:', err.message))
+    },
   })
 });
 
@@ -1952,6 +2173,7 @@ app.patch('/api/bluprint/:mediaId/settings', async (req, res) => {
       where: { id: BigInt(req.params.mediaId) },
       data: { content: formatSessionContent(updated) },
     })
+    sessionPool.get(`bluprint:${req.params.mediaId}`)?.applySettings(req.body)
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -2001,6 +2223,7 @@ app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
   streamClaudeToSSE(res, [
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
+    ...mcpArgs(),
     '--dangerously-skip-permissions',
     prompt,
   ], {
@@ -2014,6 +2237,8 @@ app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
           where: { id: media.id },
           data: { content: formatSessionContent({ ...cur, blueprintBuiltAt: new Date().toISOString(), featureCount: status.featureCount }) },
         }).catch(err => console.error('[bluprint] blueprint kaydı hatası:', err.message))
+        // Spec tazelendi → kalıcı oturumu düşür ki sonraki mesaj yeni sys'i kursun.
+        sessionPool.evict(`bluprint:${media.id}`)
       }
     },
   })
@@ -2032,41 +2257,27 @@ app.post('/api/bluprint/message', async (req, res) => {
   const roomId = media.roomId
   const dir = roomBlueprintDir(roomId)
   try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+  const key = `bluprint:${mediaId}`
 
-  const skillId = BLUEPRINT_SKILLS[settings.skill] ? settings.skill : 'reconstruct'
-  const scope = (settings.scope || '').trim()
-
-  let sys = `Sen bu odanın projesinin reconstruction asistanısın. Kullanıcı bu projeyi başka bir Claude projesinde sıfırdan kurmak istiyor.${scope ? ` Özellikle "${scope}" özelliği/akışı üzerine odaklan.` : ''} Üretilen analiz/spec çıktısı hakkındaki soruları yanıtla, eksikleri tamamla, istenirse başka bir ajana verilebilecek tek-dosya kur-prompt'u üret. Cevaplarını Türkçe ver, kısa ve net ol.`
-
-  const spec = readBlueprintSpec(roomId, skillId)
-  if (spec) sys += `\n\n# Proje Analiz/Spec Çıktısı (${spec.name})\n${spec.text}`
-
-  const args = [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(settings.model),
-    '--append-system-prompt', sys,
-    ...permissionArgs(settings.permissionMode),
-  ]
-  if (settings.sessionId) args.push('--resume', settings.sessionId)
-  args.push(message.trim())
-
-  const envOverrides = {}
-  if (settings.effort && settings.effort !== 'normal') {
-    envOverrides.CLAUDE_EFFORT = settings.effort
+  // Dinamik sys (üretilen spec çıktısı) yalnızca canlı oturum yokken kurulur;
+  // blueprint yeniden üretilince rebuild endpoint'i evict eder → sys tazelenir.
+  let sys
+  if (!sessionPool.get(key)) {
+    const skillId = BLUEPRINT_SKILLS[settings.skill] ? settings.skill : 'reconstruct'
+    const scope = (settings.scope || '').trim()
+    sys = `Sen bu odanın projesinin reconstruction asistanısın. Kullanıcı bu projeyi başka bir Claude projesinde sıfırdan kurmak istiyor.${scope ? ` Özellikle "${scope}" özelliği/akışı üzerine odaklan.` : ''} Üretilen analiz/spec çıktısı hakkındaki soruları yanıtla, eksikleri tamamla, istenirse başka bir ajana verilebilecek tek-dosya kur-prompt'u üret. Cevaplarını Türkçe ver, kısa ve net ol.`
+    const spec = readBlueprintSpec(roomId, skillId)
+    if (spec) sys += `\n\n# Proje Analiz/Spec Çıktısı (${spec.name})\n${spec.text}`
   }
 
-  streamClaudeToSSE(res, args, {
-    cwd: dir,
-    envOverrides,
-    onEvent: withStreamRegistry(res, (ev) => {
-      if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id && !settings.sessionId) {
-        settings.sessionId = ev.session_id
-        prisma.media.update({
-          where: { id: BigInt(mediaId) },
-          data: { content: formatSessionContent({ ...settings, sessionId: ev.session_id }) },
-        }).catch(err => console.error('[bluprint] kayıt hatası:', err.message))
-      }
-    }),
+  const sess = sessionPool.ensure(key, { settings, cwd: dir, sys })
+  sess.send(res, message.trim(), {
+    onInit: (sessionId) => {
+      prisma.media.update({
+        where: { id: BigInt(mediaId) },
+        data: { content: formatSessionContent({ ...settings, sessionId }) },
+      }).catch(err => console.error('[bluprint] kayıt hatası:', err.message))
+    },
   })
 })
 

@@ -661,8 +661,10 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = 'ð
             }
 
             if (ev.type === 'result' && ev.usage) {
-              const used = (ev.usage.input_tokens || 0) + (ev.usage.cache_read_input_tokens || 0) + (ev.usage.cache_creation_input_tokens || 0)
-              setContextTokens({ used, window: 200000 })
+              const fresh = ev.usage.input_tokens || 0
+              const cached = ev.usage.cache_read_input_tokens || 0
+              const created = ev.usage.cache_creation_input_tokens || 0
+              setContextTokens({ used: fresh + cached + created, window: 200000, fresh, cached })
             }
           } catch {}
         }
@@ -791,6 +793,7 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = 'ð
             const pctRound = Math.round(pct * 100)
             const barColor = pct < 0.6 ? '#4ade80' : pct < 0.85 ? '#fbbf24' : '#f87171'
             const kStr = contextTokens.used >= 1000 ? `${(contextTokens.used / 1000).toFixed(1)}k` : String(contextTokens.used)
+            const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
             return (
               <div style={{ padding: '4px 10px 5px', background: '#0a0f1a', borderBottom: '1px solid #1e3a5f', flexShrink: 0, ...px }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
@@ -800,6 +803,16 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = 'ð
                 <div style={{ height: '4px', background: '#1e3a5f', borderRadius: '2px', overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${pct * 100}%`, background: barColor, borderRadius: '2px', transition: 'width 0.4s ease, background 0.4s ease' }} />
                 </div>
+                {contextTokens.cached != null && (contextTokens.fresh + contextTokens.cached) > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '3px' }}>
+                    <span style={{ color: '#4a6a8a', fontSize: '15px' }}>bu tur</span>
+                    <span style={{ fontSize: '15px', fontVariantNumeric: 'tabular-nums' }}>
+                      <span style={{ color: '#f59e0b' }} title="taze (cache-miss) input â€” pahalÄ±">taze {fmtK(contextTokens.fresh)}</span>
+                      <span style={{ color: '#395873' }}> Â· </span>
+                      <span style={{ color: '#4ade80' }} title="cache okuma â€” sÄ±cak oturum, ucuz">cache {fmtK(contextTokens.cached)}</span>
+                    </span>
+                  </div>
+                )}
               </div>
             )
           })()}
@@ -1155,8 +1168,10 @@ function SkillChatMesh({ id, width, height, variant }) {
             }
 
             if (ev.type === 'result' && ev.usage) {
-              const used = (ev.usage.input_tokens || 0) + (ev.usage.cache_read_input_tokens || 0) + (ev.usage.cache_creation_input_tokens || 0)
-              setContextTokens({ used, window: 200000 })
+              const fresh = ev.usage.input_tokens || 0
+              const cached = ev.usage.cache_read_input_tokens || 0
+              const created = ev.usage.cache_creation_input_tokens || 0
+              setContextTokens({ used: fresh + cached + created, window: 200000, fresh, cached })
             }
           } catch {}
         }
@@ -1346,6 +1361,7 @@ function SkillChatMesh({ id, width, height, variant }) {
             const pctRound = Math.round(pct * 100)
             const barColor = pct < 0.6 ? '#4ade80' : pct < 0.85 ? '#fbbf24' : '#f87171'
             const kStr = contextTokens.used >= 1000 ? `${(contextTokens.used / 1000).toFixed(1)}k` : String(contextTokens.used)
+            const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
             return (
               <div style={{ padding: '4px 10px 5px', background: '#0a0712', borderBottom: `1px solid #3a2e5e`, flexShrink: 0, ...px }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
