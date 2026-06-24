@@ -34,11 +34,13 @@ export function OuterWalls() {
   const meshRef    = useRef()
   const hoveredRef = useRef(-1)
   const readyRef   = useRef(false)
+  const lastRayRef = useRef(0)
   const [ready, setReady] = useState(false)
 
-  const texture = useTexture('/textures/duvar.png')
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
-  texture.anisotropy = 16
+  const texture = useTexture('/textures/duvar.png', (t) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.anisotropy = 4
+  })
 
   const tempObj = useMemo(() => new THREE.Object3D(), [])
   const hiddenSet = useMemo(() => new Set(hiddenOuterWalls), [hiddenOuterWalls])
@@ -85,6 +87,10 @@ export function OuterWalls() {
   useFrame((state) => {
     const mesh = meshRef.current
     if (!mesh || !readyRef.current) return
+
+    // 2400 instance'a her karede ray atmak pahalı — ~20fps'e throttle et
+    if (state.clock.elapsedTime - lastRayRef.current < 0.05) return
+    lastRayRef.current = state.clock.elapsedTime
 
     state.raycaster.setFromCamera({ x: 0, y: 0 }, state.camera)
     const intersects = state.raycaster.intersectObject(mesh)

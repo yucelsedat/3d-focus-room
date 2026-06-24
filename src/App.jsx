@@ -68,7 +68,10 @@ function App() {
         <Canvas
           shadows
           camera={{ fov: 75, position: [0, 2.5, 5] }}
-          gl={{ antialias: true }}
+          // dpr cap: retina/4K ekranlarda piksel sayısını sınırlar (4x → ~2.25x),
+          // görsel kayıp minimal, GPU yükü ve ısınma belirgin düşer
+          dpr={[1, 1.5]}
+          gl={{ antialias: true, powerPreference: 'high-performance' }}
         >
           <color attach="background" args={['#050505']} />
           <fog attach="fog" args={['#050505', 0, 70]} />

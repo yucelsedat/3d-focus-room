@@ -374,9 +374,19 @@ function MarkdownMesh({ id, content, width, height }) {
 
 const SESSION_PX_PER_UNIT = 200
 
-function SessionMessageBubble({ msg }) {
+function SessionMessageBubble({ msg, mediaId }) {
   const base = { fontSize: '26px', lineHeight: '1.5', maxWidth: '90%', wordBreak: 'break-word' }
   const [copied, setCopied] = useState(false)
+  const [exported, setExported] = useState(false)
+
+  const makeSlug = (text) => {
+    return text.slice(0, 30)
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .slice(0, 25) || 'message'
+  }
 
   const copyMarkdown = (e) => {
     e.stopPropagation()
@@ -385,10 +395,46 @@ function SessionMessageBubble({ msg }) {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const exportToRaw = async (e) => {
+    e.stopPropagation()
+    try {
+      const slug = makeSlug(msg.content)
+      const resp = await fetch('/api/roomchat/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaId, content: msg.content, slug, role: msg.role }),
+      })
+      if (resp.ok) {
+        setExported(true)
+        setTimeout(() => setExported(false), 2000)
+      }
+    } catch (err) {
+      console.error('Export hatası:', err.message)
+    }
+  }
+
   if (msg.role === 'user') return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
       <div style={{ ...base, background: '#1e3a6e', border: '1px solid #2a5a9e', borderRadius: '12px 12px 2px 12px', padding: '8px 12px', color: '#e0e8ff' }}>
         {msg.content}
+      </div>
+      <div style={{ display: 'flex', gap: '8px', marginTop: '2px', marginRight: '2px' }}>
+        <button
+          onClick={copyMarkdown}
+          onPointerDown={e => e.stopPropagation()}
+          title="Metni panoya kopyala"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: copied ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
+        >
+          {copied ? '✓ kopyalandı' : '⧉'}
+        </button>
+        <button
+          onClick={exportToRaw}
+          onPointerDown={e => e.stopPropagation()}
+          title="Raw klasöre kaydet"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
+        >
+          {exported ? '✓ kaydedildi' : '💾'}
+        </button>
       </div>
     </div>
   )
@@ -398,27 +444,77 @@ function SessionMessageBubble({ msg }) {
       <div style={{ ...base, background: '#111', border: '1px solid #1e3a2e', borderRadius: '12px 12px 12px 2px', padding: '8px 12px', color: '#d0f0d0' }}>
         <div className="session-markdown" style={{ fontSize: '26px' }} dangerouslySetInnerHTML={{ __html: marked(msg.content) }} />
       </div>
-      <button
-        onClick={copyMarkdown}
-        onPointerDown={e => e.stopPropagation()}
-        title="Markdown'ı panoya kopyala"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', marginTop: '2px', marginLeft: '2px', color: copied ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
-      >
-        {copied ? '✓ kopyalandı' : '⧉'}
-      </button>
+      <div style={{ display: 'flex', gap: '8px', marginTop: '2px', marginLeft: '2px' }}>
+        <button
+          onClick={copyMarkdown}
+          onPointerDown={e => e.stopPropagation()}
+          title="Markdown'ı panoya kopyala"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: copied ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
+        >
+          {copied ? '✓ kopyalandı' : '⧉'}
+        </button>
+        <button
+          onClick={exportToRaw}
+          onPointerDown={e => e.stopPropagation()}
+          title="Raw klasöre kaydet"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
+        >
+          {exported ? '✓ kaydedildi' : '💾'}
+        </button>
+      </div>
     </div>
   )
 
   if (msg.role === 'tool_call') return (
-    <div style={{ ...base, background: '#0a0a0a', border: '1px solid #1a2a1a', borderRadius: '4px', padding: '6px 10px', color: '#4ade80', fontFamily: 'monospace', fontSize: '24px' }}>
-      <span style={{ color: '#60a5fa', marginRight: '6px' }}>{msg.toolName || 'Tool'}</span>
-      <span style={{ color: '#fbbf24' }}>$</span>{' '}{msg.content}
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px' }}>
+      <div style={{ ...base, background: '#0a0a0a', border: '1px solid #1a2a1a', borderRadius: '4px', padding: '6px 10px', color: '#4ade80', fontFamily: 'monospace', fontSize: '24px' }}>
+        <span style={{ color: '#60a5fa', marginRight: '6px' }}>{msg.toolName || 'Tool'}</span>
+        <span style={{ color: '#fbbf24' }}>$</span>{' '}{msg.content}
+      </div>
+      <div style={{ display: 'flex', gap: '8px', marginLeft: '2px' }}>
+        <button
+          onClick={copyMarkdown}
+          onPointerDown={e => e.stopPropagation()}
+          title="Kopyala"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: copied ? '#4ade80' : '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
+        >
+          {copied ? '✓' : '⧉'}
+        </button>
+        <button
+          onClick={exportToRaw}
+          onPointerDown={e => e.stopPropagation()}
+          title="Raw klasöre kaydet"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
+        >
+          {exported ? '✓' : '💾'}
+        </button>
+      </div>
     </div>
   )
 
   if (msg.role === 'tool_result') return (
-    <div style={{ ...base, background: '#050505', border: '1px solid #1a2a1a', borderRadius: '4px', padding: '6px 10px', color: '#6b7280', fontFamily: 'monospace', fontSize: '22px', maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
-      {msg.content || '(çıktı yok)'}
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px' }}>
+      <div style={{ ...base, background: '#050505', border: '1px solid #1a2a1a', borderRadius: '4px', padding: '6px 10px', color: '#6b7280', fontFamily: 'monospace', fontSize: '22px', maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+        {msg.content || '(çıktı yok)'}
+      </div>
+      <div style={{ display: 'flex', gap: '8px', marginLeft: '2px' }}>
+        <button
+          onClick={copyMarkdown}
+          onPointerDown={e => e.stopPropagation()}
+          title="Kopyala"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: copied ? '#4ade80' : '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
+        >
+          {copied ? '✓' : '⧉'}
+        </button>
+        <button
+          onClick={exportToRaw}
+          onPointerDown={e => e.stopPropagation()}
+          title="Raw klasöre kaydet"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
+        >
+          {exported ? '✓' : '💾'}
+        </button>
+      </div>
     </div>
   )
 
@@ -832,7 +928,7 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
                 {error || (connected ? 'Yeni session — ilk mesajını yazabilirsin.' : 'Yükleniyor...')}
               </div>
             )}
-            {messages.map(m => <SessionMessageBubble key={m.id} msg={m} />)}
+            {messages.map(m => <SessionMessageBubble key={m.id} msg={m} mediaId={id} />)}
             {thinking && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 10px', background: '#0a1520', border: '1px solid #1e3a5f', borderRadius: '10px 10px 10px 2px', width: 'fit-content' }}>
                 <span style={{ color: '#60a5fa', fontSize: '22px' }}>🧠</span>
@@ -1390,7 +1486,7 @@ function SkillChatMesh({ id, width, height, variant }) {
                 {error || (status.exists ? variant.emptyReady : variant.emptyHint)}
               </div>
             )}
-            {messages.map(m => <SessionMessageBubble key={m.id} msg={m} />)}
+            {messages.map(m => <SessionMessageBubble key={m.id} msg={m} mediaId={id} />)}
             {thinking && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 10px', background: '#150a20', border: `1px solid #3a2e5e`, borderRadius: '10px 10px 10px 2px', width: 'fit-content' }}>
                 <span style={{ color: ACC, fontSize: '22px' }}>🧠</span>

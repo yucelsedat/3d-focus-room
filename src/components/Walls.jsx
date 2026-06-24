@@ -46,13 +46,15 @@ function WallsInner({ config, hiddenWalls }) {
   const meshRef    = useRef()
   const hoveredRef = useRef(-1)
   const readyRef   = useRef(false)
+  const lastRayRef = useRef(0)
   const [ready, setReady] = useState(false)
   const COUNT    = wallTileCount(config)
   const hiddenSet = useMemo(() => new Set(hiddenWalls), [hiddenWalls])
 
-  const texture = useTexture('/textures/duvar.png')
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
-  texture.anisotropy = 16
+  const texture = useTexture('/textures/duvar.png', (t) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.anisotropy = 4
+  })
 
   const tempObj = useMemo(() => new THREE.Object3D(), [])
 
@@ -101,6 +103,10 @@ function WallsInner({ config, hiddenWalls }) {
   useFrame((state) => {
     const mesh = meshRef.current
     if (!mesh || !readyRef.current) return
+
+    // Hover raycast'ini ~20fps'e throttle et (CPU ısınmasını düşürür)
+    if (state.clock.elapsedTime - lastRayRef.current < 0.05) return
+    lastRayRef.current = state.clock.elapsedTime
 
     state.raycaster.setFromCamera({ x: 0, y: 0 }, state.camera)
     const intersects = state.raycaster.intersectObject(mesh)

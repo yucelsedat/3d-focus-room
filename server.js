@@ -1926,6 +1926,37 @@ app.post('/api/roomchat/message', async (req, res) => {
   })
 })
 
+// roomchat mesajını raw/ klasöre kaydet
+app.post('/api/roomchat/export', async (req, res) => {
+  const { mediaId, content, slug, role } = req.body
+  if (!content?.trim()) return res.status(400).json({ error: 'İçerik gerekli' })
+
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } }) } catch {}
+  if (!media || media.type !== 'roomchat') return res.status(404).json({ error: 'Oda sohbeti bulunamadı' })
+
+  try {
+    const roomId = media.roomId
+    const dir = roomGraphDir(roomId)
+    const rawDir = path.join(dir, 'graphify-out', 'raw')
+    fs.mkdirSync(rawDir, { recursive: true })
+
+    const now = new Date()
+    const timestamp = now.toISOString().slice(0, 19).replace(/[-:]/g, '').slice(2, 8) + '_' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0')
+    const filename = `${slug}_${timestamp}.md`
+    const filepath = path.join(rawDir, filename)
+
+    const header = `# ${role} — ${slug}\n\n`
+    const fullContent = header + content
+    fs.writeFileSync(filepath, fullContent, 'utf8')
+
+    res.json({ success: true, filename })
+  } catch (err) {
+    console.error('[roomchat export] hatası:', err.message)
+    res.status(500).json({ error: 'Kayıt hatası' })
+  }
+})
+
 // ─── Room Session endpoints (izole proje klasöründe çalışan AI session) ──────
 
 app.post('/api/roomsession', async (req, res) => {
