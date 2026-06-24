@@ -46,6 +46,7 @@ const ensureDir = (dir) => {
 };
 ensureDir('public/uploads/images');
 ensureDir('public/uploads/videos');
+ensureDir('public/uploads/slides');
 
 // ─── Active room ──────────────────────────────────────────────────────────────
 let activeRoomId   = 'default';
@@ -91,7 +92,12 @@ async function bootMigrate() {
 // ─── Multer ───────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const type = file.mimetype.startsWith('video/') ? 'videos' : 'images';
+    let type = 'images';
+    if (file.mimetype.startsWith('video/')) {
+      type = 'videos';
+    } else if (file.mimetype === 'text/html' || file.originalname.endsWith('.html')) {
+      type = 'slides';
+    }
     cb(null, `public/uploads/${type}/`);
   },
   filename: (req, file, cb) => {
