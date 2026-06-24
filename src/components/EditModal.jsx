@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { marked } from 'marked'
 import { useStore } from '../store/useStore'
 import { useSpeechToText } from '../hooks/useSpeechToText'
+import { markdownToHtmlSlides, THEMES } from '../utils/slideConverter'
 
 const micPulseStyle = `@keyframes micPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`
 
@@ -63,6 +64,9 @@ export function EditModal() {
     { id: 'codebase-analysis', label: 'codebase-analysis — doğrulanmış teknik doküman', installed: true },
     { id: 'repo-insight', label: 'repo-insight — neden böyle tasarlanmış (best-effort)', installed: true },
   ])
+  const [slideContent, setSlideContent] = useState('')
+  const [slideTheme, setSlideTheme] = useState('Obsidian')
+  const [slidePreview, setSlidePreview] = useState(null)
   const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
@@ -439,6 +443,55 @@ export function EditModal() {
         setMarkdownContent('')
         setWidth(1)
         setHeight(1)
+      } catch (err) {
+        console.error(err)
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
+    if (activeTab === 'slide') {
+      if (!slideContent.trim()) {
+        alert('Lütfen slayt içeriği girin.')
+        return
+      }
+      setLoading(true)
+      setLoadingStep('generating')
+      try {
+        const htmlSlides = await markdownToHtmlSlides(slideContent, {
+          title: 'Sunuş',
+          theme: slideTheme,
+          includeCopyButton: true,
+        })
+
+        const blob = new Blob([htmlSlides], { type: 'text/html' })
+        const formData = new FormData()
+        formData.append('tileId', selectedTile.id)
+        formData.append('type', 'slide')
+        formData.append('file', blob, 'slides.html')
+        formData.append('width', 10)
+        formData.append('height', 5)
+        formData.append('position', JSON.stringify(selectedTile.position))
+        formData.append('rotation', JSON.stringify(selectedTile.rotation))
+        formData.append('theme', slideTheme)
+
+        setLoadingStep('saving')
+        const r = await fetch('/api/add-media', {
+          method: 'POST',
+          body: formData
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Slayt kaydedilemedi')
+        addMedia(d)
+        closeModal()
+        setSlideContent('')
+        setSlideTheme('Obsidian')
+        setSlidePreview(null)
+        setWidth(10)
+        setHeight(5)
       } catch (err) {
         console.error(err)
         alert(err.message)
@@ -891,6 +944,12 @@ export function EditModal() {
           >
             📐 Blueprint
           </button>
+          <button
+            style={activeTab === 'slide' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('slide'); setWidth(10); setHeight(5) }}
+          >
+            🎯 Slayt
+          </button>
         </div>
 
         {/* Form */}
@@ -1217,8 +1276,44 @@ export function EditModal() {
             </div>
           )}
 
+          {/* Slide tab */}
+          {activeTab === 'slide' && (
+            <div style={s.inputGroup}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ ...s.label, marginBottom: 0 }}>Slayt Markdown</label>
+                <MicButton
+                  listening={speech2.listening}
+                  supported={speech2.supported}
+                  onToggle={() =>
+                    speech2.listening
+                      ? speech2.stop()
+                      : speech2.start(slideContent, setSlideContent)
+                  }
+                />
+              </div>
+              <textarea
+                style={{ ...s.input, height: '200px', resize: 'vertical', fontFamily: 'monospace', fontSize: '13px', lineHeight: '1.6', borderColor: speech2.listening ? '#ef4444' : undefined }}
+                value={slideContent}
+                onChange={e => setSlideContent(e.target.value)}
+                placeholder={'# Başlık\n\n- Nokta 1\n- Nokta 2\n\n---\n\n# Slide 2\n\nİçerik...'}
+              />
+              <div style={{ marginTop: '12px' }}>
+                <label style={{ ...s.label, marginBottom: '6px' }}>Tema</label>
+                <select
+                  value={slideTheme}
+                  onChange={e => setSlideTheme(e.target.value)}
+                  style={{ ...s.input, width: '100%' }}
+                >
+                  {THEMES.map(theme => (
+                    <option key={theme} value={theme}>{theme}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -1247,7 +1342,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
@@ -1297,31 +1392,31 @@ export function EditModal() {
           <div style={s.row}>
             <div style={{ flex: 1 }}>
               <label style={s.label}>
-                Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 3' : ''}
+                Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 3' : activeTab === 'slide' ? '⚡ 10' : ''}
               </label>
               <input
-                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session') ? 0.5 : 1 }}
+                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide') ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={width}
                 onChange={(e) => handleWidthChange(e.target.value)}
-                readOnly={activeTab === 'markdown' || activeTab === 'session'}
+                readOnly={activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide'}
               />
             </div>
             <div style={{ width: 12 }} />
             <div style={{ flex: 1 }}>
               <label style={s.label}>
-                Yükseklik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 5' : naturalRatio ? '🔗' : ''}
+                Yükseklik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 5' : activeTab === 'slide' ? '⚡ 5' : naturalRatio ? '🔗' : ''}
               </label>
               <input
-                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session') ? 0.5 : 1 }}
+                style={{ ...s.input, opacity: (activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide') ? 0.5 : 1 }}
                 type="number"
                 min="0.1"
                 step="0.1"
                 value={height}
                 onChange={(e) => handleHeightChange(e.target.value)}
-                readOnly={activeTab === 'markdown' || activeTab === 'session'}
+                readOnly={activeTab === 'markdown' || activeTab === 'session' || activeTab === 'slide'}
               />
             </div>
           </div>
