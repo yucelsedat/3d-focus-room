@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-06-25)
+# Graph Report - focus-room-main  (2026-06-26)
 
 ## Corpus Check
-- 29 files · ~471,645 words
+- 29 files · ~473,796 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 174 nodes · 200 edges · 11 communities detected
+- 176 nodes · 202 edges · 11 communities detected
 - Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 9 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -59,7 +59,7 @@ Cohesion: 0.07
 Nodes (17): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), permissionArgs(), permSettingsJson(), readBlueprintSpec() (+9 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.08
+Cohesion: 0.07
 Nodes (1): TextureErrorBoundary
 
 ### Community 2 - "Community 2"
@@ -99,7 +99,7 @@ Cohesion: 0.67
 Nodes (3): migrate(), readJson(), bootMigrate()
 
 ## Knowledge Gaps
-- **Thin community `Community 1`** (25 nodes): `BluprintMesh()`, `EmbedMesh()`, `getCaretOffset()`, `GifMesh()`, `ImageMesh()`, `insertAtCursor()`, `LoadingMesh()`, `measureEditCols()`, `MediaOverlay()`, `PermissionPrompt()`, `rangeFromPoint()`, `RoomChatMesh()`, `RoomSessionMesh()`, `SessionMesh()`, `SessionMessageBubble()`, `SkillChatMesh()`, `SlideMesh()`, `TextureErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `VideoMesh()`, `YoutubeMesh()`, `MediaOverlay.jsx`
+- **Thin community `Community 1`** (27 nodes): `BluprintMesh()`, `EmbedMesh()`, `getCaretOffset()`, `GifMesh()`, `ImageMesh()`, `insertAtCursor()`, `LoadingMesh()`, `measureEditCols()`, `MediaOverlay()`, `PermissionPrompt()`, `PlanReview()`, `QuestionPrompt()`, `rangeFromPoint()`, `RoomChatMesh()`, `RoomSessionMesh()`, `SessionMesh()`, `SessionMessageBubble()`, `SkillChatMesh()`, `SlideMesh()`, `TextureErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `VideoMesh()`, `YoutubeMesh()`, `MediaOverlay.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 4`** (8 nodes): `WorldSelect.jsx`, `CardMenu()`, `ContextCard()`, `ContextModal()`, `DeleteConfirmModal()`, `hashIndex()`, `MenuItem()`, `WorldSelect()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -116,9 +116,9 @@ Nodes (3): migrate(), readJson(), bootMigrate()
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `serializeSpecialDoor()` connect `Community 2` to `Community 0`?**
-  _High betweenness centrality (0.082) - this node is a cross-community bridge._
+  _High betweenness centrality (0.080) - this node is a cross-community bridge._
 - **Why does `PersistentSession` connect `Community 3` to `Community 0`?**
-  _High betweenness centrality (0.049) - this node is a cross-community bridge._
+  _High betweenness centrality (0.048) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `encodeWallId()` (e.g. with `canPassThrough()` and `canPassThroughOuter()`) actually correct?**
   _`encodeWallId()` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `decodeWallId()` (e.g. with `applyInstanceTransform()` and `doorWorldPos()`) actually correct?**
@@ -126,6 +126,6 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.07 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.08 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
 - **Should `Community 2` be split into smaller, more focused modules?**
   _Cohesion score 0.13 - nodes in this community are weakly interconnected._
