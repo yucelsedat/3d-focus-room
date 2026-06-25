@@ -1716,11 +1716,15 @@ async function extractRoomTexts(roomId) {
   return docs
 }
 
-// Çıkarılan metinleri room-graphs/<roomId>/raw/ altına .md dosyaları olarak yazar
+// Çıkarılan metinleri room-graphs/<roomId>/raw/ altına .md dosyaları olarak yazar.
+// chat-*.md export dosyaları korunur (sohbet mesajları da grafa beslensin); yalnızca
+// tile kaynaklı dosyalar tazelenir — silinen tile'ların düğümleri böylece grafdan düşer.
 function writeRoomRaw(roomId, docs) {
   const rawDir = path.join(roomGraphDir(roomId), 'raw')
-  fs.rmSync(rawDir, { recursive: true, force: true })
   fs.mkdirSync(rawDir, { recursive: true })
+  for (const f of fs.readdirSync(rawDir)) {
+    if (!f.startsWith('chat-')) fs.rmSync(path.join(rawDir, f), { force: true })
+  }
   for (const d of docs) {
     fs.writeFileSync(path.join(rawDir, `${d.kind}-${d.id}.md`), d.text + '\n')
   }
@@ -1919,7 +1923,7 @@ app.post('/api/roomchat/message', async (req, res) => {
 
   // Token estimate: sistem prompt uzunluğu (rough: 1 token ≈ 4 char)
   const sysTokenEstimate = Math.ceil((sys?.length || 0) / 4)
-  console.log(`[roomchat] spawn: sys≈${sysTokenEstimate}tok, messages=${messages.length}`)
+  console.log(`[roomchat] spawn: sys≈${sysTokenEstimate}tok`)
 
   const sess = sessionPool.ensure(key, { settings, cwd: process.cwd(), sys })
   sess.send(res, message.trim(), {
@@ -1944,12 +1948,14 @@ app.post('/api/roomchat/export', async (req, res) => {
   try {
     const roomId = media.roomId
     const dir = roomGraphDir(roomId)
-    const rawDir = path.join(dir, 'graphify-out', 'raw')
+    // graphify ./raw üzerinde çalışır; export'lar da grafa dahil olsun diye buraya
+    // yazılır. chat- prefix'i writeRoomRaw'ın tile tazelemesinde bu dosyaları korur.
+    const rawDir = path.join(dir, 'raw')
     fs.mkdirSync(rawDir, { recursive: true })
 
     const now = new Date()
     const timestamp = now.toISOString().slice(0, 19).replace(/[-:]/g, '').slice(2, 8) + '_' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0')
-    const filename = `${slug}_${timestamp}.md`
+    const filename = `chat-${slug}_${timestamp}.md`
     const filepath = path.join(rawDir, filename)
 
     const header = `# ${role} — ${slug}\n\n`

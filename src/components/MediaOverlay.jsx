@@ -406,7 +406,6 @@ function SessionMessageBubble({ msg, mediaId }) {
       })
       if (resp.ok) {
         setExported(true)
-        setTimeout(() => setExported(false), 2000)
       }
     } catch (err) {
       console.error('Export hatası:', err.message)
@@ -427,14 +426,18 @@ function SessionMessageBubble({ msg, mediaId }) {
         >
           {copied ? '✓ kopyalandı' : '⧉'}
         </button>
-        <button
-          onClick={exportToRaw}
-          onPointerDown={e => e.stopPropagation()}
-          title="Raw klasöre kaydet"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
-        >
-          {exported ? '✓ kaydedildi' : '💾'}
-        </button>
+        {exported ? (
+          <span style={{ padding: '2px 4px', color: '#4ade80', fontSize: '22px' }}>✓ kaydedildi</span>
+        ) : (
+          <button
+            onClick={exportToRaw}
+            onPointerDown={e => e.stopPropagation()}
+            title="Raw klasöre kaydet"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
+          >
+            💾
+          </button>
+        )}
       </div>
     </div>
   )
@@ -453,14 +456,18 @@ function SessionMessageBubble({ msg, mediaId }) {
         >
           {copied ? '✓ kopyalandı' : '⧉'}
         </button>
-        <button
-          onClick={exportToRaw}
-          onPointerDown={e => e.stopPropagation()}
-          title="Raw klasöre kaydet"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
-        >
-          {exported ? '✓ kaydedildi' : '💾'}
-        </button>
+        {exported ? (
+          <span style={{ padding: '2px 4px', color: '#4ade80', fontSize: '22px' }}>✓ kaydedildi</span>
+        ) : (
+          <button
+            onClick={exportToRaw}
+            onPointerDown={e => e.stopPropagation()}
+            title="Raw klasöre kaydet"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#6b7280', fontSize: '22px', pointerEvents: 'auto' }}
+          >
+            💾
+          </button>
+        )}
       </div>
     </div>
   )
@@ -480,14 +487,18 @@ function SessionMessageBubble({ msg, mediaId }) {
         >
           {copied ? '✓' : '⧉'}
         </button>
-        <button
-          onClick={exportToRaw}
-          onPointerDown={e => e.stopPropagation()}
-          title="Raw klasöre kaydet"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
-        >
-          {exported ? '✓' : '💾'}
-        </button>
+        {exported ? (
+          <span style={{ padding: '2px 4px', color: '#4ade80', fontSize: '18px' }}>✓ kaydedildi</span>
+        ) : (
+          <button
+            onClick={exportToRaw}
+            onPointerDown={e => e.stopPropagation()}
+            title="Raw klasöre kaydet"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
+          >
+            💾
+          </button>
+        )}
       </div>
     </div>
   )
@@ -506,14 +517,18 @@ function SessionMessageBubble({ msg, mediaId }) {
         >
           {copied ? '✓' : '⧉'}
         </button>
-        <button
-          onClick={exportToRaw}
-          onPointerDown={e => e.stopPropagation()}
-          title="Raw klasöre kaydet"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: exported ? '#4ade80' : '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
-        >
-          {exported ? '✓' : '💾'}
-        </button>
+        {exported ? (
+          <span style={{ padding: '2px 4px', color: '#4ade80', fontSize: '18px' }}>✓ kaydedildi</span>
+        ) : (
+          <button
+            onClick={exportToRaw}
+            onPointerDown={e => e.stopPropagation()}
+            title="Raw klasöre kaydet"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#6b7280', fontSize: '18px', pointerEvents: 'auto' }}
+          >
+            💾
+          </button>
+        )}
       </div>
     </div>
   )
