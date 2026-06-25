@@ -623,6 +623,7 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
+  const [confirmClear, setConfirmClear] = useState(false)
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
   const activeAiRef = useRef(null)
@@ -634,6 +635,17 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toolUseId, decision }),
     }).catch(() => {})
+  }
+
+  // Sohbeti temizle — canlı oturumu kapat + sessionId sıfırla (iki tıkla onay)
+  const clearChat = async () => {
+    if (streaming) return
+    if (!confirmClear) { setConfirmClear(true); setTimeout(() => setConfirmClear(false), 3000); return }
+    setConfirmClear(false)
+    try { await fetch(`${apiBase}/${id}/clear`, { method: 'POST' }) } catch {}
+    setMessages([])
+    setContextTokens(null)
+    setError(null)
   }
 
   // Scroll to bottom on new messages
@@ -883,7 +895,22 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               <option value="plan">📋 plan</option>
             </select>
 
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {/* Sohbeti temizle */}
+            <button
+              onClick={e => { e.stopPropagation(); clearChat() }}
+              onPointerDown={e => e.stopPropagation()}
+              disabled={streaming}
+              title="Sohbeti temizle (geçmişi sıfırla)"
+              style={{
+                marginLeft: 'auto', padding: '2px 8px', borderRadius: '4px', fontSize: '20px',
+                border: confirmClear ? '1px solid #f87171' : '1px solid #1e3a5f',
+                background: confirmClear ? 'rgba(248,113,113,0.2)' : 'transparent',
+                color: confirmClear ? '#f87171' : '#4a6a8a',
+                cursor: streaming ? 'not-allowed' : 'pointer', pointerEvents: 'auto', opacity: streaming ? 0.5 : 1,
+              }}
+            >{confirmClear ? 'Emin misin?' : '🗑 Temizle'}</button>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
               <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: connected ? '#4ade80' : '#ef4444', display: 'inline-block' }} />
               <span style={{ color: connected ? '#4ade80' : '#ef4444', fontSize: '18px' }}>
                 {connected ? 'hazır' : 'yükleniyor...'}
@@ -1087,6 +1114,7 @@ function SkillChatMesh({ id, width, height, variant }) {
   const [rebuilding, setRebuilding]   = useState(false)
   const [rebuildLog, setRebuildLog]   = useState('')
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
+  const [confirmClear, setConfirmClear] = useState(false)
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
   const activeAiRef = useRef(null)
@@ -1098,6 +1126,17 @@ function SkillChatMesh({ id, width, height, variant }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toolUseId, decision }),
     }).catch(() => {})
+  }
+
+  // Sohbeti temizle — canlı oturumu kapat + sessionId sıfırla (iki tıkla onay)
+  const clearChat = async () => {
+    if (streaming) return
+    if (!confirmClear) { setConfirmClear(true); setTimeout(() => setConfirmClear(false), 3000); return }
+    setConfirmClear(false)
+    try { await fetch(`${variant.apiBase}/${id}/clear`, { method: 'POST' }) } catch {}
+    setMessages([])
+    setContextTokens(null)
+    setError(null)
   }
 
   useEffect(() => {
@@ -1436,13 +1475,29 @@ function SkillChatMesh({ id, width, height, variant }) {
               </>
             )}
 
+            {/* Sohbeti temizle */}
+            <button
+              onClick={e => { e.stopPropagation(); clearChat() }}
+              onPointerDown={e => e.stopPropagation()}
+              disabled={streaming || rebuilding}
+              title="Sohbeti temizle (geçmişi sıfırla)"
+              style={{
+                marginLeft: 'auto', padding: '2px 8px', borderRadius: '4px', fontSize: '20px',
+                border: confirmClear ? '1px solid #f87171' : '1px solid #3a2e5e',
+                background: confirmClear ? 'rgba(248,113,113,0.2)' : 'transparent',
+                color: confirmClear ? '#f87171' : '#6a5a8a',
+                cursor: (streaming || rebuilding) ? 'not-allowed' : 'pointer', pointerEvents: 'auto',
+                opacity: (streaming || rebuilding) ? 0.5 : 1,
+              }}
+            >{confirmClear ? 'Emin misin?' : '🗑 Temizle'}</button>
+
             <button
               onClick={e => { e.stopPropagation(); rebuild() }}
               onPointerDown={e => e.stopPropagation()}
               disabled={rebuilding || streaming}
               title={variant.rebuildTitle}
               style={{
-                marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px',
+                display: 'flex', alignItems: 'center', gap: '4px',
                 padding: '3px 10px', borderRadius: '5px', fontSize: '20px',
                 border: `1px solid ${ACC}`, cursor: (rebuilding || streaming) ? 'not-allowed' : 'pointer',
                 background: rebuilding ? 'rgba(167,139,250,0.25)' : 'rgba(167,139,250,0.1)',

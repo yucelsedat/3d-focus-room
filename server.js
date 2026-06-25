@@ -1531,6 +1531,32 @@ class SessionPool {
 
 const sessionPool = new SessionPool()
 
+// ─── Sohbeti temizle: canlı oturumu kapat + sessionId'yi sıfırla ─────────────
+// Geçmiş .jsonl dosyasına dokunmaz; sessionId null'lanınca history boş döner ve
+// sonraki mesaj --resume'suz taze bir oturum açar. (Export'lar zaten raw/'da kalır.)
+function makeClearHandler(typeName, poolPrefix, notFoundMsg) {
+  return async (req, res) => {
+    try {
+      const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+      if (!media || media.type !== typeName) return res.status(404).json({ error: notFoundMsg })
+      sessionPool.evict(`${poolPrefix}:${req.params.mediaId}`)   // canlı process'i kapat
+      const current = parseSessionContent(media.content)
+      await prisma.media.update({
+        where: { id: BigInt(req.params.mediaId) },
+        data: { content: formatSessionContent({ ...current, sessionId: null }) },
+      })
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  }
+}
+
+app.post('/api/ai-session/:mediaId/clear',  makeClearHandler('session',     'ai-session',  'Session bulunamadı'))
+app.post('/api/roomchat/:mediaId/clear',    makeClearHandler('roomchat',    'roomchat',    'Oda sohbeti bulunamadı'))
+app.post('/api/roomsession/:mediaId/clear', makeClearHandler('roomsession', 'roomsession', 'Oda projesi bulunamadı'))
+app.post('/api/bluprint/:mediaId/clear',    makeClearHandler('bluprint',    'bluprint',    'Blueprint bulunamadı'))
+
 // ─── Session JSONL Optimization ────────────────────────────────────────────
 // Resume sırasında geçmiş JSONL'ı gönderilir. Çok sayıda tur varsa, token overhead.
 // trimSessionJsonl: son N tur tut, öncesini sil (token tasarrufu).

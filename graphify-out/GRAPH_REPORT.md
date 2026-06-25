@@ -1,12 +1,12 @@
-# Graph Report - focus-room-main  (2026-06-24)
+# Graph Report - focus-room-main  (2026-06-25)
 
 ## Corpus Check
-- 29 files · ~467,922 words
+- 29 files · ~471,645 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 171 nodes · 196 edges · 11 communities detected
-- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 9 edges (avg confidence: 0.8)
+- 174 nodes · 200 edges · 11 communities detected
+- Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 9 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
@@ -55,8 +55,8 @@
 ## Communities
 
 ### Community 0 - "Community 0"
-Cohesion: 0.08
-Nodes (17): blueprintSkill(), buildSpawnEnv(), cliModel(), mcpArgs(), permissionArgs(), permSettingsJson(), readBlueprintSpec(), roomBlueprintDir() (+9 more)
+Cohesion: 0.07
+Nodes (17): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), permissionArgs(), permSettingsJson(), readBlueprintSpec() (+9 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.08
@@ -67,8 +67,8 @@ Cohesion: 0.13
 Nodes (11): doorWorldPos(), canPassThrough(), canPassThroughOuter(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId(), wallTileCount() (+3 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.26
-Nodes (3): PersistentSession, sseLine(), userLine()
+Cohesion: 0.21
+Nodes (5): PersistentSession, setSSEHeaders(), sseLine(), streamClaudeToSSE(), userLine()
 
 ### Community 4 - "Community 4"
 Cohesion: 0.29
@@ -116,7 +116,7 @@ Nodes (3): migrate(), readJson(), bootMigrate()
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `serializeSpecialDoor()` connect `Community 2` to `Community 0`?**
-  _High betweenness centrality (0.081) - this node is a cross-community bridge._
+  _High betweenness centrality (0.082) - this node is a cross-community bridge._
 - **Why does `PersistentSession` connect `Community 3` to `Community 0`?**
   _High betweenness centrality (0.049) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `encodeWallId()` (e.g. with `canPassThrough()` and `canPassThroughOuter()`) actually correct?**
@@ -124,7 +124,7 @@ _Questions this graph is uniquely positioned to answer:_
 - **Are the 2 inferred relationships involving `decodeWallId()` (e.g. with `applyInstanceTransform()` and `doorWorldPos()`) actually correct?**
   _`decodeWallId()` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.08 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.08 - nodes in this community are weakly interconnected._
 - **Should `Community 2` be split into smaller, more focused modules?**
