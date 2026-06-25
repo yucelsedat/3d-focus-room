@@ -599,6 +599,133 @@ function PermissionPrompt({ req, onAllow, onDeny }) {
   )
 }
 
+// Claude'un AskUserQuestion aracıyla sorduğu çoktan seçmeli sorular — HER izin modunda.
+// req = { toolUseId, questions: [{ question, header, options:[{label, description}], multiSelect }] }
+// Yanıt seçilince onAnswer(metin) çağrılır; metin modele tool sonucu olarak beslenir.
+function QuestionPrompt({ req, onAnswer }) {
+  const questions = Array.isArray(req.questions) ? req.questions : []
+  // Her soru için seçili label dizisi (multiSelect'te çoklu).
+  const [selected, setSelected] = useState(() => questions.map(() => []))
+
+  const toggle = (qi, label, multi) => {
+    setSelected(prev => prev.map((labels, i) => {
+      if (i !== qi) return labels
+      if (multi) return labels.includes(label) ? labels.filter(l => l !== label) : [...labels, label]
+      return [label]
+    }))
+  }
+
+  const allAnswered = questions.length > 0 && selected.every(s => s.length > 0)
+
+  const submit = () => {
+    if (!allAnswered) return
+    const lines = questions.map((q, i) => {
+      const head = q.header || q.question || `Soru ${i + 1}`
+      return `- ${head}: ${selected[i].join(', ')}`
+    })
+    onAnswer(`Kullanıcı soruları yanıtladı:\n${lines.join('\n')}`)
+  }
+
+  return (
+    <div style={{ background: '#06121f', border: '1px solid #1e3a5f', borderRadius: '8px', padding: '10px 12px', margin: '0 10px 8px', pointerEvents: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '24px' }}>💬</span>
+        <span style={{ color: '#60a5fa', fontWeight: 800, fontSize: '24px' }}>Claude soruyor</span>
+      </div>
+      {questions.map((q, qi) => (
+        <div key={qi} style={{ marginBottom: '10px' }}>
+          {q.header && <div style={{ color: '#7aa7d4', fontSize: '20px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '2px' }}>{q.header}</div>}
+          <div style={{ color: '#dbeafe', fontSize: '24px', marginBottom: '6px' }}>{q.question}{q.multiSelect ? ' (birden çok seçilebilir)' : ''}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {(q.options || []).map((opt, oi) => {
+              const on = selected[qi]?.includes(opt.label)
+              return (
+                <button
+                  key={oi}
+                  onClick={e => { e.stopPropagation(); toggle(qi, opt.label, q.multiSelect) }}
+                  onPointerDown={e => e.stopPropagation()}
+                  style={{
+                    textAlign: 'left', background: on ? 'linear-gradient(135deg,#1d4ed8,#3b82f6)' : '#0d1f2d',
+                    border: `1px solid ${on ? '#60a5fa' : '#2a5a8a'}`, borderRadius: '6px',
+                    color: on ? '#fff' : '#cbd5e1', padding: '8px 10px', cursor: 'pointer', pointerEvents: 'auto',
+                  }}
+                >
+                  <div style={{ fontSize: '23px', fontWeight: 800 }}>{on ? '✓ ' : ''}{opt.label}</div>
+                  {opt.description && <div style={{ fontSize: '20px', color: on ? '#dbeafe' : '#7a93ad', marginTop: '2px' }}>{opt.description}</div>}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+      <button
+        onClick={e => { e.stopPropagation(); submit() }}
+        onPointerDown={e => e.stopPropagation()}
+        disabled={!allAnswered}
+        style={{
+          width: '100%', marginTop: '2px',
+          background: allAnswered ? 'linear-gradient(135deg,#2563eb,#60a5fa)' : '#13243a',
+          border: 'none', borderRadius: '5px', color: allAnswered ? '#fff' : '#4a6a8a',
+          padding: '9px', fontSize: '24px', cursor: allAnswered ? 'pointer' : 'not-allowed', pointerEvents: 'auto',
+        }}
+      >Yanıtı gönder →</button>
+    </div>
+  )
+}
+
+// Claude'un ExitPlanMode aracıyla sunduğu plan onayı — HER izin modunda.
+// req = { toolUseId, plan } · onApprove() devam ettirir, onReject(geri-bildirim) planlamaya döndürür.
+function PlanReview({ req, onApprove, onReject }) {
+  const [rejecting, setRejecting] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const planHtml = marked(req.plan || '_(plan boş)_')
+
+  return (
+    <div style={{ background: '#0a0f06', border: '1px solid #2f4a15', borderRadius: '8px', padding: '10px 12px', margin: '0 10px 8px', pointerEvents: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '24px' }}>📋</span>
+        <span style={{ color: '#86efac', fontWeight: 800, fontSize: '24px' }}>Plan onayı</span>
+      </div>
+      <div
+        className="session-markdown"
+        style={{ background: '#070a04', border: '1px solid #24380f', borderRadius: '5px', padding: '8px 10px', marginBottom: '8px', maxHeight: '260px', overflow: 'auto', color: '#d7e8c4', fontSize: '22px' }}
+        dangerouslySetInnerHTML={{ __html: planHtml }}
+      />
+      {!rejecting ? (
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={e => { e.stopPropagation(); onApprove() }}
+            onPointerDown={e => e.stopPropagation()}
+            style={{ flex: 1, background: 'linear-gradient(135deg,#15803d,#22c55e)', border: 'none', borderRadius: '5px', color: '#fff', padding: '9px', fontSize: '24px', cursor: 'pointer', pointerEvents: 'auto' }}
+          >✓ Onayla & uygula</button>
+          <button
+            onClick={e => { e.stopPropagation(); setRejecting(true) }}
+            onPointerDown={e => e.stopPropagation()}
+            style={{ flex: 1, background: '#2a1f08', border: '1px solid #5a4a15', borderRadius: '5px', color: '#fbbf24', padding: '9px', fontSize: '24px', cursor: 'pointer', pointerEvents: 'auto' }}
+          >✗ Geri bildirim</button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <textarea
+            value={feedback}
+            onChange={e => setFeedback(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => e.stopPropagation()}
+            onPointerDown={e => e.stopPropagation()}
+            placeholder="Planda ne değişsin? (modele iletilir)"
+            style={{ background: '#0d1407', border: '1px solid #3a5418', borderRadius: '5px', color: '#e0e0e0', fontSize: '22px', padding: '7px 9px', resize: 'none', outline: 'none', minHeight: '54px', fontFamily: 'system-ui, sans-serif', pointerEvents: 'auto' }}
+          />
+          <button
+            onClick={e => { e.stopPropagation(); onReject(feedback.trim() || 'Kullanıcı planı reddetti; gözden geçir.') }}
+            onPointerDown={e => e.stopPropagation()}
+            style={{ background: 'linear-gradient(135deg,#b45309,#f59e0b)', border: 'none', borderRadius: '5px', color: '#fff', padding: '9px', fontSize: '24px', cursor: 'pointer', pointerEvents: 'auto' }}
+          >Geri bildirimi gönder →</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '🤖', label = 'Claude' }) {
   const w = parseFloat(width)
   const h = parseFloat(height)
@@ -623,6 +750,8 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
+  const [pendingQuestions, setPendingQuestions] = useState([])  // bekleyen AskUserQuestion soruları
+  const [pendingPlans, setPendingPlans] = useState([])  // bekleyen ExitPlanMode plan onayları
   const [confirmClear, setConfirmClear] = useState(false)
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
@@ -634,6 +763,26 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toolUseId, decision }),
+    }).catch(() => {})
+  }
+
+  // AskUserQuestion yanıtı: seçimler deny+reason olarak modele tool sonucu beslenir.
+  const answerQuestion = (toolUseId, reason) => {
+    setPendingQuestions(prev => prev.filter(q => q.toolUseId !== toolUseId))
+    fetch('/api/permission/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolUseId, decision: 'deny', reason }),
+    }).catch(() => {})
+  }
+
+  // ExitPlanMode kararı: onay → allow (plan uygulanır), reddet → deny+geri-bildirim.
+  const decidePlan = (toolUseId, decision, reason) => {
+    setPendingPlans(prev => prev.filter(p => p.toolUseId !== toolUseId))
+    fetch('/api/permission/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolUseId, decision, reason }),
     }).catch(() => {})
   }
 
@@ -733,6 +882,26 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               setPendingPerms(prev =>
                 prev.some(p => p.toolUseId === ev.toolUseId) ? prev
                   : [...prev, { toolUseId: ev.toolUseId, toolName: ev.toolName, toolInput: ev.toolInput }]
+              )
+            }
+
+            if (ev.type === 'ask_question') {
+              setPendingQuestions(prev =>
+                prev.some(q => q.toolUseId === ev.toolUseId) ? prev
+                  : [...prev, { toolUseId: ev.toolUseId, questions: ev.questions || [] }]
+              )
+            }
+
+            if (ev.type === 'plan_review') {
+              setPendingPlans(prev =>
+                prev.some(p => p.toolUseId === ev.toolUseId) ? prev
+                  : [...prev, { toolUseId: ev.toolUseId, plan: ev.plan || '' }]
+              )
+              // Planı sohbete kalıcı markdown mesajı olarak da ekle (onay kartı kapansa da görünür kalsın)
+              const planMsgId = `plan-${ev.toolUseId}`
+              setMessages(prev =>
+                prev.some(m => m.id === planMsgId) ? prev
+                  : [...prev, { id: planMsgId, role: 'ai', content: `📋 **Plan**\n\n${ev.plan || ''}` }]
               )
             }
 
@@ -1000,6 +1169,33 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
             </div>
           )}
 
+          {/* Claude'un seçenek soruları (AskUserQuestion) — her modda */}
+          {pendingQuestions.length > 0 && (
+            <div style={{ flexShrink: 0, paddingTop: '8px', ...px }}>
+              {pendingQuestions.map(q => (
+                <QuestionPrompt
+                  key={q.toolUseId}
+                  req={q}
+                  onAnswer={(reason) => answerQuestion(q.toolUseId, reason)}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Plan onayları (ExitPlanMode) — her modda */}
+          {pendingPlans.length > 0 && (
+            <div style={{ flexShrink: 0, paddingTop: '8px', ...px }}>
+              {pendingPlans.map(p => (
+                <PlanReview
+                  key={p.toolUseId}
+                  req={p}
+                  onApprove={() => decidePlan(p.toolUseId, 'allow')}
+                  onReject={(feedback) => decidePlan(p.toolUseId, 'deny', feedback)}
+                />
+              ))}
+            </div>
+          )}
+
           {/* Input */}
           <div style={{ padding: '8px 10px', borderTop: '1px solid #1e3a5f', display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0, background: '#0a0f1a', ...px }}>
             <textarea
@@ -1114,6 +1310,8 @@ function SkillChatMesh({ id, width, height, variant }) {
   const [rebuilding, setRebuilding]   = useState(false)
   const [rebuildLog, setRebuildLog]   = useState('')
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
+  const [pendingQuestions, setPendingQuestions] = useState([])  // bekleyen AskUserQuestion soruları
+  const [pendingPlans, setPendingPlans] = useState([])  // bekleyen ExitPlanMode plan onayları
   const [confirmClear, setConfirmClear] = useState(false)
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
@@ -1125,6 +1323,26 @@ function SkillChatMesh({ id, width, height, variant }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toolUseId, decision }),
+    }).catch(() => {})
+  }
+
+  // AskUserQuestion yanıtı: seçimler deny+reason olarak modele tool sonucu beslenir.
+  const answerQuestion = (toolUseId, reason) => {
+    setPendingQuestions(prev => prev.filter(q => q.toolUseId !== toolUseId))
+    fetch('/api/permission/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolUseId, decision: 'deny', reason }),
+    }).catch(() => {})
+  }
+
+  // ExitPlanMode kararı: onay → allow (plan uygulanır), reddet → deny+geri-bildirim.
+  const decidePlan = (toolUseId, decision, reason) => {
+    setPendingPlans(prev => prev.filter(p => p.toolUseId !== toolUseId))
+    fetch('/api/permission/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolUseId, decision, reason }),
     }).catch(() => {})
   }
 
@@ -1276,6 +1494,26 @@ function SkillChatMesh({ id, width, height, variant }) {
               setPendingPerms(prev =>
                 prev.some(p => p.toolUseId === ev.toolUseId) ? prev
                   : [...prev, { toolUseId: ev.toolUseId, toolName: ev.toolName, toolInput: ev.toolInput }]
+              )
+            }
+
+            if (ev.type === 'ask_question') {
+              setPendingQuestions(prev =>
+                prev.some(q => q.toolUseId === ev.toolUseId) ? prev
+                  : [...prev, { toolUseId: ev.toolUseId, questions: ev.questions || [] }]
+              )
+            }
+
+            if (ev.type === 'plan_review') {
+              setPendingPlans(prev =>
+                prev.some(p => p.toolUseId === ev.toolUseId) ? prev
+                  : [...prev, { toolUseId: ev.toolUseId, plan: ev.plan || '' }]
+              )
+              // Planı sohbete kalıcı markdown mesajı olarak da ekle (onay kartı kapansa da görünür kalsın)
+              const planMsgId = `plan-${ev.toolUseId}`
+              setMessages(prev =>
+                prev.some(m => m.id === planMsgId) ? prev
+                  : [...prev, { id: planMsgId, role: 'ai', content: `📋 **Plan**\n\n${ev.plan || ''}` }]
               )
             }
 
@@ -1593,6 +1831,33 @@ function SkillChatMesh({ id, width, height, variant }) {
                   req={p}
                   onAllow={() => decidePermission(p.toolUseId, 'allow')}
                   onDeny={() => decidePermission(p.toolUseId, 'deny')}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Claude'un seçenek soruları (AskUserQuestion) — her modda */}
+          {pendingQuestions.length > 0 && (
+            <div style={{ flexShrink: 0, paddingTop: '8px', ...px }}>
+              {pendingQuestions.map(q => (
+                <QuestionPrompt
+                  key={q.toolUseId}
+                  req={q}
+                  onAnswer={(reason) => answerQuestion(q.toolUseId, reason)}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Plan onayları (ExitPlanMode) — her modda */}
+          {pendingPlans.length > 0 && (
+            <div style={{ flexShrink: 0, paddingTop: '8px', ...px }}>
+              {pendingPlans.map(p => (
+                <PlanReview
+                  key={p.toolUseId}
+                  req={p}
+                  onApprove={() => decidePlan(p.toolUseId, 'allow')}
+                  onReject={(feedback) => decidePlan(p.toolUseId, 'deny', feedback)}
                 />
               ))}
             </div>

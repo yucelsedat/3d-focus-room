@@ -968,23 +968,31 @@ function formatSessionContent(obj) {
   return JSON.stringify(obj)
 }
 
+// İnteraktif soru/onay tool'ları — HER izin modunda (bypass dahil) köprüye düşmeli:
+// AskUserQuestion (çoktan seçmeli seçenek soruları) ve ExitPlanMode (plan onayı).
+// Bunlar headless stream-json modunda yerel olarak yanıtlanamaz; hook ile yakalayıp
+// tarayıcıdan gelen yanıtı deny+reason olarak modele geri besleriz (spike ile doğrulandı).
+const INTERACTIVE_TOOLS_MATCHER = 'AskUserQuestion|ExitPlanMode'
+
 // İzin modunu CLI bayraklarına çevirir.
-// - plan/acceptEdits: doğrudan CLI modu
-// - ask: default mod + PreToolUse hook (Faz 2). Hook her tool öncesi izin köprüsüne
-//   sorar; kullanıcı tarayıcıdan onaylar/redder. (bkz. permission-hook.js)
-// - bypass (varsayılan): kanıtlanmış --dangerously-skip-permissions
+// - plan/acceptEdits: doğrudan CLI modu + interaktif-tool hook'u
+// - ask: default mod + her tool için PreToolUse hook (Faz 2). Hook her tool öncesi izin
+//   köprüsüne sorar; kullanıcı tarayıcıdan onaylar/redder. (bkz. permission-hook.js)
+// - bypass (varsayılan): --dangerously-skip-permissions + interaktif-tool hook'u
+// Not: ask dışı modlarda hook yalnız AskUserQuestion|ExitPlanMode'a takılır; normal
+// tool'ların izin gevşekliği/performansı değişmez.
 function permissionArgs(mode) {
-  if (mode === 'plan')        return ['--permission-mode', 'plan']
-  if (mode === 'acceptEdits') return ['--permission-mode', 'acceptEdits']
-  if (mode === 'ask')         return ['--permission-mode', 'default', '--settings', permSettingsJson()]
-  return ['--dangerously-skip-permissions']
+  if (mode === 'plan')        return ['--permission-mode', 'plan',        '--settings', permSettingsJson(INTERACTIVE_TOOLS_MATCHER)]
+  if (mode === 'acceptEdits') return ['--permission-mode', 'acceptEdits', '--settings', permSettingsJson(INTERACTIVE_TOOLS_MATCHER)]
+  if (mode === 'ask')         return ['--permission-mode', 'default',     '--settings', permSettingsJson('*')]
+  return ['--dangerously-skip-permissions', '--settings', permSettingsJson(INTERACTIVE_TOOLS_MATCHER)]
 }
 
-// "ask" modu için CLI'a verilecek inline settings (PreToolUse hook'u kaydeder)
-function permSettingsJson() {
+// CLI'a verilecek inline settings (PreToolUse hook'u verilen matcher ile kaydeder).
+function permSettingsJson(matcher) {
   const hookPath = path.join(__dirname, 'permission-hook.js')
   return JSON.stringify({
-    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] },
+    hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] },
   })
 }
 
@@ -1014,20 +1022,32 @@ function withStreamRegistry(res, inner) {
 app.post('/api/permission/ask', (req, res) => {
   const { session_id, tool_name, tool_input, tool_use_id } = req.body || {}
 
-  // Salt-okunur araçları kullanıcıyı yormadan otomatik onayla ("ask for edits" mantığı)
-  if (AUTO_ALLOW_TOOLS.has(tool_name)) {
+  // İnteraktif sorular (her modda köprüye düşer) — allow/deny izin kartından farklı UI.
+  const isQuestion = tool_name === 'AskUserQuestion'
+  const isPlan     = tool_name === 'ExitPlanMode'
+
+  // Salt-okunur araçları kullanıcıyı yormadan otomatik onayla ("ask for edits" mantığı).
+  // İnteraktif sorular bu kısayolu atlar — her zaman kullanıcıya sorulur.
+  if (!isQuestion && !isPlan && AUTO_ALLOW_TOOLS.has(tool_name)) {
     return res.json({ decision: 'allow', reason: 'salt-okunur araç otomatik onaylandı' })
   }
   if (!tool_use_id) return res.json({ decision: 'deny', reason: 'tool_use_id yok' })
 
   const stream = session_id && sessionStreams.get(session_id)
-  if (!stream) return res.json({ decision: 'deny', reason: 'Onaylayacak aktif arayüz yok' })
+  if (!stream) {
+    // Yanıtlayacak aktif arayüz yok: modeli takmadan güvenli varsayımla devam ettir.
+    if (isQuestion) return res.json({ decision: 'deny', reason: 'Kullanıcı şu an yanıt veremiyor; en makul varsayımla devam et.' })
+    if (isPlan)     return res.json({ decision: 'allow', reason: 'Aktif arayüz yok — plan otomatik onaylandı.' })
+    return res.json({ decision: 'deny', reason: 'Onaylayacak aktif arayüz yok' })
+  }
 
-  // İsteği tarayıcıya bas
+  // İsteği tarayıcıya tool tipine uygun olay olarak bas
   try {
-    stream.write(`data: ${JSON.stringify({
-      type: 'permission_request', toolUseId: tool_use_id, toolName: tool_name, toolInput: tool_input,
-    })}\n\n`)
+    let payload
+    if (isQuestion)  payload = { type: 'ask_question', toolUseId: tool_use_id, questions: tool_input?.questions || [] }
+    else if (isPlan) payload = { type: 'plan_review',  toolUseId: tool_use_id, plan: tool_input?.plan || '' }
+    else             payload = { type: 'permission_request', toolUseId: tool_use_id, toolName: tool_name, toolInput: tool_input }
+    stream.write(`data: ${JSON.stringify(payload)}\n\n`)
   } catch {}
 
   const timer = setTimeout(() => {
