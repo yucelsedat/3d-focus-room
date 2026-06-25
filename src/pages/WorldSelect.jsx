@@ -283,7 +283,7 @@ function ContextModal({ onClose, onCreate, onUpdate, editCtx = null }) {
   }
 
   async function handleSubmit() {
-    if (!name.trim()) { setError('Context adı gerekli'); return }
+    if (!name.trim()) { setError('Oda adı gerekli'); return }
     setLoading(true)
     setError('')
     try {
@@ -344,7 +344,7 @@ function ContextModal({ onClose, onCreate, onUpdate, editCtx = null }) {
         {/* Başlık */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: '#fff' }}>
-            {isEdit ? 'Context Düzenle' : 'Yeni Context Oluştur'}
+            {isEdit ? 'Oda Düzenle' : 'Yeni Oda Oluştur'}
           </h2>
           <button onClick={onClose} style={{
             background: 'none', border: 'none', color: '#666',
@@ -422,10 +422,10 @@ function ContextModal({ onClose, onCreate, onUpdate, editCtx = null }) {
           </div>
         </div>
 
-        {/* Context adı */}
+        {/* Oda adı */}
         <div>
           <label style={{ fontSize: 12, color: '#888', display: 'block', marginBottom: 8 }}>
-            Context Adı
+            Oda Adı
           </label>
           <input
             value={name}
@@ -549,7 +549,7 @@ function DeleteConfirmModal({ ctx, onClose, onDeleted }) {
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>⚠</div>
           <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#fff' }}>
-            Context Silinsin mi?
+            Oda Silinsin mi?
           </h2>
           <p style={{ margin: 0, color: '#888', fontSize: 14, lineHeight: 1.6 }}>
             <strong style={{ color: '#fff' }}>"{ctx.name}"</strong> ve tüm alt odaları
@@ -590,13 +590,14 @@ export default function WorldSelect() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [modal, setModal] = useState(null) // null | 'create' | { mode:'edit', ctx } | { mode:'delete', ctx }
+  const [searchQuery, setSearchQuery] = useState('')
   const navigate = useNavigate()
 
   useEffect(() => {
     fetch(`${API}/api/rooms`)
       .then(r => r.json())
       .then(data => { setContexts(data.filter(r => r.parent === null)); setLoading(false) })
-      .catch(() => { setError('Contextler yüklenemedi'); setLoading(false) })
+      .catch(() => { setError('Odalar yüklenemedi'); setLoading(false) })
   }, [])
 
   function handlePlay(ctx) {
@@ -641,7 +642,39 @@ export default function WorldSelect() {
           <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: 0.5 }}>Focus Room</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <span style={{ color: '#ff9500', fontWeight: 600, fontSize: 14 }}>Contexts</span>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="text"
+              placeholder="Oda veya etiket ara..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{
+                background: '#0a0a0a',
+                border: 'none',
+                borderRadius: '20px',
+                padding: '10px 20px 10px 42px',
+                color: '#fff',
+                fontSize: '14px',
+                width: '260px',
+                outline: 'none',
+                boxShadow: 'inset 3px 3px 6px rgba(0,0,0, 0.8), inset -3px -3px 6px rgba(255,255,255, 0.03)',
+                transition: 'box-shadow 0.3s ease',
+              }}
+              onFocus={e => e.target.style.boxShadow = 'inset 4px 4px 8px rgba(0,0,0, 0.9), inset -4px -4px 8px rgba(255,255,255, 0.05)'}
+              onBlur={e => e.target.style.boxShadow = 'inset 3px 3px 6px rgba(0,0,0, 0.8), inset -3px -3px 6px rgba(255,255,255, 0.03)'}
+            />
+            <span style={{
+              position: 'absolute',
+              left: '16px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: '#555',
+              fontSize: '14px',
+              pointerEvents: 'none'
+            }}>
+              🔍
+            </span>
+          </div>
           <button
             onClick={() => setModal('create')}
             style={{
@@ -653,7 +686,7 @@ export default function WorldSelect() {
             onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
             onMouseLeave={e => e.currentTarget.style.opacity = '1'}
           >
-            + Context Oluştur
+            + Oda Oluştur
           </button>
         </div>
       </nav>
@@ -666,10 +699,10 @@ export default function WorldSelect() {
           WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
           backgroundClip: 'text', letterSpacing: -1,
         }}>
-          Bir Context Seç
+          Bir Oda Seç
         </h1>
         <p style={{ margin: 0, color: '#555', fontSize: 16 }}>
-          Keşfetmek istediğin context'e gir
+          Keşfetmek istediğin odaya gir
         </p>
       </div>
 
@@ -688,17 +721,26 @@ export default function WorldSelect() {
         {!loading && !error && contexts.length === 0 && (
           <div style={{ textAlign: 'center', color: '#444', padding: '80px 0' }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🌐</div>
-            <div style={{ fontSize: 16, marginBottom: 20 }}>Henüz context yok</div>
+            <div style={{ fontSize: 16, marginBottom: 20 }}>Henüz oda yok</div>
             <button onClick={() => setModal('create')} style={{
               padding: '12px 28px', background: 'linear-gradient(135deg, #ff9500, #ff6000)',
               border: 'none', borderRadius: 12, color: '#fff', fontSize: 15,
               fontWeight: 700, cursor: 'pointer',
-            }}>+ İlk Context'i Oluştur</button>
+            }}>+ İlk Odayı Oluştur</button>
           </div>
         )}
         {!loading && !error && contexts.length > 0 && (
           <div className="context-grid">
-            {contexts.map(ctx => (
+            {[...contexts]
+              .reverse()
+              .filter(ctx => {
+                const q = searchQuery.toLowerCase();
+                if (!q) return true;
+                if (ctx.name.toLowerCase().includes(q)) return true;
+                if (ctx.categories?.some(c => c.name.toLowerCase().includes(q))) return true;
+                return false;
+              })
+              .map(ctx => (
               <ContextCard
                 key={ctx.id}
                 ctx={ctx}
@@ -734,13 +776,14 @@ export default function WorldSelect() {
       <style>{`
         .context-grid {
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          grid-template-columns: repeat(5, 1fr);
           gap: 24px;
-          max-width: 1280px;
+          max-width: 1800px;
           margin: 0 auto;
         }
-        @media (max-width: 1100px) { .context-grid { grid-template-columns: repeat(3, 1fr); } }
-        @media (max-width: 750px)  { .context-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 1200px) { .context-grid { grid-template-columns: repeat(4, 1fr); } }
+        @media (max-width: 950px)  { .context-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 700px)  { .context-grid { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 480px)  { .context-grid { grid-template-columns: 1fr; } }
       `}</style>
     </div>
