@@ -1,11 +1,11 @@
 # Graph Report - focus-room-main  (2026-06-26)
 
 ## Corpus Check
-- 29 files · ~473,796 words
+- 30 files · ~478,406 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 176 nodes · 202 edges · 11 communities detected
+- 196 nodes · 246 edges · 11 communities detected
 - Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 9 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -24,15 +24,15 @@
 
 ## God Nodes (most connected - your core abstractions)
 1. `PersistentSession` - 14 edges
-2. `SessionPool` - 6 edges
-3. `SceneErrorBoundary` - 5 edges
-4. `encodeWallId()` - 5 edges
-5. `decodeWallId()` - 5 edges
-6. `TextureErrorBoundary` - 5 edges
-7. `roomBlueprintDir()` - 4 edges
-8. `getDoorInstanceIds()` - 4 edges
-9. `permissionArgs()` - 3 edges
-10. `sseLine()` - 3 edges
+2. `LoopRunner` - 9 edges
+3. `SessionPool` - 6 edges
+4. `verifyGoal()` - 6 edges
+5. `SceneErrorBoundary` - 5 edges
+6. `encodeWallId()` - 5 edges
+7. `decodeWallId()` - 5 edges
+8. `TextureErrorBoundary` - 5 edges
+9. `sseLine()` - 4 edges
+10. `setSSEHeaders()` - 4 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `bootMigrate()` --calls--> `migrate()`  [INFERRED]
@@ -56,7 +56,7 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.07
-Nodes (17): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), permissionArgs(), permSettingsJson(), readBlueprintSpec() (+9 more)
+Nodes (23): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+15 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.07
@@ -71,16 +71,16 @@ Cohesion: 0.21
 Nodes (5): PersistentSession, setSSEHeaders(), sseLine(), streamClaudeToSSE(), userLine()
 
 ### Community 4 - "Community 4"
-Cohesion: 0.29
-Nodes (2): ContextCard(), hashIndex()
+Cohesion: 0.21
+Nodes (4): LoopRunner, makeTurnSink(), readRecall(), SessionPool
 
 ### Community 5 - "Community 5"
 Cohesion: 0.29
-Nodes (1): SceneErrorBoundary
+Nodes (2): ContextCard(), hashIndex()
 
 ### Community 6 - "Community 6"
-Cohesion: 0.6
-Nodes (1): SessionPool
+Cohesion: 0.29
+Nodes (1): SceneErrorBoundary
 
 ### Community 7 - "Community 7"
 Cohesion: 0.33
@@ -101,11 +101,9 @@ Nodes (3): migrate(), readJson(), bootMigrate()
 ## Knowledge Gaps
 - **Thin community `Community 1`** (27 nodes): `BluprintMesh()`, `EmbedMesh()`, `getCaretOffset()`, `GifMesh()`, `ImageMesh()`, `insertAtCursor()`, `LoadingMesh()`, `measureEditCols()`, `MediaOverlay()`, `PermissionPrompt()`, `PlanReview()`, `QuestionPrompt()`, `rangeFromPoint()`, `RoomChatMesh()`, `RoomSessionMesh()`, `SessionMesh()`, `SessionMessageBubble()`, `SkillChatMesh()`, `SlideMesh()`, `TextureErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `VideoMesh()`, `YoutubeMesh()`, `MediaOverlay.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 4`** (8 nodes): `WorldSelect.jsx`, `CardMenu()`, `ContextCard()`, `ContextModal()`, `DeleteConfirmModal()`, `hashIndex()`, `MenuItem()`, `WorldSelect()`
+- **Thin community `Community 5`** (8 nodes): `WorldSelect.jsx`, `CardMenu()`, `ContextCard()`, `ContextModal()`, `DeleteConfirmModal()`, `hashIndex()`, `MenuItem()`, `WorldSelect()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 5`** (7 nodes): `App()`, `SceneErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `App.jsx`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 6`** (6 nodes): `SessionPool`, `.constructor()`, `.ensure()`, `.evict()`, `._evictIfFull()`, `.get()`
+- **Thin community `Community 6`** (7 nodes): `App()`, `SceneErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `App.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 8`** (5 nodes): `CanvasMesh()`, `getBounds()`, `getImageNaturalSize()`, `parseMd()`, `CanvasMesh.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -116,13 +114,9 @@ Nodes (3): migrate(), readJson(), bootMigrate()
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `serializeSpecialDoor()` connect `Community 2` to `Community 0`?**
-  _High betweenness centrality (0.080) - this node is a cross-community bridge._
+  _High betweenness centrality (0.082) - this node is a cross-community bridge._
 - **Why does `PersistentSession` connect `Community 3` to `Community 0`?**
-  _High betweenness centrality (0.048) - this node is a cross-community bridge._
-- **Are the 2 inferred relationships involving `encodeWallId()` (e.g. with `canPassThrough()` and `canPassThroughOuter()`) actually correct?**
-  _`encodeWallId()` has 2 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 2 inferred relationships involving `decodeWallId()` (e.g. with `applyInstanceTransform()` and `doorWorldPos()`) actually correct?**
-  _`decodeWallId()` has 2 INFERRED edges - model-reasoned connections that need verification._
+  _High betweenness centrality (0.046) - this node is a cross-community bridge._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.07 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**

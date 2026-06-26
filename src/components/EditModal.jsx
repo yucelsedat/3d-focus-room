@@ -55,6 +55,11 @@ export function EditModal() {
   const [sessionModel, setSessionModel]   = useState('claude-fable-5')
   const [sessionEffort, setSessionEffort] = useState('normal')
   const [sessionPermMode, setSessionPermMode] = useState('bypassPermissions')
+  // LoopFlow (yalnızca roomsession tile): Trigger + Verifiable Goal + Subagent
+  const [loopOn, setLoopOn] = useState(false)
+  const [loopGoal, setLoopGoal] = useState('')
+  const [loopSubagents, setLoopSubagents] = useState('')
+  const [loopMaxIter, setLoopMaxIter] = useState(8)
   const [bluprintSkill, setBluprintSkill] = useState('reconstruct')
   const [bluprintScopeOn, setBluprintScopeOn] = useState(false)
   const [bluprintScope, setBluprintScope] = useState('')
@@ -329,6 +334,9 @@ export function EditModal() {
             model: sessionModel,
             effort: sessionEffort,
             permissionMode: sessionPermMode,
+            loop: (loopOn && loopGoal.trim())
+              ? { goal: loopGoal.trim(), trigger: 'manual', subagents: loopSubagents.trim(), maxIterations: Math.max(1, Math.min(50, parseInt(loopMaxIter, 10) || 8)) }
+              : undefined,
           })
         })
         const d = await r.json()
@@ -1122,6 +1130,56 @@ export function EditModal() {
                     <option value="ask">Ask — her tool için onay iste</option>
                     <option value="plan">Plan — değişiklik yapmaz, yalnızca planlar</option>
                   </select>
+                </div>
+
+                {/* LoopFlow — otonom loop + Recall */}
+                <div style={{ borderTop: '1px solid #2a2a3e', paddingTop: '10px', marginTop: '2px' }}>
+                  <button
+                    onClick={() => setLoopOn(v => !v)}
+                    style={{
+                      width: '100%', padding: '8px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: 600,
+                      border: loopOn ? '1px solid #f59e0b' : '1px solid #333',
+                      background: loopOn ? 'rgba(245,158,11,0.15)' : '#1a1a2e',
+                      color: loopOn ? '#f59e0b' : '#888',
+                    }}
+                  >{loopOn ? '🔁 LoopFlow açık — hedefe kadar otonom' : '🔁 LoopFlow (otonom loop) — kapalı'}</button>
+                  {loopOn && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                      <p style={{ color: '#777', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>
+                        Loop, <b>doğrulanabilir hedef</b> geçene (veya max iterasyona) kadar Claude'u otonom çağırır;
+                        her iterasyon diske checkpoint'lenir (<b>Recall</b>) — kesilse bile kaldığı yerden devam eder.
+                      </p>
+                      <div>
+                        <label style={{ ...s.label, marginBottom: '4px' }}>Doğrulanabilir hedef (Goal)</label>
+                        <textarea
+                          value={loopGoal}
+                          onChange={e => setLoopGoal(e.target.value)}
+                          placeholder="ör. index.html: butona tıklayınca sayaç artar, konsol hatasız, mobilde bozulmuyor"
+                          rows={3}
+                          style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px', boxSizing: 'border-box', resize: 'vertical' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ ...s.label, marginBottom: '4px' }}>Çalışma yönergesi / alt-roller (Subagent) — opsiyonel</label>
+                        <textarea
+                          value={loopSubagents}
+                          onChange={e => setLoopSubagents(e.target.value)}
+                          placeholder="ör. önce HTML/CSS iskeleti, sonra JS davranışı, her turda küçük ve test edilebilir adım"
+                          rows={2}
+                          style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px', boxSizing: 'border-box', resize: 'vertical' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ ...s.label, marginBottom: '4px' }}>Max iterasyon</label>
+                        <input
+                          type="number" min={1} max={50}
+                          value={loopMaxIter}
+                          onChange={e => setLoopMaxIter(e.target.value)}
+                          style={{ width: '100%', background: '#1a1a2e', border: '1px solid #333', color: '#e0e0e0', borderRadius: '6px', padding: '6px 10px', fontSize: '12px', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
