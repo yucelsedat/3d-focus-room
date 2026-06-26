@@ -13,6 +13,7 @@ import { MediaManager } from './components/MediaManager'
 import { KeyHandler } from './components/KeyHandler'
 import { BlueDoors } from './components/BlueDoor'
 import { RoomNavHUD } from './components/RoomNavHUD'
+import { LoopIndicator } from './components/LoopIndicator'
 import { useStore } from './store/useStore'
 import { loadRoom } from './utils/loadRoom'
 import './App.css'
@@ -108,6 +109,7 @@ function App() {
         </Canvas>
         <Crosshair />
         <RoomNavHUD />
+        <LoopIndicator />
         <EditModal />
         <RoomModal />
         <MainMenu />

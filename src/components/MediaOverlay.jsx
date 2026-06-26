@@ -753,6 +753,12 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   const [pendingQuestions, setPendingQuestions] = useState([])  // bekleyen AskUserQuestion soruları
   const [pendingPlans, setPendingPlans] = useState([])  // bekleyen ExitPlanMode plan onayları
   const [confirmClear, setConfirmClear] = useState(false)
+  // LoopFlow + Recall (yalnızca roomsession tile)
+  const loopable = apiBase === '/api/roomsession'
+  const [loopSpec, setLoopSpec]       = useState(null)   // { goal, subagents, maxIterations }
+  const [loopRecall, setLoopRecall]   = useState(null)   // disk checkpoint
+  const [loopRunning, setLoopRunning] = useState(false)
+  const [loopPhase, setLoopPhase]     = useState(null)   // { kind:'working'|'verifying', iter, max }
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
   const activeAiRef = useRef(null)
@@ -826,6 +832,7 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
         if (data.model)  setModel(data.model)
         if (data.effort) setEffort(data.effort)
         if (data.permissionMode) setPermMode(data.permissionMode)
+        if (data.loop) setLoopSpec(data.loop)
         setMessages((data.messages || []).map(m => ({
           id: m.id, role: m.role === 'assistant' ? 'ai' : m.role,
           content: m.text, toolName: m.toolName
@@ -835,49 +842,8 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
     return () => { cancelled = true }
   }, [id])
 
-  const submit = async () => {
-    const msg = inputRef.current?.value?.trim() ?? ''
-    if (!msg || streaming) return
-    if (inputRef.current) inputRef.current.value = ''
-
-    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: msg }])
-    setStreaming(true)
-    setThinking(false)
-    activeAiRef.current = null
-    const streamSeenIds = new Set()
-
-    try {
-      const resp = await fetch(`${apiBase}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaId: id, message: msg }),
-      })
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}))
-        setMessages(prev => [...prev, { id: `e-${Date.now()}`, role: 'error', content: err.error || `HTTP ${resp.status}` }])
-        return
-      }
-
-      const reader  = resp.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
-
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const raw = line.slice(6).trim()
-          if (!raw) continue
-          try {
-            const ev = JSON.parse(raw)
-            if (ev.type === 'done') break
-
+  // Bir SSE olayını mesaj/izin/bağlam state'ine uygula. submit ve loop akışı paylaşır.
+  const applyStreamEvent = (ev, streamSeenIds) => {
             if (ev.type === 'permission_request') {
               setPendingPerms(prev =>
                 prev.some(p => p.toolUseId === ev.toolUseId) ? prev
@@ -958,6 +924,51 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               const created = ev.usage.cache_creation_input_tokens || 0
               setContextTokens({ used: fresh + cached + created, window: 200000, fresh, cached, created })
             }
+  }
+
+  const submit = async () => {
+    const msg = inputRef.current?.value?.trim() ?? ''
+    if (!msg || streaming) return
+    if (inputRef.current) inputRef.current.value = ''
+
+    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', content: msg }])
+    setStreaming(true)
+    setThinking(false)
+    activeAiRef.current = null
+    const streamSeenIds = new Set()
+
+    try {
+      const resp = await fetch(`${apiBase}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaId: id, message: msg }),
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        setMessages(prev => [...prev, { id: `e-${Date.now()}`, role: 'error', content: err.error || `HTTP ${resp.status}` }])
+        return
+      }
+
+      const reader  = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          try {
+            const ev = JSON.parse(raw)
+            if (ev.type === 'done') break
+            applyStreamEvent(ev, streamSeenIds)
           } catch {}
         }
       }
@@ -970,6 +981,79 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
       setTimeout(() => inputRef.current?.focus(), 50)
     }
   }
+
+  // ── LoopFlow + Recall (yalnızca roomsession tile) ──────────────────────────
+  const startLoop = async () => {
+    if (loopRunning) return
+    setLoopRunning(true)
+    setError(null)
+    activeAiRef.current = null
+    const streamSeenIds = new Set()
+    try {
+      const resp = await fetch(`${apiBase}/${id}/loop/start`, { method: 'POST' })
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}))
+        setError(e.error || `HTTP ${resp.status}`)
+        return
+      }
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          try {
+            const ev = JSON.parse(raw)
+            if (ev.type === 'done') break
+            if (ev.recall) setLoopRecall(ev.recall)
+            if (ev.type === 'loop_working') setLoopPhase({ kind: 'working', iter: ev.iteration, max: ev.maxIterations })
+            else if (ev.type === 'loop_verifying') setLoopPhase({ kind: 'verifying', iter: ev.iteration })
+            else if (ev.type === 'loop_iteration' || ev.type === 'loop_done' || ev.type === 'loop_started' || ev.type === 'loop_state') setLoopPhase(null)
+            else applyStreamEvent(ev, streamSeenIds)   // iş turu olayları normal mesaj olarak render
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoopRunning(false)
+      setLoopPhase(null)
+      setThinking(false)
+      activeAiRef.current = null
+      fetch(`${apiBase}/${id}/loop/status`).then(r => r.json()).then(d => {
+        if (d.recall) setLoopRecall(d.recall)
+        setLoopRunning(!!d.running)
+      }).catch(() => {})
+    }
+  }
+
+  const stopLoop = async () => {
+    try { await fetch(`${apiBase}/${id}/loop/stop`, { method: 'POST' }) } catch {}
+  }
+
+  // Mount: loop durumu + spec'i yükle; sunucuda çalışıyorsa canlı akışa yeniden bağlan.
+  useEffect(() => {
+    if (!loopable) return
+    let cancelled = false
+    fetch(`${apiBase}/${id}/loop/status`)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled || d.error) return
+        if (d.recall) setLoopRecall(d.recall)
+        if (d.running) startLoop()   // reconnect → kaldığı yerden devam
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, loopable])
 
   const onKeyDown = (e) => {
     e.stopPropagation()
@@ -1086,6 +1170,58 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               </span>
             </div>
           </div>
+
+          {/* LoopFlow + Recall paneli (yalnızca roomsession + loop tanımlı tile) */}
+          {loopable && loopSpec && (() => {
+            const rec = loopRecall
+            const status = rec?.status || 'idle'
+            const statusColor = status === 'met' ? '#4ade80' : status === 'error' ? '#f87171' : status === 'maxed' ? '#fbbf24' : status === 'running' ? '#f59e0b' : '#4a6a8a'
+            const statusLabel = { idle: 'hazır', running: 'çalışıyor', met: '✓ hedef karşılandı', maxed: 'max iterasyon', stopped: 'durduruldu', error: 'hata' }[status] || status
+            const lc = rec?.lastCheck
+            return (
+              <div style={{ padding: '7px 10px', background: '#1a1205', borderBottom: '1px solid #4a3410', flexShrink: 0, ...px }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '20px' }}>🔁</span>
+                  <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: '19px' }}>LoopFlow</span>
+                  <span style={{ color: statusColor, fontSize: '18px', fontWeight: 600 }}>{statusLabel}</span>
+                  {rec && <span style={{ color: '#a87a30', fontSize: '18px', fontVariantNumeric: 'tabular-nums' }}>iter {rec.iteration}/{rec.maxIterations}</span>}
+                  {loopPhase && (
+                    <span style={{ color: '#fbbf24', fontSize: '17px' }}>
+                      {loopPhase.kind === 'working' ? `⚙ çalışıyor (${loopPhase.iter})` : `🔎 doğrulanıyor (${loopPhase.iter})`}
+                    </span>
+                  )}
+                  {!loopRunning ? (
+                    <button
+                      onClick={e => { e.stopPropagation(); startLoop() }}
+                      onPointerDown={e => e.stopPropagation()}
+                      title="Loop'u başlat (Recall varsa kaldığı yerden)"
+                      style={{ marginLeft: 'auto', padding: '3px 12px', borderRadius: '5px', fontSize: '19px', cursor: 'pointer', border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.18)', color: '#f59e0b', pointerEvents: 'auto', fontWeight: 600 }}
+                    >{rec && rec.iteration > 0 && status !== 'met' ? '▶ Devam et' : '▶ Loop başlat'}</button>
+                  ) : (
+                    <button
+                      onClick={e => { e.stopPropagation(); stopLoop() }}
+                      onPointerDown={e => e.stopPropagation()}
+                      title="Loop'u durdur (mevcut tur bitince)"
+                      style={{ marginLeft: 'auto', padding: '3px 12px', borderRadius: '5px', fontSize: '19px', cursor: 'pointer', border: '1px solid #f87171', background: 'rgba(248,113,113,0.18)', color: '#f87171', pointerEvents: 'auto', fontWeight: 600 }}
+                    >■ Durdur</button>
+                  )}
+                </div>
+                <div style={{ color: '#8a6a30', fontSize: '17px', marginTop: '4px', lineHeight: 1.4 }}>
+                  <b style={{ color: '#c89030' }}>Hedef:</b> {loopSpec.goal}
+                </div>
+                {lc && (
+                  <div style={{ marginTop: '4px', fontSize: '17px', color: lc.met ? '#4ade80' : '#d99a4a' }}>
+                    <b>{lc.met ? '✓ doğrulandı' : '✗ henüz değil'}:</b> {lc.reason}
+                    {!lc.met && lc.remaining && lc.remaining.length > 0 && (
+                      <ul style={{ margin: '3px 0 0', paddingLeft: '18px', color: '#a87a30' }}>
+                        {lc.remaining.slice(0, 4).map((r, i) => <li key={i} style={{ fontSize: '16px' }}>{r}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           {/* Loading bar */}
           {streaming && (

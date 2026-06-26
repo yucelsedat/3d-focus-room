@@ -2018,7 +2018,7 @@ app.post('/api/roomchat/export', async (req, res) => {
 // ─── Room Session endpoints (izole proje klasöründe çalışan AI session) ──────
 
 app.post('/api/roomsession', async (req, res) => {
-  const { tileId, width, height, position, rotation, model, effort, permissionMode } = req.body;
+  const { tileId, width, height, position, rotation, model, effort, permissionMode, loop } = req.body;
   const id = BigInt(Date.now());
   try {
     const pos = JSON.parse(position);
@@ -2038,7 +2038,7 @@ app.post('/api/roomsession', async (req, res) => {
         rotY: parseFloat(rot[1]) || 0,
         rotZ: parseFloat(rot[2]) || 0,
         rotOrder: String(rot[3] || 'XYZ'),
-        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal', permissionMode: permissionMode || 'bypassPermissions' }),
+        content: formatSessionContent({ model: model || 'claude-fable-5', effort: effort || 'normal', permissionMode: permissionMode || 'bypassPermissions', ...(loop && loop.goal ? { loop } : {}) }),
       },
     });
     // Odanın izole proje klasörünü oluştur
@@ -2056,14 +2056,14 @@ app.get('/api/roomsession/:mediaId/history', async (req, res) => {
     if (!media || media.type !== 'roomsession') {
       return res.status(404).json({ error: 'Oda projesi bulunamadı' })
     }
-    const { sessionId, model, effort, permissionMode } = parseSessionContent(media.content)
-    if (!sessionId) return res.json({ sessionId: null, messages: [], model, effort, permissionMode })
+    const { sessionId, model, effort, permissionMode, loop } = parseSessionContent(media.content)
+    if (!sessionId) return res.json({ sessionId: null, messages: [], model, effort, permissionMode, loop: loop || null })
 
     const jsonlPath = path.join(roomProjectJsonlDir(media.roomId), `${sessionId}.jsonl`)
-    if (!fs.existsSync(jsonlPath)) return res.json({ sessionId, messages: [], model, effort, permissionMode })
+    if (!fs.existsSync(jsonlPath)) return res.json({ sessionId, messages: [], model, effort, permissionMode, loop: loop || null })
 
     const content = fs.readFileSync(jsonlPath, 'utf8')
-    res.json({ sessionId, messages: parseLiveMessages(content), model, effort, permissionMode })
+    res.json({ sessionId, messages: parseLiveMessages(content), model, effort, permissionMode, loop: loop || null })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -2116,6 +2116,303 @@ app.post('/api/roomsession/message', async (req, res) => {
     },
   })
 });
+
+// ─── LoopFlow + Recall (roomsession tile için otonom loop motoru) ────────────
+// LoopFlow: bir görevi Trigger + Verifiable Goal + Subagent ile çerçeveler ve
+// hedef doğrulanana (veya max iterasyona) kadar Claude'u otonom çağırır.
+// Recall: her iterasyondan sonra ilerlemeyi diske checkpoint'ler; loop kesilse
+// (internet/Claude/tarayıcı kapansa) yeni başlatmada kaldığı yerden devam eder.
+// Hem yapısal checkpoint dosyası (.recall/) hem mevcut --resume konuşma geçmişi.
+
+function recallDir(roomId) { return path.join(roomProjectDir(roomId), '.recall') }
+function recallPath(roomId, mediaId) { return path.join(recallDir(roomId), `${mediaId}.json`) }
+
+function readRecall(roomId, mediaId) {
+  try { return JSON.parse(fs.readFileSync(recallPath(roomId, mediaId), 'utf8')) } catch { return null }
+}
+
+// Atomik yaz (temp + rename) → loop çökse bile yarım/bozuk checkpoint kalmaz.
+function writeRecall(roomId, mediaId, data) {
+  try { fs.mkdirSync(recallDir(roomId), { recursive: true }) } catch {}
+  const p = recallPath(roomId, mediaId)
+  const tmp = `${p}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify({ ...data, updatedAt: new Date().toISOString() }, null, 2))
+  fs.renameSync(tmp, p)
+}
+
+// Tek-atış Claude çağrısı; SSE'ye yazmaz, son `result` metnini Promise olarak döndürür.
+// Verifier (goal-check) subagent'ı için kullanılır.
+function runClaudeCapture(args, { cwd } = {}) {
+  return new Promise((resolve) => {
+    let buf = '', result = ''
+    let proc
+    try { proc = spawn(CLAUDE_CLI, args, { cwd: cwd || process.cwd(), env: buildSpawnEnv({}) }) }
+    catch (e) { return resolve('') }
+    proc.stdout.on('data', (c) => {
+      buf += c.toString()
+      const lines = buf.split('\n'); buf = lines.pop() ?? ''
+      for (const line of lines) {
+        if (!line.trim()) continue
+        try { const ev = JSON.parse(line); if (ev.type === 'result' && typeof ev.result === 'string') result = ev.result } catch {}
+      }
+    })
+    proc.stderr.on('data', (c) => console.error('[loop-verify stderr]', c.toString().slice(0, 200)))
+    proc.on('close', () => resolve(result))
+    proc.on('error', () => resolve(''))
+  })
+}
+
+// Verifier çıktısını güvenli parse et: JSON bulunamazsa met:false (güvenli taraf).
+function parseVerdict(text) {
+  const m = (text || '').match(/\{[\s\S]*\}/)
+  if (m) {
+    try {
+      const j = JSON.parse(m[0])
+      return { met: !!j.met, reason: String(j.reason || ''), remaining: Array.isArray(j.remaining) ? j.remaining.map(String) : [] }
+    } catch {}
+  }
+  return { met: false, reason: (text || '').slice(0, 300) || 'doğrulama çıktısı boş', remaining: [] }
+}
+
+// Doğrulanabilir hedefi kontrol eden ayrı (ucuz) Claude ajanı.
+async function verifyGoal({ goal, dir, model }) {
+  const vModel = cliModel(model || 'claude-haiku-4-5-20251001')
+  const prompt = `Sen bir doğrulama ajanısın. Aşağıdaki hedefin ŞU AN karşılanıp karşılanmadığını değerlendir.\n\n## Hedef\n${goal}\n\n## Proje klasörü\n${dir}\nKlasördeki dosyaları oku/incele. Sadece gerçekten doğrulayabildiğini "met:true" say.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"met": true|false, "reason": "kısa gerekçe", "remaining": ["kalan iş", ...]}`
+  const out = await runClaudeCapture([
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', vModel, ...mcpArgs(), '--dangerously-skip-permissions', prompt,
+  ], { cwd: dir })
+  return parseVerdict(out)
+}
+
+// İş turunu mevcut roomsession PersistentSession'ı üzerinden sürmek için proxy sink.
+// PersistentSession'ın `res` arayüzünü taklit eder ama end()'te bağlantıyı KAPATMAZ;
+// tur olaylarını loop'un canlı client sink'ine forward eder, turun bitişini Promise ile bildirir.
+function makeTurnSink(getClientSink) {
+  let resolveDone
+  const done = new Promise((r) => { resolveDone = r })
+  let summary = ''
+  const sink = {
+    setHeader() {}, flushHeaders() {},
+    write(chunk) {
+      const s = String(chunk)
+      if (s.includes('"type":"done"')) return true   // tur bitiş işareti — client'a iletme
+      try {
+        if (s.startsWith('data: ')) {
+          const ev = JSON.parse(s.slice(6))
+          if (ev.type === 'assistant') {
+            const t = (ev.message?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ')
+            if (t) summary = t
+          }
+        }
+      } catch {}
+      const cs = getClientSink()
+      if (cs) { try { cs.write(chunk) } catch {} }
+      return true
+    },
+    end() { resolveDone() },
+    on() {},
+  }
+  return { sink, done: done.then(() => summary) }
+}
+
+// Tek mediaId için tekil otonom loop sürücüsü (PersistentSession desenine analog).
+class LoopRunner {
+  constructor({ mediaId, roomId, dir, spec, settings }) {
+    this.mediaId = String(mediaId)
+    this.roomId = roomId
+    this.dir = dir
+    this.spec = spec
+    this.settings = settings
+    this.clientSink = null
+    this.running = false
+    this.aborted = false
+  }
+
+  attach(res) {
+    setSSEHeaders(res)
+    this.clientSink = res
+    res.on('close', () => { if (this.clientSink === res) this.clientSink = null })
+    const rec = readRecall(this.roomId, this.mediaId)
+    this._emit({ type: 'loop_state', recall: rec || null, running: this.running })
+  }
+
+  _emit(obj) { if (this.clientSink) { try { this.clientSink.write(sseLine(obj)) } catch {} } }
+  _sessionId() { return sessionPool.get(`roomsession:${this.mediaId}`)?.sessionId || null }
+  abort() { this.aborted = true }
+
+  async start() {
+    if (this.running) { this._emit({ type: 'loop_state', recall: readRecall(this.roomId, this.mediaId), running: true }); return }
+    this.running = true
+    this.aborted = false
+
+    // Recall: varsa kaldığı yerden devam, yoksa sıfırdan.
+    let rec = readRecall(this.roomId, this.mediaId) || {
+      mediaId: this.mediaId, goal: this.spec.goal, maxIterations: this.spec.maxIterations || 8,
+      iteration: 0, status: 'running', sessionId: this.settings.sessionId || null,
+      done: [], remaining: [], currentStep: '', lastCheck: null, history: [],
+      startedAt: new Date().toISOString(),
+    }
+    // Hedef değiştiyse checkpoint'i sıfırla (yeni görev → sıfırdan).
+    if (rec.goal !== this.spec.goal) {
+      rec = { ...rec, goal: this.spec.goal, iteration: 0, status: 'running', done: [], remaining: [], currentStep: '', lastCheck: null, history: [], startedAt: new Date().toISOString() }
+    }
+    // Zaten karşılanmışsa ve hedef aynıysa boş yere iterasyon harcama — sadece durumu bildir.
+    if (rec.status === 'met' && rec.iteration > 0) {
+      this.running = false
+      this._emit({ type: 'loop_done', recall: rec })
+      if (this.clientSink) { try { this.clientSink.write('data: {"type":"done"}\n\n'); this.clientSink.end() } catch {} }
+      this.clientSink = null
+      return
+    }
+    rec.status = 'running'
+    rec.maxIterations = this.spec.maxIterations || 8
+    writeRecall(this.roomId, this.mediaId, rec)
+    this._emit({ type: 'loop_started', recall: rec })
+
+    try {
+      while (rec.iteration < rec.maxIterations && !this.aborted) {
+        this._emit({ type: 'loop_working', iteration: rec.iteration + 1, maxIterations: rec.maxIterations })
+        const turnText = await this._workTurn(rec)
+        if (this.aborted) break
+
+        this._emit({ type: 'loop_verifying', iteration: rec.iteration + 1 })
+        const verdict = await verifyGoal({ goal: this.spec.goal, dir: this.dir, model: this.settings.model })
+
+        rec.iteration += 1
+        rec.currentStep = (turnText || '').slice(0, 200)
+        rec.lastCheck = verdict
+        rec.remaining = verdict.remaining || []
+        rec.history.push({ iter: rec.iteration, summary: (turnText || '').slice(0, 300), check: verdict })
+        rec.sessionId = this._sessionId() || rec.sessionId
+        if (verdict.met) rec.status = 'met'
+        else if (rec.iteration >= rec.maxIterations) rec.status = 'maxed'
+        writeRecall(this.roomId, this.mediaId, rec)   // her iterasyondan SONRA → çökme-dayanıklı
+        this._emit({ type: 'loop_iteration', recall: rec })
+        if (verdict.met) break
+      }
+      if (this.aborted && rec.status === 'running') { rec.status = 'stopped'; writeRecall(this.roomId, this.mediaId, rec) }
+    } catch (e) {
+      rec.status = 'error'; rec.lastError = e.message
+      writeRecall(this.roomId, this.mediaId, rec)
+      this._emit({ type: 'error', message: e.message })
+    } finally {
+      this.running = false
+      this._emit({ type: 'loop_done', recall: rec })
+      if (this.clientSink) { try { this.clientSink.write('data: {"type":"done"}\n\n'); this.clientSink.end() } catch {} }
+      this.clientSink = null
+    }
+  }
+
+  async _workTurn(rec) {
+    const key = `roomsession:${this.mediaId}`
+    let sys
+    if (!sessionPool.get(key)) {
+      sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${this.dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri burada kurulabilir ve geliştirilebilir.`
+    }
+    const sess = sessionPool.ensure(key, { settings: this.settings, cwd: this.dir, sys })
+    const { sink, done } = makeTurnSink(() => this.clientSink)
+    sess.send(sink, this._workPrompt(rec), {
+      onInit: (sessionId) => {
+        prisma.media.update({
+          where: { id: BigInt(this.mediaId) },
+          data: { content: formatSessionContent({ ...this.settings, sessionId, loop: this.spec }) },
+        }).catch((err) => console.error('[loop] sessionId kayıt hatası:', err.message))
+      },
+    })
+    return await done
+  }
+
+  _workPrompt(rec) {
+    const n = rec.iteration + 1
+    let p = `# LoopFlow — otonom görev (iterasyon ${n}/${rec.maxIterations})\n\n## Doğrulanabilir hedef\n${this.spec.goal}\n`
+    if (this.spec.subagents && this.spec.subagents.trim()) p += `\n## Çalışma yönergesi / alt-roller\n${this.spec.subagents}\n`
+    if (rec.lastCheck) {
+      p += `\n## Önceki doğrulama (iterasyon ${rec.iteration})\nKarşılandı: ${rec.lastCheck.met ? 'evet' : 'HAYIR'}\nGerekçe: ${rec.lastCheck.reason}\n`
+      if (rec.lastCheck.remaining && rec.lastCheck.remaining.length) {
+        p += `Kalan işler:\n${rec.lastCheck.remaining.map((r) => `- ${r}`).join('\n')}\n`
+      }
+    }
+    p += `\nBu iterasyonda hedefe yaklaşmak için somut ve eksiksiz çalışma yap; dosyaları doğrudan oluştur/düzenle. Açıklama değil çalışan sonuç üret. Bittiğinde kısaca ne yaptığını özetle.`
+    return p
+  }
+}
+
+const loopPool = new Map()
+const MAX_ACTIVE_LOOPS = 2   // eşzamanlı otonom loop tavanı (SessionPool çekişmesi + maliyet koruması)
+
+function activeLoopCount() {
+  let n = 0
+  for (const r of loopPool.values()) if (r.running) n++
+  return n
+}
+
+// Loop başlat (SSE) — Recall varsa kaldığı yerden devam eder.
+app.post('/api/roomsession/:mediaId/loop/start', async (req, res) => {
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } }) } catch {}
+  if (!media || media.type !== 'roomsession') return res.status(404).json({ error: 'Oda projesi bulunamadı' })
+
+  const settings = parseSessionContent(media.content)
+  const spec = settings.loop
+  if (!spec || !spec.goal || !spec.goal.trim()) {
+    return res.status(400).json({ error: 'Bu tile için LoopFlow hedefi tanımlı değil.' })
+  }
+
+  // Eşzamanlı-loop koruması: kendi runner'ı zaten çalışmıyorsa ve tavan doluysa reddet
+  // (Claude spawn edilmeden, SSE'den önce — frontend bunu temiz hata olarak gösterir).
+  let runner = loopPool.get(String(req.params.mediaId))
+  if ((!runner || !runner.running) && activeLoopCount() >= MAX_ACTIVE_LOOPS) {
+    return res.status(429).json({ error: `Aynı anda en fazla ${MAX_ACTIVE_LOOPS} loop çalışabilir. Önce çalışan bir loop'u durdur.` })
+  }
+
+  const dir = roomProjectDir(media.roomId)
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+
+  if (!runner) {
+    runner = new LoopRunner({ mediaId: req.params.mediaId, roomId: media.roomId, dir, spec, settings })
+    loopPool.set(String(req.params.mediaId), runner)
+  } else {
+    runner.spec = spec; runner.settings = settings
+  }
+  runner.attach(res)
+  if (!runner.running) runner.start()   // await edilmez — sink üzerinden akar
+})
+
+// Tüm odalardaki çalışan loop'lar — global gösterge bunu poller.
+app.get('/api/loops/active', (req, res) => {
+  const loops = []
+  for (const r of loopPool.values()) {
+    if (!r.running) continue
+    const rec = readRecall(r.roomId, r.mediaId) || {}
+    loops.push({
+      mediaId: r.mediaId,
+      roomId: r.roomId,
+      goal: r.spec?.goal || rec.goal || '',
+      iteration: rec.iteration || 0,
+      maxIterations: rec.maxIterations || r.spec?.maxIterations || 0,
+      status: rec.status || 'running',
+    })
+  }
+  res.json({ count: loops.length, max: MAX_ACTIVE_LOOPS, loops })
+})
+
+// Loop durdur — mevcut tur kibarca biter, döngü kırılır.
+app.post('/api/roomsession/:mediaId/loop/stop', async (req, res) => {
+  const runner = loopPool.get(String(req.params.mediaId))
+  if (runner) runner.abort()
+  res.json({ ok: true })
+})
+
+// Loop durumu — reconnect'te UI'yı kurmak için Recall checkpoint + running.
+app.get('/api/roomsession/:mediaId/loop/status', async (req, res) => {
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } }) } catch {}
+  if (!media || media.type !== 'roomsession') return res.status(404).json({ error: 'Oda projesi bulunamadı' })
+  const recall = readRecall(media.roomId, req.params.mediaId)
+  const runner = loopPool.get(String(req.params.mediaId))
+  res.json({ recall: recall || null, running: !!(runner && runner.running) })
+})
 
 // ─── Bluprint (oda projesini reconstruct PRD'sine çeviren tile) ──────────────
 // bluprint tile, roomchat ile aynı kalıp ama besleyen skill graphify değil
