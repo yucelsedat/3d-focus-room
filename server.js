@@ -67,31 +67,49 @@ const CLAUDE_CLI = (() => {
   return 'claude'
 })()
 
-// ─── MCP bütçesi: spawn edilen her claude turunda tüm MCP tool şemaları sistem
-// prompt'una girer. Global config'de 5 sunucu var (github ~60 tool, exa, tavily,
-// web-clone, context7) → ~30K token/tur, üstelik cache soğuyunca her turda tekrar.
-// Bir oda asistanının bunlara ihtiyacı yok; yalnızca context7'yi (2 tool, küçük,
-// context7-mcp skill'inin arka ucu) bırakıp gerisini --strict-mcp-config ile keseriz.
-// API key repoya girmesin diye context7 ayarını global ~/.claude.json'dan okuyup
-// minimal config'i os.tmpdir() altına yazarız; sadece o dosyanın yolunu kullanırız.
-const MIN_MCP_PATH = path.join(os.tmpdir(), 'focus-room-min-mcp.json')
-const MCP_ARGS = (() => {
+// ─── MCP profilleri: session tipine göre izole edilmiş MCP kapsamı ────────────
+// roomchat     → context7 + exa + tavily  (araştırma odaklı sohbet)
+// roomsession  → context7 only            (proje/kod asistanı)
+// ai-session   → context7 only            (standalone sohbet tile)
+// bluprint     → --strict-mcp-config      (minimal; sadece dosya/proje analizi)
+// verify       → --strict-mcp-config      (ucuz doğrulama ajanı, MCP yük istemez)
+// API key repoya girmesin diye tüm ayarlar global ~/.claude.json'dan okunur.
+const MIN_MCP_PATH      = path.join(os.tmpdir(), 'focus-room-min-mcp.json')
+const ROOMCHAT_MCP_PATH = path.join(os.tmpdir(), 'focus-room-roomchat-mcp.json')
+const _NO_MCP = ['--strict-mcp-config']
+const _MCP_PROFILES = (() => {
   try {
     const globalCfg = path.join(os.homedir(), '.claude.json')
     const cfg = JSON.parse(fs.readFileSync(globalCfg, 'utf8'))
-    const ctx7 = cfg.mcpServers?.context7
-    if (ctx7) {
-      fs.writeFileSync(MIN_MCP_PATH, JSON.stringify({ mcpServers: { context7: ctx7 } }))
-      return ['--strict-mcp-config', '--mcp-config', MIN_MCP_PATH]
+    const servers = cfg.mcpServers || {}
+    const ctx7 = servers.context7
+    if (!ctx7) {
+      console.error('[mcp] context7 bulunamadı, tüm profiller MCP kapalı başlıyor')
+      return { roomchat: _NO_MCP, default: _NO_MCP }
     }
+    // context7 only → roomsession, ai-session
+    fs.writeFileSync(MIN_MCP_PATH, JSON.stringify({ mcpServers: { context7: ctx7 } }))
+    const defaultArgs = ['--strict-mcp-config', '--mcp-config', MIN_MCP_PATH]
+    // context7 + exa + tavily → roomchat
+    const roomchatServers = { context7: ctx7 }
+    if (servers.exa)    roomchatServers.exa    = servers.exa
+    if (servers.tavily) roomchatServers.tavily = servers.tavily
+    fs.writeFileSync(ROOMCHAT_MCP_PATH, JSON.stringify({ mcpServers: roomchatServers }))
+    const roomchatArgs = ['--strict-mcp-config', '--mcp-config', ROOMCHAT_MCP_PATH]
+    console.error(`[mcp] profiller: roomchat=[ctx7+exa+tavily], default=[ctx7], bluprint/verify=[kapalı]`)
+    return { roomchat: roomchatArgs, default: defaultArgs }
   } catch (err) {
-    console.error('[mcp] minimal config yazılamadı, tüm MCP kapatılıyor:', err.message)
+    console.error('[mcp] MCP profilleri hazırlanamadı, tüm MCP kapatılıyor:', err.message)
+    return { roomchat: _NO_MCP, default: _NO_MCP }
   }
-  // context7 bulunamazsa: hiç MCP yükleme (yine de büyük tasarruf)
-  return ['--strict-mcp-config']
 })()
-// Spawn arg dizilerine eklenir; skilleri etkilemez, sadece MCP kapsamını daraltır.
-function mcpArgs() { return MCP_ARGS }
+// type: 'roomchat' | 'roomsession' | 'bluprint' | 'verify' | 'ai-session'
+function mcpArgs(type) {
+  if (type === 'roomchat')  return _MCP_PROFILES.roomchat
+  if (type === 'bluprint')  return _NO_MCP
+  if (type === 'verify')    return _NO_MCP
+  return _MCP_PROFILES.default   // roomsession, ai-session, bilinmeyen
+}
 
 // ─── Boot-time: auto-migrate JSON → SQLite if DB is empty ────────────────────
 async function bootMigrate() {
@@ -1418,7 +1436,7 @@ class PersistentSession {
     const a = [
       '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--model', cliModel(this.settings.model),
-      ...mcpArgs(),
+      ...mcpArgs(this.key.split(':')[0]),
     ]
     if (this.sys) a.push('--append-system-prompt', this.sys)
     a.push(...permissionArgs(this.settings.permissionMode))
@@ -1998,7 +2016,7 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
   streamClaudeToSSE(res, [
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
-    ...mcpArgs(),
+    ...mcpArgs('roomchat'),
     '--dangerously-skip-permissions',
     prompt,
   ], {
@@ -2292,7 +2310,7 @@ async function verifyGoal({ goal, dir, model }) {
   const prompt = `Sen bir doğrulama ajanısın. Aşağıdaki hedefin ŞU AN karşılanıp karşılanmadığını değerlendir.\n\n## Hedef\n${goal}\n\n## Proje klasörü\n${dir}\nKlasördeki dosyaları oku/incele. Sadece gerçekten doğrulayabildiğini "met:true" say.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"met": true|false, "reason": "kısa gerekçe", "remaining": ["kalan iş", ...]}`
   const out = await runClaudeCapture([
     '--print', '--output-format=stream-json', '--verbose',
-    '--model', vModel, ...mcpArgs(), '--dangerously-skip-permissions', prompt,
+    '--model', vModel, ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
   ], { cwd: dir })
   return parseVerdict(out)
 }
@@ -2771,7 +2789,7 @@ app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
   streamClaudeToSSE(res, [
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
-    ...mcpArgs(),
+    ...mcpArgs('bluprint'),
     '--dangerously-skip-permissions',
     prompt,
   ], {
