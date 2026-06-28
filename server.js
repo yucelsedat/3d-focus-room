@@ -890,6 +890,8 @@ app.delete('/api/media/:id', async (req, res) => {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 
+  if (item.type === 'session') removeSessionRecall(String(id));   // öksüz recall checkpoint'i bırakma
+
   await prisma.media.delete({ where: { id } });
   res.json({ success: true });
 });
@@ -1370,6 +1372,7 @@ class PersistentSession {
     this.heartbeat = null
     this.lastUsed = Date.now()
     this.onSessionId = null                  // ilk sessionId yakalanınca (persist için)
+    this.lastResult = ''                     // son tamamlanan turun result metni (recall özeti)
   }
 
   _spawn() {
@@ -1417,7 +1420,10 @@ class PersistentSession {
     if (this.sink && FORWARD_TYPES.has(ev.type)) {
       try { this.sink.write(sseLine(ev)) } catch {}
     }
-    if (ev.type === 'result') this._finishTurn()   // tur sınırı
+    if (ev.type === 'result') {
+      if (typeof ev.result === 'string') this.lastResult = ev.result   // recall özeti için son yanıt
+      this._finishTurn()   // tur sınırı
+    }
   }
 
   // Bir mesaj kuyruğa al; sıra gelince stdin'e yaz.
@@ -1428,14 +1434,22 @@ class PersistentSession {
     this._next()
   }
 
-  _next() {
+  async _next() {
     if (this.busy) return
     const job = this.queue.shift()
     if (!job) return
     this.busy = true
     this.lastUsed = Date.now()
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null }
-    if (!this.alive || !this.proc) this._spawn()   // ilk tur ya da idle/çökme sonrası --resume ile yeniden doğ
+    if (!this.alive || !this.proc) {
+      // Respawn öncesi: şişkin JSONL'ı --resume'dan önce kırp → cache-warm maliyeti ↓.
+      // Yalnızca process yokken; canlı process dosyaya append ettiği için yarış/bozulma olmaz.
+      if (this.sessionId) {
+        try { await trimSessionJsonl(this.sessionId) }
+        catch (e) { console.error('[session-trim-respawn] hata:', e.message) }
+      }
+      this._spawn()   // ilk tur ya da idle/çökme sonrası --resume ile yeniden doğ
+    }
 
     this.sink = job.res
     if (this.sessionId) sessionStreams.set(this.sessionId, this.sink)
@@ -1459,8 +1473,34 @@ class PersistentSession {
     if (this.sink) { try { this.sink.write('data: {"type":"done"}\n\n'); this.sink.end() } catch {} }
     this._detachSink()
     this.busy = false
+    this._writeStandaloneRecall()   // standalone ai-session için "kaldığın yer" checkpoint'i
     this._armIdle()
     this._next()   // kuyrukta bekleyen varsa işle
+  }
+
+  // Yalnızca standalone ai-session tile'ları için hafif recall checkpoint'i yaz.
+  // roomsession/loop hariç — onların kendi (.recall room-projects altı) mekanizması var.
+  _writeStandaloneRecall() {
+    if (!this.key.startsWith('ai-session:')) return
+    const mediaId = this.key.split(':')[1]
+    if (!mediaId || !this.sessionId) return
+    try {
+      // Kümülatif tur sayısı: diskteki önceki checkpoint üzerine ekle. Örnek (instance)
+      // sayacı evict/respawn'da sıfırlanırdı; disk evict'te kalıp clear/delete'te silindiği
+      // için sayım konuşma boyu doğru, temizlikte 1'e döner.
+      const prev = readSessionRecall(mediaId)
+      writeSessionRecall(mediaId, {
+        mediaId,
+        sessionId: this.sessionId,
+        model: this.settings.model,
+        effort: this.settings.effort,
+        turnCount: (prev?.turnCount || 0) + 1,
+        lastSummary: (this.lastResult || '').slice(0, 280),
+        lastTurnAt: new Date().toISOString(),
+      })
+    } catch (e) {
+      console.error('[session-recall] hata:', e.message)
+    }
   }
 
   _detachSink() {
@@ -1560,6 +1600,7 @@ function makeClearHandler(typeName, poolPrefix, notFoundMsg) {
       const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
       if (!media || media.type !== typeName) return res.status(404).json({ error: notFoundMsg })
       sessionPool.evict(`${poolPrefix}:${req.params.mediaId}`)   // canlı process'i kapat
+      if (poolPrefix === 'ai-session') removeSessionRecall(req.params.mediaId)   // "kaldığın yer" checkpoint'i de sıfırla
       const current = parseSessionContent(media.content)
       await prisma.media.update({
         where: { id: BigInt(req.params.mediaId) },
@@ -1679,6 +1720,15 @@ app.get('/api/ai-session/:mediaId/history', async (req, res) => {
 
     const content = fs.readFileSync(jsonlPath, 'utf8')
     res.json({ sessionId, messages: parseLiveMessages(content), model, effort, permissionMode })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Standalone session "kaldığın yer" recall checkpoint'i (varsa) döndürür.
+app.get('/api/ai-session/:mediaId/recall', async (req, res) => {
+  try {
+    res.json({ recall: readSessionRecall(req.params.mediaId) || null })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -2138,6 +2188,29 @@ function writeRecall(roomId, mediaId, data) {
   const tmp = `${p}.tmp`
   fs.writeFileSync(tmp, JSON.stringify({ ...data, updatedAt: new Date().toISOString() }, null, 2))
   fs.renameSync(tmp, p)
+}
+
+// ─── Standalone ai-session recall (hafif "kaldığın yer" checkpoint'i) ─────────
+// Loop'tan bağımsız, normal session tile'ları için. roomsession'ın room-projects
+// altındaki recall'ından ayrı: cwd'nin .recall klasörüne mediaId bazlı yazılır.
+function sessionRecallDir() { return path.join(PROJECT_DIR, '.recall') }
+function sessionRecallPath(mediaId) { return path.join(sessionRecallDir(), `${mediaId}.json`) }
+
+function readSessionRecall(mediaId) {
+  try { return JSON.parse(fs.readFileSync(sessionRecallPath(mediaId), 'utf8')) } catch { return null }
+}
+
+function writeSessionRecall(mediaId, data) {
+  try { fs.mkdirSync(sessionRecallDir(), { recursive: true }) } catch {}
+  const p = sessionRecallPath(mediaId)
+  const tmp = `${p}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify({ ...data, updatedAt: new Date().toISOString() }, null, 2))
+  fs.renameSync(tmp, p)
+}
+
+// Standalone recall checkpoint'ini sil (sohbet temizlenince / tile silinince).
+function removeSessionRecall(mediaId) {
+  try { fs.unlinkSync(sessionRecallPath(mediaId)) } catch {}
 }
 
 // Tek-atış Claude çağrısı; SSE'ye yazmaz, son `result` metnini Promise olarak döndürür.

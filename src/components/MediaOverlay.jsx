@@ -7,6 +7,19 @@ import { marked } from 'marked'
 import { useStore } from '../store/useStore'
 import { useSpeechToText } from '../hooks/useSpeechToText'
 
+// Kısa "x önce" göreli zaman (recall göstergesi için)
+function relTime(iso) {
+  const t = Date.parse(iso)
+  if (!t) return ''
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000))
+  if (s < 60) return 'az önce'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} dk önce`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h} sa önce`
+  return `${Math.round(h / 24)} gün önce`
+}
+
 class TextureErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { hasError: false } }
   static getDerivedStateFromError() { return { hasError: true } }
@@ -759,6 +772,9 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   const [loopRecall, setLoopRecall]   = useState(null)   // disk checkpoint
   const [loopRunning, setLoopRunning] = useState(false)
   const [loopPhase, setLoopPhase]     = useState(null)   // { kind:'working'|'verifying', iter, max }
+  // Recall "kaldığın yer" göstergesi (yalnızca standalone ai-session tile)
+  const standalone = apiBase === '/api/ai-session'
+  const [sessionRecall, setSessionRecall] = useState(null)  // { lastSummary, turnCount, lastTurnAt }
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
   const activeAiRef = useRef(null)
@@ -839,6 +855,13 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
         })))
       })
       .catch(() => { if (!cancelled) setError('Geçmiş yüklenemedi') })
+    // Standalone session: "kaldığın yer" checkpoint'ini çek (sekme kapatılıp dönülünce bağlam)
+    if (standalone) {
+      fetch(`${apiBase}/${id}/recall`)
+        .then(r => r.json())
+        .then(data => { if (!cancelled && data && data.recall) setSessionRecall(data.recall) })
+        .catch(() => {})
+    }
     return () => { cancelled = true }
   }, [id])
 
@@ -1270,6 +1293,13 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
 
           {/* Messages */}
           <div ref={msgListRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', ...px }}>
+            {standalone && sessionRecall && sessionRecall.lastSummary && (
+              <div style={{ background: '#0a1520', border: '1px solid #1e3a5f', borderRadius: '8px', padding: '8px 10px', marginBottom: '4px', color: '#7a9ac0', fontSize: '18px', lineHeight: 1.4 }}>
+                <span style={{ color: '#60a5fa', fontWeight: 800 }}>↩ kaldığın yer</span>
+                <span style={{ opacity: 0.7 }}> · {sessionRecall.turnCount || 0} tur{sessionRecall.lastTurnAt ? ` · ${relTime(sessionRecall.lastTurnAt)}` : ''}</span>
+                <div style={{ marginTop: '4px', color: '#9ab0c8', fontWeight: 200 }}>{sessionRecall.lastSummary}</div>
+              </div>
+            )}
             {messages.length === 0 && !streaming && (
               <div style={{ color: error ? '#f87171' : '#2a4a6a', fontSize: '22px', textAlign: 'center', marginTop: '16px' }}>
                 {error || (connected ? 'Yeni session — ilk mesajını yazabilirsin.' : 'Yükleniyor...')}
