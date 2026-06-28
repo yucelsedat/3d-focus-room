@@ -241,6 +241,39 @@ async function collectDescendants(rootId) {
   return ids;
 }
 
+// Bir oda silinince DB cascade'i + yüklenen medya dosyaları temizleniyor; ama
+// odanın izole disk artefaktları (graf, roomsession projesi, blueprint ve bunların
+// ~/.claude/projects altındaki JSONL geçmişleri) öksüz kalıyordu. Bu fonksiyon o
+// klasörleri de siler. Hepsi best-effort: olmayan/erişilemeyen yol sessizce atlanır.
+function removeRoomDiskArtifacts(roomId) {
+  const dirs = [
+    roomGraphDir(roomId),
+    roomProjectDir(roomId),       // .recall checkpoint'leri de bunun altında
+    roomBlueprintDir(roomId),
+    roomProjectJsonlDir(roomId),  // ~/.claude/projects/<cwd-key>/ roomsession geçmişi
+    roomBlueprintJsonlDir(roomId),
+  ];
+  for (const dir of dirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// Disk artefaktlarını silmeden ÖNCE çağrılır. Oda silinirken hâlâ çalışan otonom
+// loop'lar ve havuzdaki canlı process'ler, cwd'leri (room-projects/room-blueprints)
+// silinince klasörü yeniden yaratıp checkpoint yazarak temizliği boşa çıkarır —
+// ayrıca havuzda ölü mediaId kayıtları sızar. Bu yüzden ilgili mediaId'ler için
+// loop'u abort edip havuz oturumlarını dispose ederiz (process kill).
+function stopRoomBackgroundWork(mediaIds) {
+  for (const mid of mediaIds) {
+    const key = String(mid);
+    const loop = loopPool.get(key);
+    if (loop) { try { loop.abort(); } catch {} loopPool.delete(key); }
+    for (const prefix of ['roomsession', 'bluprint', 'roomchat', 'ai-session']) {
+      sessionPool.evict(`${prefix}:${key}`);
+    }
+  }
+}
+
 app.delete('/api/rooms/:id', async (req, res) => {
   const { id } = req.params;
   const cascade = req.query.cascade === 'true';
@@ -251,16 +284,20 @@ app.delete('/api/rooms/:id', async (req, res) => {
 
   if (cascade) {
     const allIds = await collectDescendants(id);
+    const allMediaIds = [];
     for (const roomId of allIds) {
       const mediaItems = await prisma.media.findMany({ where: { roomId } });
       for (const m of mediaItems) {
+        allMediaIds.push(m.id);
         if (m.url && m.url.startsWith('/uploads/')) {
           const fp = path.join(__dirname, 'public', m.url);
           if (fs.existsSync(fp)) fs.unlinkSync(fp);
         }
       }
     }
+    stopRoomBackgroundWork(allMediaIds);
     await prisma.room.deleteMany({ where: { id: { in: allIds } } });
+    for (const roomId of allIds) removeRoomDiskArtifacts(roomId);
     if (allIds.includes(activeRoomId)) activeRoomId = 'default';
     return res.json({ ok: true, deletedIds: allIds });
   }
@@ -274,8 +311,10 @@ app.delete('/api/rooms/:id', async (req, res) => {
     }
   }
 
+  stopRoomBackgroundWork(mediaItems.map(m => m.id));
   // onDelete: Cascade removes media/doors/floor automatically
   await prisma.room.delete({ where: { id } });
+  removeRoomDiskArtifacts(id);
 
   if (activeRoomId === id) activeRoomId = 'default';
   res.json({ ok: true, deletedIds: [id] });
