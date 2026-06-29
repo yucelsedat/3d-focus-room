@@ -183,6 +183,7 @@ function serializeRoom(r) {
     coverImage: r.coverImage ?? null,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+    lastActiveAt: r.lastActiveAt,
     categories: (r.categories ?? []).map(rc => rc.category),
     parent: r.parent ? { id: r.parent.id, name: r.parent.name } : null,
     children: (r.children ?? []).map(c => ({ id: c.id, name: c.name })),
@@ -196,8 +197,10 @@ const roomInclude = {
 };
 
 app.get('/api/rooms', async (req, res) => {
+  // Son aktif olan oda en başta: oda her aktifleştiğinde (activate) lastActiveAt
+  // güncellenir, böylece liste bir "son kullanılan" kuyruğu gibi davranır.
   const rooms = await prisma.room.findMany({
-    orderBy: { createdAt: 'asc' },
+    orderBy: { lastActiveAt: 'desc' },
     include: roomInclude,
   });
   res.json(rooms.map(serializeRoom));
@@ -226,8 +229,15 @@ app.post('/api/rooms', async (req, res) => {
 
 app.post('/api/rooms/:id/activate', async (req, res) => {
   const { id } = req.params;
-  const room = await prisma.room.findUnique({ where: { id }, include: roomInclude });
-  if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
+  const existing = await prisma.room.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: 'Oda bulunamadı' });
+
+  // lastActiveAt'i güncelle → oda ana sayfada en başa geçer (son kullanılan kuyruğu).
+  const room = await prisma.room.update({
+    where: { id },
+    data: { lastActiveAt: new Date() },
+    include: roomInclude,
+  });
 
   activeRoomId   = id;
   activeRoomType = room.roomType ?? 'room';

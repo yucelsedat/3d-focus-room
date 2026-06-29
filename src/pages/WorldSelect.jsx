@@ -607,7 +607,7 @@ export default function WorldSelect() {
   }
 
   function handleCreated(room) {
-    setContexts(prev => [...prev, { ...room, categories: room.categories ?? [], children: room.children ?? [] }])
+    setContexts(prev => [{ ...room, categories: room.categories ?? [], children: room.children ?? [] }, ...prev])
     setModal(null)
   }
 
@@ -731,8 +731,9 @@ export default function WorldSelect() {
         )}
         {!loading && !error && contexts.length > 0 && (
           <div className="context-grid">
+            {/* API odaları lastActiveAt desc döndürür (en son aktif olan başta),
+                bu yüzden burada ekstra sıralama/ters çevirme yok. */}
             {[...contexts]
-              .reverse()
               .filter(ctx => {
                 const q = searchQuery.toLowerCase();
                 if (!q) return true;
