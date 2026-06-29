@@ -835,6 +835,44 @@ app.post('/api/header', async (req, res) => {
   res.json(serializeMedia(media));
 });
 
+// Defter tile — Claude'a bağlı OLMAYAN yerel not defteri. İçerik tamamen
+// content alanında JSON olarak tutulur: { pages: [{ title, blocks: [str] }] }.
+// Kaydetme/güncelleme generic PUT /api/media/:id (content) ile yapılır.
+app.post('/api/defter', async (req, res) => {
+  try {
+    const { tileId, width, height, position, rotation } = req.body;
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const id = BigInt(Date.now());
+    const content = JSON.stringify({ pages: [{ title: '', blocks: [] }] });
+
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId,
+        type: 'defter',
+        url: null,
+        content,
+        width: parseFloat(width) || 6,
+        height: parseFloat(height) || 4,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+      },
+    });
+
+    res.json(serializeMedia(media));
+  } catch (err) {
+    console.error('[defter] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/canvas/:id/upload', canvasUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Dosya yok' });
   res.json({ url: `/uploads/images/${req.file.filename}` });
@@ -1876,7 +1914,9 @@ function writeRoomRaw(roomId, docs) {
   const rawDir = path.join(roomGraphDir(roomId), 'raw')
   fs.mkdirSync(rawDir, { recursive: true })
   for (const f of fs.readdirSync(rawDir)) {
-    if (!f.startsWith('chat-')) fs.rmSync(path.join(rawDir, f), { force: true })
+    // chat-* (roomchat export) ve defter-* (defter export) dosyaları korunur; yalnızca
+    // tile kaynaklı dosyalar tazelenir.
+    if (!f.startsWith('chat-') && !f.startsWith('defter-')) fs.rmSync(path.join(rawDir, f), { force: true })
   }
   for (const d of docs) {
     fs.writeFileSync(path.join(rawDir, `${d.kind}-${d.id}.md`), d.text + '\n')
@@ -2118,6 +2158,33 @@ app.post('/api/roomchat/export', async (req, res) => {
     res.json({ success: true, filename })
   } catch (err) {
     console.error('[roomchat export] hatası:', err.message)
+    res.status(500).json({ error: 'Kayıt hatası' })
+  }
+})
+
+// Defter bloğunu odanın raw klasörüne (room-graphs/<roomId>/raw/) .md olarak yazar.
+// roomchat/export ile aynı dizin; defter- prefix'i writeRoomRaw tazelemesinde korunur.
+app.post('/api/defter/export', async (req, res) => {
+  const { mediaId, content, slug } = req.body
+  if (!content?.trim()) return res.status(400).json({ error: 'İçerik gerekli' })
+
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } }) } catch {}
+  if (!media || media.type !== 'defter') return res.status(404).json({ error: 'Defter bulunamadı' })
+
+  try {
+    const rawDir = path.join(roomGraphDir(media.roomId), 'raw')
+    fs.mkdirSync(rawDir, { recursive: true })
+
+    const safeSlug = (typeof slug === 'string' && slug.trim()) ? slug.trim() : 'not'
+    const now = new Date()
+    const timestamp = now.toISOString().slice(0, 19).replace(/[-:]/g, '').slice(2, 8) + '_' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0')
+    const filename = `defter-${safeSlug}_${timestamp}.md`
+    fs.writeFileSync(path.join(rawDir, filename), content, 'utf8')
+
+    res.json({ success: true, filename })
+  } catch (err) {
+    console.error('[defter export] hatası:', err.message)
     res.status(500).json({ error: 'Kayıt hatası' })
   }
 })

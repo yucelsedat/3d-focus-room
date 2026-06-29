@@ -1,4 +1,5 @@
 import React, { Suspense, Component, useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import CanvasMesh from './CanvasMesh'
 import HeaderMesh from './HeaderMesh'
 import { useTexture, useVideoTexture, Html } from '@react-three/drei'
@@ -1398,6 +1399,427 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   )
 }
 
+// ─── Defter tile ──────────────────────────────────────────────────────────────
+// Claude'a bağlı OLMAYAN yerel not defteri. Session tile'ın frame altyapısını
+// (Html transform, px ölçeği, header/body/input flex-column, fontlar) yeniden
+// kullanır ama hiçbir AI endpoint'ine bağlanmaz. İçerik content alanında JSON:
+// { pages: [{ title, blocks: [string] }] }. Kaydetme PUT /api/media/:id ile.
+
+// content JSON'unu defansif çöz: bozuk/boş veri → tek boş sayfa.
+function parseDefter(content) {
+  try {
+    const data = JSON.parse(content || '')
+    const pages = Array.isArray(data?.pages) ? data.pages : []
+    const norm = pages
+      .filter(p => p && typeof p === 'object')
+      .map(p => ({
+        title: typeof p.title === 'string' ? p.title : '',
+        blocks: Array.isArray(p.blocks) ? p.blocks.filter(b => typeof b === 'string') : [],
+      }))
+    return norm.length ? norm : [{ title: '', blocks: [] }]
+  } catch {
+    return [{ title: '', blocks: [] }]
+  }
+}
+
+// Defter bloğu: metni markdown olarak renkli render eder (session-markdown), tam ekran
+// görüntüle+düzenle (canvas reader-modal tarzı portal) açar, panoya kopyalar, odanın raw
+// klasörüne export eder ("kaydedildi" geri bildirimi) ve bloğu siler.
+function defterSlug(text) {
+  return (text || '').slice(0, 30).toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 25) || 'not'
+}
+
+function DefterBlock({ text, mediaId, onDelete, onChange }) {
+  const [copied, setCopied] = useState(false)
+  const [exported, setExported] = useState(false)
+  const [fs, setFs] = useState(false)        // tam ekran açık mı
+  const [editing, setEditing] = useState(false)  // tam ekranda düzenleme modu
+
+  const copy = async (e) => {
+    e.stopPropagation()
+    try { await navigator.clipboard.writeText(text || '') }
+    catch { /* clipboard yoksa sessiz geç */ }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const exportRaw = async (e) => {
+    e.stopPropagation()
+    if (!text?.trim()) return  // boş blok export edilmez
+    try {
+      const r = await fetch('/api/defter/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaId, content: text, slug: defterSlug(text) }),
+      })
+      if (r.ok) { setExported(true); setTimeout(() => setExported(false), 2000) }
+    } catch (err) {
+      console.error('[DefterBlock] export failed', err)
+    }
+  }
+
+  const closeFs = () => { setFs(false); setEditing(false) }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+      <div style={{
+        fontSize: '26px', lineHeight: '1.5', maxWidth: '100%', width: '100%',
+        wordBreak: 'break-word',
+        background: '#111', border: '1px solid #2a2320', borderRadius: '12px',
+        padding: '8px 12px', color: '#ece6da', boxSizing: 'border-box',
+      }}>
+        <div className="session-markdown" style={{ fontSize: '26px' }} dangerouslySetInnerHTML={{ __html: marked(text || '') }} />
+      </div>
+      <div style={{ display: 'flex', gap: '8px', marginTop: '2px', marginLeft: '2px', alignItems: 'center' }}>
+        <button
+          onClick={copy}
+          onPointerDown={e => e.stopPropagation()}
+          title="Metni panoya kopyala"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: copied ? '#4ade80' : '#7a7163', fontSize: '22px', pointerEvents: 'auto' }}
+        >
+          {copied ? '✓ kopyalandı' : '⧉'}
+        </button>
+        <button
+          onClick={e => { e.stopPropagation(); setFs(true) }}
+          onPointerDown={e => e.stopPropagation()}
+          title="Tam ekran görüntüle / düzenle"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#7a7163', fontSize: '22px', pointerEvents: 'auto' }}
+        >
+          ⛶
+        </button>
+        {exported ? (
+          <span style={{ padding: '2px 4px', color: '#4ade80', fontSize: '20px' }}>✓ kaydedildi</span>
+        ) : (
+          <button
+            onClick={exportRaw}
+            onPointerDown={e => e.stopPropagation()}
+            title="Odanın raw klasörüne kaydet"
+            style={{ background: 'none', border: 'none', cursor: text?.trim() ? 'pointer' : 'not-allowed', padding: '2px 4px', color: text?.trim() ? '#e0b050' : '#5a4a20', fontSize: '20px', pointerEvents: 'auto' }}
+          >
+            💾 Kaydet
+          </button>
+        )}
+        <button
+          onClick={e => { e.stopPropagation(); onDelete() }}
+          onPointerDown={e => e.stopPropagation()}
+          title="Bloğu sil"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#7a7163', fontSize: '20px', pointerEvents: 'auto' }}
+        >
+          🗑
+        </button>
+      </div>
+
+      {/* Tam ekran görüntüle/düzenle — canvas reader-modal tarzı, body'ye portal */}
+      {fs && createPortal(
+        <div
+          onMouseDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) closeFs() }}
+          onClick={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          style={{ position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(8,8,18,0.85)', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', pointerEvents: 'auto' }}
+        >
+          <style>{`
+            .defter-fs-md h1,.defter-fs-md h2,.defter-fs-md h3{margin:14px 0 8px;font-weight:bold}
+            .defter-fs-md h1{font-size:1.5em}.defter-fs-md h2{font-size:1.3em}.defter-fs-md h3{font-size:1.15em}
+            .defter-fs-md strong{color:#60a5fa;font-weight:bold}.defter-fs-md em{color:#a0d8a0;font-style:italic}
+            .defter-fs-md code{background:#0a0a0a;border:1px solid #1e3a2e;padding:2px 5px;border-radius:3px;color:#4ade80;font-family:monospace}
+            .defter-fs-md pre{background:#0a0a0a;border:1px solid #1e3a2e;border-radius:4px;padding:10px 12px;overflow-x:auto;margin:10px 0}
+            .defter-fs-md pre code{background:none;border:none;padding:0}
+            .defter-fs-md ul,.defter-fs-md ol{margin:8px 0;padding-left:24px}.defter-fs-md li{margin:4px 0}
+            .defter-fs-md blockquote{border-left:3px solid #b8860b;padding-left:12px;margin:8px 0;color:#a0a0a0}
+            .defter-fs-md a{color:#60a5fa;text-decoration:underline}.defter-fs-md p{margin:6px 0}
+          `}</style>
+          {/* düzenle / önizle */}
+          <button onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); setEditing(v => !v) }}
+            title={editing ? 'Önizle' : 'Düzenle'}
+            style={{ position: 'fixed', top: 24, right: 96, height: 56, padding: '0 18px', borderRadius: 12, border: '1px solid rgba(224,176,80,0.45)', background: editing ? 'rgba(224,176,80,0.22)' : 'rgba(26,21,5,0.8)', color: editing ? '#e0b050' : '#ece6da', fontSize: 22, cursor: 'pointer', lineHeight: 1, zIndex: 1 }}>
+            {editing ? '👁 Önizle' : '✎ Düzenle'}
+          </button>
+          {/* kapat */}
+          <button onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); closeFs() }}
+            title="Kapat"
+            style={{ position: 'fixed', top: 24, right: 28, width: 56, height: 56, borderRadius: 12, border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(26,21,5,0.8)', color: '#ece6da', fontSize: 30, cursor: 'pointer', lineHeight: 1, zIndex: 1 }}>
+            ✕
+          </button>
+          {/* içerik kolonu */}
+          <div style={{ width: '52%', minWidth: 320, maxHeight: '100vh', overflowY: 'auto', boxSizing: 'border-box', padding: '64px 8px 96px', color: '#ece6da', fontSize: 22, lineHeight: 1.6, wordBreak: 'break-word' }}>
+            {editing ? (
+              <textarea autoFocus defaultValue={text}
+                ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }}
+                placeholder="Metin yazın…"
+                onMouseDown={(e) => e.stopPropagation()}
+                onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChange(e.target.value) }}
+                style={{ width: '100%', minHeight: '60vh', boxSizing: 'border-box', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(224,176,80,0.4)', borderRadius: 8, color: '#ece6da', fontSize: 22, lineHeight: 1.6, padding: 18, resize: 'none', outline: 'none', overflow: 'hidden', display: 'block', fontFamily: 'inherit' }}
+              />
+            ) : (
+              <div className="defter-fs-md" dangerouslySetInnerHTML={{ __html: marked(text || '') }} />
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  )
+}
+
+function DefterMesh({ id, content, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+  const pxWidth  = Math.round(w * SESSION_PX_PER_UNIT)
+  const pxHeight = Math.round(h * SESSION_PX_PER_UNIT)
+  const scaleFactor = w * 40 / pxWidth
+
+  const updateMedia = useStore(s => s.updateMedia)
+
+  const [pages, setPages] = useState(() => parseDefter(content))
+  const [pageIdx, setPageIdx] = useState(0)
+  const [draft, setDraft] = useState('')
+  const msgListRef = useRef(null)
+  const saveTimerRef = useRef(null)
+
+  // Aktif sayfa indexi her zaman sınırlar içinde (silme/dış değişiklik sonrası).
+  const safeIdx = Math.min(Math.max(0, pageIdx), pages.length - 1)
+  const page = pages[safeIdx] || { title: '', blocks: [] }
+
+  // Not: content prop'u yalnızca mount'ta okunur (useState initializer). Bu tile'ın tek
+  // yazıcısı kendisidir; klon/yeni tile farklı id ile zaten yeniden mount olur — bu yüzden
+  // content'i effect ile geri senkronlamaya gerek yok (cascading render'dan kaçınılır).
+
+  // Yeni blok eklendikçe en alta kaydır.
+  useEffect(() => {
+    const el = msgListRef.current
+    if (!el) return
+    const raf = requestAnimationFrame(() => { el.scrollTop = el.scrollHeight })
+    return () => cancelAnimationFrame(raf)
+  }, [pages, safeIdx])
+
+  // Diske yaz (PUT content). Hata olsa bile yerel state korunur.
+  const persist = async (nextPages) => {
+    try {
+      const r = await fetch(`/api/media/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: JSON.stringify({ pages: nextPages }) }),
+      })
+      if (r.ok) updateMedia(await r.json())
+    } catch (e) {
+      console.error('[DefterMesh] save failed', e)
+    }
+  }
+
+  // Hızlı ardışık yazımda (tam ekran düzenleme) her tuşta PUT atmamak için debounce.
+  const schedulePersist = (nextPages) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => { persist(nextPages) }, 600)
+  }
+
+  // doPersist: true → anında, 'debounce' → 600ms geciktir, false → yazma.
+  const mutate = (fn, { persist: doPersist = true } = {}) => {
+    setPages(prev => {
+      const next = fn(prev.map(p => ({ ...p, blocks: [...p.blocks] })))
+      if (doPersist === 'debounce') schedulePersist(next)
+      else if (doPersist) persist(next)
+      return next
+    })
+  }
+
+  // Bileşen kalkarken bekleyen debounce yazımını iptal et.
+  useEffect(() => () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }, [])
+
+  const addBlock = () => {
+    const text = draft.trim()
+    if (!text) return  // boş blok ekleme
+    mutate(prev => {
+      prev[safeIdx] = { ...prev[safeIdx], blocks: [...prev[safeIdx].blocks, text] }
+      return prev
+    })
+    setDraft('')
+  }
+
+  const deleteBlock = (bi) => {
+    mutate(prev => {
+      prev[safeIdx] = { ...prev[safeIdx], blocks: prev[safeIdx].blocks.filter((_, i) => i !== bi) }
+      return prev
+    })
+  }
+
+  // Tam ekran düzenlemeden gelen blok metni değişikliği — yerel state + diske yazar
+  // (debounce: hızlı yazımda her tuşta PUT atılmaz).
+  const editBlock = (bi, val) => {
+    mutate(prev => {
+      const blocks = [...prev[safeIdx].blocks]
+      blocks[bi] = val
+      prev[safeIdx] = { ...prev[safeIdx], blocks }
+      return prev
+    }, { persist: 'debounce' })
+  }
+
+  const setTitle = (val) => {
+    setPages(prev => {
+      const next = prev.map(p => ({ ...p, blocks: [...p.blocks] }))
+      next[safeIdx] = { ...next[safeIdx], title: val }
+      return next
+    })
+  }
+
+  const newPage = () => {
+    mutate(prev => [...prev, { title: '', blocks: [] }])
+    setPageIdx(pages.length)  // yeni eklenen son sayfaya geç
+  }
+
+  const deletePage = () => {
+    if (pages.length <= 1) {
+      // Son sayfayı silme — yalnızca içeriğini boşalt.
+      mutate(() => [{ title: '', blocks: [] }])
+      setPageIdx(0)
+      return
+    }
+    const removeAt = safeIdx
+    mutate(prev => prev.filter((_, i) => i !== removeAt))
+    setPageIdx(i => Math.max(0, Math.min(i, pages.length - 2)))
+  }
+
+  const prevPage = () => setPageIdx(i => Math.max(0, Math.min(i, pages.length - 1) - 1))
+  const nextPage = () => setPageIdx(i => Math.min(pages.length - 1, i + 1))
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addBlock() }
+  }
+
+  const px = { pointerEvents: 'auto' }
+
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      <Html transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
+        <style>{`
+          .session-markdown h1, .session-markdown h2, .session-markdown h3 { margin: 12px 0 6px 0; font-weight: bold; }
+          .session-markdown h1 { font-size: 1.4em; }
+          .session-markdown h2 { font-size: 1.2em; }
+          .session-markdown h3 { font-size: 1.1em; }
+          .session-markdown strong { color: #60a5fa; font-weight: bold; }
+          .session-markdown em { color: #a0d8a0; font-style: italic; }
+          .session-markdown code { background: #0a0a0a; border: 1px solid #1e3a2e; padding: 2px 4px; border-radius: 3px; color: #4ade80; font-family: monospace; }
+          .session-markdown pre { background: #0a0a0a; border: 1px solid #1e3a2e; border-radius: 4px; padding: 8px 10px; overflow-x: auto; margin: 8px 0; }
+          .session-markdown pre code { background: none; border: none; padding: 0; color: #4ade80; }
+          .session-markdown ul, .session-markdown ol { margin: 6px 0; padding-left: 20px; }
+          .session-markdown li { margin: 3px 0; }
+          .session-markdown blockquote { border-left: 3px solid #2a5a8a; padding-left: 10px; margin: 6px 0; color: #a0a0a0; }
+          .session-markdown a { color: #60a5fa; text-decoration: underline; }
+          .session-markdown p { margin: 4px 0; }
+        `}</style>
+        <div
+          style={{
+            width: `${pxWidth}px`, height: `${pxHeight}px`,
+            backgroundColor: '#0d0d0d', borderRadius: '8px',
+            border: '1px solid #3a3020',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            fontFamily: 'system-ui, sans-serif', pointerEvents: 'auto',
+          }}
+          onClick={e => e.stopPropagation()}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {/* Navbar */}
+          <div style={{ padding: '6px 10px', background: 'linear-gradient(135deg,#2a2310,#1a1505)', borderBottom: '1px solid #4a3410', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, ...px }}>
+            <span style={{ fontSize: '26px' }}>📒</span>
+            <span style={{ color: '#e0b050', fontWeight: 600, fontSize: '22px' }}>Defter</span>
+
+            {/* İleri/geri + sayfa sayacı */}
+            <button
+              onClick={e => { e.stopPropagation(); prevPage() }}
+              onPointerDown={e => e.stopPropagation()}
+              disabled={safeIdx <= 0}
+              title="Önceki sayfa"
+              style={{ background: 'transparent', border: '1px solid #4a3410', borderRadius: '4px', color: safeIdx <= 0 ? '#5a4a20' : '#e0b050', fontSize: '20px', padding: '2px 8px', cursor: safeIdx <= 0 ? 'not-allowed' : 'pointer', pointerEvents: 'auto' }}
+            >‹</button>
+            <span style={{ color: '#a88a40', fontSize: '20px', fontVariantNumeric: 'tabular-nums', minWidth: '46px', textAlign: 'center' }}>
+              {safeIdx + 1} / {pages.length}
+            </span>
+            <button
+              onClick={e => { e.stopPropagation(); nextPage() }}
+              onPointerDown={e => e.stopPropagation()}
+              disabled={safeIdx >= pages.length - 1}
+              title="Sonraki sayfa"
+              style={{ background: 'transparent', border: '1px solid #4a3410', borderRadius: '4px', color: safeIdx >= pages.length - 1 ? '#5a4a20' : '#e0b050', fontSize: '20px', padding: '2px 8px', cursor: safeIdx >= pages.length - 1 ? 'not-allowed' : 'pointer', pointerEvents: 'auto' }}
+            >›</button>
+
+            {/* Sayfa başlığı alanı */}
+            <input
+              value={page.title}
+              onChange={e => setTitle(e.target.value)}
+              onBlur={() => persist(pages)}
+              onClick={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
+              placeholder="Sayfa başlığı..."
+              style={{ flex: 1, minWidth: '60px', background: '#1a1505', border: '1px solid #4a3410', borderRadius: '4px', color: '#ece6da', fontSize: '20px', padding: '3px 8px', outline: 'none', pointerEvents: 'auto' }}
+            />
+
+            {/* Yeni sayfa */}
+            <button
+              onClick={e => { e.stopPropagation(); newPage() }}
+              onPointerDown={e => e.stopPropagation()}
+              title="Yeni sayfa"
+              style={{ background: 'transparent', border: '1px solid #4a3410', borderRadius: '4px', color: '#4ade80', fontSize: '22px', padding: '2px 8px', cursor: 'pointer', pointerEvents: 'auto' }}
+            >＋</button>
+
+            {/* Sayfa sil */}
+            <button
+              onClick={e => { e.stopPropagation(); deletePage() }}
+              onPointerDown={e => e.stopPropagation()}
+              title="Sayfayı sil"
+              style={{ background: 'transparent', border: '1px solid #4a3410', borderRadius: '4px', color: '#a88a40', fontSize: '20px', padding: '2px 8px', cursor: 'pointer', pointerEvents: 'auto' }}
+            >🗑</button>
+          </div>
+
+          {/* Bloklar */}
+          <div ref={msgListRef} style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px', ...px }}>
+            {page.blocks.length === 0 && (
+              <div style={{ color: '#5a4a20', fontSize: '22px', textAlign: 'center', marginTop: '16px' }}>
+                Boş sayfa — aşağıdan yazı bloğu ekle.
+              </div>
+            )}
+            {page.blocks.map((b, bi) => (
+              <DefterBlock key={bi} text={b} mediaId={id} onDelete={() => deleteBlock(bi)} onChange={(val) => editBlock(bi, val)} />
+            ))}
+          </div>
+
+          {/* Yazı yazma alanı (session'dan biraz daha yüksek) */}
+          <div style={{ padding: '8px 10px', borderTop: '1px solid #4a3410', display: 'flex', gap: '6px', alignItems: 'flex-end', flexShrink: 0, background: '#1a1505', ...px }}>
+            <textarea
+              onKeyDown={onKeyDown}
+              onClick={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              placeholder="Yazı bloğu yaz... (Enter: ekle, Shift+Enter: satır)"
+              style={{
+                flex: 1, background: '#0d0a05',
+                border: '1px solid #5a4420',
+                borderRadius: '5px', color: '#ece6da', fontSize: '24px',
+                padding: '8px 10px', resize: 'none', outline: 'none',
+                fontFamily: 'system-ui, sans-serif', lineHeight: '1.4', height: '88px',
+                boxSizing: 'border-box', pointerEvents: 'auto',
+              }}
+            />
+            <button
+              onClick={e => { e.stopPropagation(); addBlock() }}
+              onPointerDown={e => e.stopPropagation()}
+              disabled={!draft.trim()}
+              title="Bloğu ekle"
+              style={{
+                background: draft.trim() ? 'linear-gradient(135deg,#b8860b,#e0b050)' : '#3a3010',
+                border: 'none', borderRadius: '5px', color: '#1a1505', padding: '0 16px',
+                cursor: draft.trim() ? 'pointer' : 'not-allowed',
+                fontSize: '32px', height: '88px', flexShrink: 0, pointerEvents: 'auto', fontWeight: 700,
+              }}
+            >＋</button>
+          </div>
+        </div>
+      </Html>
+    </mesh>
+  )
+}
+
 // roomsession tile — SessionMesh ile aynı arayüz, ama odaya özel proje klasöründe
 // çalışan /api/roomsession endpoint'lerine bağlanır.
 function RoomSessionMesh({ id, width, height }) {
@@ -2102,7 +2524,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isRoomSession = type === 'roomsession'
   const isBluprint = type === 'bluprint'
   const isSlide    = type === 'slide'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint && !isSlide
+  const isDefter   = type === 'defter'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint && !isSlide && !isDefter
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -2121,6 +2544,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
           <RoomSessionMesh id={id} width={width} height={height} />
         ) : isBluprint ? (
           <BluprintMesh id={id} width={width} height={height} />
+        ) : isDefter ? (
+          <DefterMesh id={id} content={content} width={width} height={height} />
         ) : isSlide ? (
           <SlideMesh url={url} width={width} height={height} />
         ) : isCanvas ? (

@@ -285,6 +285,36 @@ export function EditModal() {
       return
     }
 
+    if (activeTab === 'defter') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/defter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'Defter oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setWidth(6)
+        setHeight(4)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (activeTab === 'roomchat') {
       setLoading(true)
       setLoadingStep('saving')
@@ -719,8 +749,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'bluprint' ? '📐' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'bluprint' ? 'Blueprint' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'bluprint' ? '📐' : m.type === 'defter' ? '📒' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'bluprint' ? 'Blueprint' : m.type === 'defter' ? 'Defter' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -830,7 +860,7 @@ export function EditModal() {
                       style={{ ...s.deleteBtn, background: clonedMedia?.id === m.id ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${clonedMedia?.id === m.id ? '#60a5fa' : '#333'}`, color: clonedMedia?.id === m.id ? '#60a5fa' : '#888' }}
                       title="Bu medyayı başka bir duvara kopyala"
                       onClick={() => {
-                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', bluprint: 'Blueprint' }
+                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', bluprint: 'Blueprint', defter: 'Defter' }
                         setClonedMedia(clonedMedia?.id === m.id ? null : { id: m.id, type: m.type, label: typeLabel[m.type] || m.type })
                       }}
                     >
@@ -919,6 +949,12 @@ export function EditModal() {
             🔤 Başlık
           </button>
           <button
+            style={activeTab === 'defter' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('defter'); setWidth(6); setHeight(4) }}
+          >
+            📒 Defter
+          </button>
+          <button
             style={activeTab === 'session' ? s.activeTab : s.tab}
             onClick={() => { setActiveTab('session'); setWidth(6); setHeight(4) }}
           >
@@ -968,6 +1004,17 @@ export function EditModal() {
                     style={{ width: 36, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0, borderRadius: 4 }} />
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Defter */}
+          {activeTab === 'defter' && (
+            <div style={s.inputGroup}>
+              <p style={{ color: '#e0b050', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>📒 Defter</p>
+              <p style={{ color: '#777', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>
+                Yerel not defteri — <b>Claude'a bağlı değildir</b>. Sayfalar arası gezinir, alt alta yazı
+                blokları eklersin; her bloğu kopyalayabilir, defteri kaydedebilirsin. İçerik tile'da saklanır.
+              </p>
             </div>
           )}
 

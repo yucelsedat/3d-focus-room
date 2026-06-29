@@ -48,3 +48,6 @@ room-blueprints/
 
 # Claude Code yerel ajan durumu (planlar, hafıza, yerel ayarlar)
 .claude/
+
+# recall skill checkpoint/araştırma durumu (yerel, yeniden üretilebilir)
+.recall/
