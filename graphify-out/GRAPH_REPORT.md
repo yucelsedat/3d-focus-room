@@ -1,11 +1,11 @@
 # Graph Report - focus-room-main  (2026-06-29)
 
 ## Corpus Check
-- 58 files · ~467,679 words
+- 58 files · ~470,341 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 252 nodes · 293 edges · 11 communities detected
+- 256 nodes · 297 edges · 11 communities detected
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 10 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -59,7 +59,7 @@ Cohesion: 0.06
 Nodes (29): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+21 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.07
+Cohesion: 0.06
 Nodes (3): relTime(), SessionMesh(), TextureErrorBoundary
 
 ### Community 2 - "Community 2"
@@ -112,12 +112,12 @@ Nodes (3): migrate(), readJson(), bootMigrate()
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `serializeSpecialDoor()` connect `Community 3` to `Community 0`?**
-  _High betweenness centrality (0.056) - this node is a cross-community bridge._
+  _High betweenness centrality (0.054) - this node is a cross-community bridge._
 - **Why does `PersistentSession` connect `Community 4` to `Community 0`?**
-  _High betweenness centrality (0.031) - this node is a cross-community bridge._
+  _High betweenness centrality (0.030) - this node is a cross-community bridge._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.06 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06 - nodes in this community are weakly interconnected._
 - **Should `Community 3` be split into smaller, more focused modules?**
   _Cohesion score 0.13 - nodes in this community are weakly interconnected._
