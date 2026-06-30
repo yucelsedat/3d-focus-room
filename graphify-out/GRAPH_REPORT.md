@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-06-29)
+# Graph Report - focus-room-main  (2026-06-30)
 
 ## Corpus Check
-- 58 files · ~470,341 words
+- 59 files · ~510,956 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 256 nodes · 297 edges · 11 communities detected
+- 258 nodes · 298 edges · 11 communities detected
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 10 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -55,24 +55,24 @@
 ## Communities
 
 ### Community 0 - "Community 0"
-Cohesion: 0.06
-Nodes (29): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+21 more)
+Cohesion: 0.07
+Nodes (26): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+18 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.06
 Nodes (3): relTime(), SessionMesh(), TextureErrorBoundary
 
 ### Community 2 - "Community 2"
-Cohesion: 0.17
-Nodes (6): QuoteForm(), LoopRunner, makeTurnSink(), readRecall(), SessionPool, stopRoomBackgroundWork()
+Cohesion: 0.13
+Nodes (11): QuoteForm(), LoopRunner, makeTurnSink(), readRecall(), recallDir(), recallPath(), SessionPool, setSSEHeaders() (+3 more)
 
 ### Community 3 - "Community 3"
 Cohesion: 0.13
 Nodes (11): doorWorldPos(), canPassThrough(), canPassThroughOuter(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId(), wallTileCount() (+3 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.21
-Nodes (5): PersistentSession, setSSEHeaders(), sseLine(), streamClaudeToSSE(), userLine()
+Cohesion: 0.27
+Nodes (3): PersistentSession, sseLine(), userLine()
 
 ### Community 5 - "Community 5"
 Cohesion: 0.29
@@ -112,12 +112,14 @@ Nodes (3): migrate(), readJson(), bootMigrate()
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `serializeSpecialDoor()` connect `Community 3` to `Community 0`?**
-  _High betweenness centrality (0.054) - this node is a cross-community bridge._
-- **Why does `PersistentSession` connect `Community 4` to `Community 0`?**
+  _High betweenness centrality (0.053) - this node is a cross-community bridge._
+- **Why does `PersistentSession` connect `Community 4` to `Community 0`, `Community 2`?**
   _High betweenness centrality (0.030) - this node is a cross-community bridge._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.06 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.06 - nodes in this community are weakly interconnected._
+- **Should `Community 2` be split into smaller, more focused modules?**
+  _Cohesion score 0.13 - nodes in this community are weakly interconnected._
 - **Should `Community 3` be split into smaller, more focused modules?**
   _Cohesion score 0.13 - nodes in this community are weakly interconnected._
