@@ -1,7 +1,8 @@
 import { useEffect, Suspense, Component } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { Sky, KeyboardControls, Stars } from '@react-three/drei'
+import { KeyboardControls } from '@react-three/drei'
 import { Grid, OutdoorFloor } from './components/Grid'
+import { FrameLimiter } from './components/FrameLimiter'
 import { Walls } from './components/Walls'
 import { Player } from './components/Player'
 import { Crosshair } from './components/Crosshair'
@@ -67,27 +68,27 @@ function App() {
     >
       <div style={{ width: '100vw', height: '100vh' }}>
         <Canvas
-          shadows
+          // Isınma optimizasyonu — bkz. FrameLimiter:
+          // frameloop="demand" + FrameLimiter render'ı ~30fps'e kilitler;
+          // gölge geçişi tamamen kaldırıldı (shadows yok, castShadow yok);
+          // dpr ve GPU tercihi düşük güce çekildi.
+          frameloop="demand"
           camera={{ fov: 75, position: [0, 2.5, 5] }}
-          // dpr cap: retina/4K ekranlarda piksel sayısını sınırlar (4x → ~2.25x),
-          // görsel kayıp minimal, GPU yükü ve ısınma belirgin düşer
-          dpr={[1, 1.5]}
-          gl={{ antialias: true, powerPreference: 'high-performance' }}
+          // dpr cap: retina/4K ekranlarda piksel sayısını sınırlar; ısı için 1.25'e çekildi
+          dpr={[1, 1.25]}
+          gl={{ antialias: true, powerPreference: 'low-power' }}
         >
+          <FrameLimiter fps={30} />
           <color attach="background" args={['#050505']} />
           <fog attach="fog" args={['#050505', 0, 70]} />
 
-          <Sky sunPosition={[100, 20, 100]} />
-          <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
-
-          <ambientLight intensity={0.7} />
-          <pointLight position={[10, 10, 10]} intensity={1.5} castShadow />
+          <ambientLight intensity={0.9} />
+          <pointLight position={[10, 10, 10]} intensity={1.5} />
           <spotLight
             position={[0, 10, 0]}
             angle={0.15}
             penumbra={1}
             intensity={2}
-            castShadow
           />
 
           <SceneErrorBoundary>
