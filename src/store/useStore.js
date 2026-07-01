@@ -11,7 +11,7 @@ export const useStore = create((set) => ({
   menuModal: true,    // uygulama açılışında menü göster
   hiddenWalls: [],       // iç duvar gizli tile ID'leri
   hiddenOuterWalls: [],  // dış sınır duvarı gizli tile ID'leri
-  floorTexture: 'zemin.png',
+  floorTexture: 'zemin.jpg',
   currentRoomId: 'default',
   currentRoomName: 'Varsayılan Oda',
   currentRoomType: 'room',

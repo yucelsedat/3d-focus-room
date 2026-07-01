@@ -51,7 +51,7 @@ function WallsInner({ config, hiddenWalls }) {
   const COUNT    = wallTileCount(config)
   const hiddenSet = useMemo(() => new Set(hiddenWalls), [hiddenWalls])
 
-  const texture = useTexture('/textures/duvar.png', (t) => {
+  const texture = useTexture('/textures/duvar.jpg', (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping
     t.anisotropy = 4
   })

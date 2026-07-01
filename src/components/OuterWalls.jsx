@@ -37,7 +37,7 @@ export function OuterWalls() {
   const lastRayRef = useRef(0)
   const [ready, setReady] = useState(false)
 
-  const texture = useTexture('/textures/duvar.png', (t) => {
+  const texture = useTexture('/textures/duvar.jpg', (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping
     t.anisotropy = 4
   })

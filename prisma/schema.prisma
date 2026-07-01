@@ -57,7 +57,7 @@ model Door {
 
 model Floor {
   roomId  String @id
-  texture String @default("zemin.png")
+  texture String @default("zemin.jpg")
   room    Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
 }
 

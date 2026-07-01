@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-06-30)
+# Graph Report - focus-room-main  (2026-07-01)
 
 ## Corpus Check
-- 72 files · ~600,058 words
+- 73 files · ~563,813 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 285 nodes · 314 edges · 12 communities detected
+- 286 nodes · 314 edges · 12 communities detected
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 10 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 

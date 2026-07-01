@@ -58,5 +58,5 @@ export function wallTileCount({ gx, gz, wh }) {
 }
 
 export function defaultFloorTexture(roomType) {
-  return roomType === 'cadde' ? 'asfalt.jpg' : 'zemin.png'
+  return roomType === 'cadde' ? 'asfalt.jpg' : 'zemin.jpg'
 }

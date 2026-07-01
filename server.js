@@ -126,7 +126,7 @@ async function bootMigrate() {
         data: { id: 'default', name: 'Varsayılan Oda' },
       });
       await prisma.floor.create({
-        data: { roomId: 'default', texture: 'zemin.png' },
+        data: { roomId: 'default', texture: 'zemin.jpg' },
       });
       console.log('[server] Created default room in DB');
     }
@@ -441,7 +441,7 @@ app.post('/api/categories', async (req, res) => {
 app.get('/api/floor', async (req, res) => {
   let floor = await prisma.floor.findUnique({ where: { roomId: activeRoomId } });
   if (!floor) {
-    floor = await prisma.floor.create({ data: { roomId: activeRoomId, texture: 'zemin.png' } });
+    floor = await prisma.floor.create({ data: { roomId: activeRoomId, texture: 'zemin.jpg' } });
   }
   res.json({ texture: floor.texture });
 });
@@ -459,7 +459,7 @@ app.post('/api/floor', async (req, res) => {
 app.get('/api/floor-textures', (req, res) => {
   const dir = 'public/textures';
   const files = fs.readdirSync(dir)
-    .filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f) && f !== 'duvar.png');
+    .filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f) && f !== 'duvar.jpg');
   res.json(files);
 });
 
