@@ -162,6 +162,13 @@ const canvasUpload = multer({
   }),
 });
 
+// roomsession tile'ın dosya/klasör yükleyicisi: dosyalar belleğe alınır, sonra
+// odanın proje klasörüne (room-projects/<roomId>/) klasör yapısı korunarak yazılır.
+const roomFileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 200 * 1024 * 1024 }, // dosya başına 200MB
+});
+
 app.post('/api/upload-cover', uploadCover.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Dosya yüklenmedi' });
   const url = `/uploads/images/${req.file.filename}`;
@@ -2342,6 +2349,49 @@ app.post('/api/roomsession/message', async (req, res) => {
       }).catch(err => console.error('[roomsession] kayıt hatası:', err.message))
     },
   })
+});
+
+// Odanın proje klasörüne dosya/klasör yükle. Dosyalar 'files' alanında gelir;
+// 'paths' alanı (JSON dizisi) her dosyanın göreli yolunu taşır (klasör yüklemede
+// webkitRelativePath korunur). 'subdir' opsiyonel hedef alt klasördür.
+app.post('/api/roomsession/:mediaId/upload', roomFileUpload.array('files'), async (req, res) => {
+  try {
+    const media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } })
+    if (!media || media.type !== 'roomsession') return res.status(404).json({ error: 'Oda projesi bulunamadı' })
+
+    const files = req.files || []
+    if (!files.length) return res.status(400).json({ error: 'Dosya seçilmedi' })
+
+    let relPaths = []
+    try { relPaths = JSON.parse(req.body.paths || '[]') } catch {}
+
+    const baseDir = roomProjectDir(media.roomId)
+    try { fs.mkdirSync(baseDir, { recursive: true }) } catch {}
+    const baseResolved = path.resolve(baseDir)
+
+    // Hedef alt klasör (path traversal'a karşı temizle)
+    const cleanSeg = (s) => String(s || '').replace(/\\/g, '/').split('/')
+      .filter(seg => seg && seg !== '..' && seg !== '.').join('/')
+    const subdir = cleanSeg(req.body.subdir)
+
+    const written = []
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]
+      const rel = cleanSeg(relPaths[i] || f.originalname)
+      if (!rel) continue
+      const dest = path.resolve(baseResolved, subdir, rel)
+      // baseDir dışına yazmayı engelle
+      if (dest !== baseResolved && !dest.startsWith(baseResolved + path.sep)) continue
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.writeFileSync(dest, f.buffer)
+      written.push(path.relative(baseResolved, dest))
+    }
+
+    res.json({ ok: true, count: written.length, files: written })
+  } catch (err) {
+    console.error('[roomsession/upload] error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
 });
 
 // ─── LoopFlow + Recall (roomsession tile için otonom loop motoru) ────────────
