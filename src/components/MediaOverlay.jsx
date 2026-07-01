@@ -741,6 +741,7 @@ function PlanReview({ req, onApprove, onReject }) {
 }
 
 function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '🤖', label = 'Claude' }) {
+  const currentRoomId = useStore(s => s.currentRoomId)
   const w = parseFloat(width)
   const h = parseFloat(height)
   const pxWidth  = Math.round(w * SESSION_PX_PER_UNIT)
@@ -776,9 +777,53 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   // Recall "kaldığın yer" göstergesi (yalnızca standalone ai-session tile)
   const standalone = apiBase === '/api/ai-session'
   const [sessionRecall, setSessionRecall] = useState(null)  // { lastSummary, turnCount, lastTurnAt }
+  // Dosya/klasör yükleme (yalnızca roomsession tile — odanın proje klasörüne)
+  const [uploadOpen, setUploadOpen]     = useState(false)
+  const [uploading, setUploading]       = useState(false)
+  const [uploadResult, setUploadResult] = useState(null)  // { count, files } | { error }
+  const [uploadSubdir, setUploadSubdir] = useState('')
+  const [pendingFiles, setPendingFiles] = useState([])    // [{ file, relPath }]
+  const fileInputRef = useRef(null)
+  const dirInputRef  = useRef(null)
   const msgListRef  = useRef(null)
   const inputRef    = useRef(null)
   const activeAiRef = useRef(null)
+
+  // Native input'tan seçilen dosyaları bekleyen listeye ekle. asDir=true ise
+  // klasör seçimi → webkitRelativePath ile göreli yol korunur.
+  const addFiles = (fileList, asDir) => {
+    const arr = Array.from(fileList || []).map(file => ({
+      file,
+      relPath: asDir ? (file.webkitRelativePath || file.name) : file.name,
+    }))
+    if (arr.length) { setPendingFiles(prev => [...prev, ...arr]); setUploadResult(null) }
+  }
+
+  const removePending = (idx) => setPendingFiles(prev => prev.filter((_, i) => i !== idx))
+
+  const doUpload = async () => {
+    if (!pendingFiles.length || uploading) return
+    setUploading(true)
+    setUploadResult(null)
+    try {
+      const fd = new FormData()
+      const paths = []
+      pendingFiles.forEach(({ file, relPath }) => { fd.append('files', file); paths.push(relPath) })
+      fd.append('paths', JSON.stringify(paths))
+      if (uploadSubdir.trim()) fd.append('subdir', uploadSubdir.trim())
+      const resp = await fetch(`${apiBase}/${id}/upload`, { method: 'POST', body: fd })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok) { setUploadResult({ error: data.error || `HTTP ${resp.status}` }); return }
+      setUploadResult({ count: data.count, files: data.files || [] })
+      setPendingFiles([])
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      if (dirInputRef.current)  dirInputRef.current.value = ''
+    } catch (err) {
+      setUploadResult({ error: err.message })
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const decidePermission = (toolUseId, decision) => {
     setPendingPerms(prev => prev.filter(p => p.toolUseId !== toolUseId))
@@ -1172,6 +1217,20 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               <option value="plan">📋 plan</option>
             </select>
 
+            {/* Dosya/klasör yükle (yalnızca roomsession tile) */}
+            {loopable && (
+              <button
+                onClick={e => { e.stopPropagation(); setUploadOpen(true); setUploadResult(null) }}
+                onPointerDown={e => e.stopPropagation()}
+                title="Odanın proje klasörüne dosya/klasör yükle"
+                style={{
+                  marginLeft: 'auto', padding: '2px 8px', borderRadius: '4px', fontSize: '20px',
+                  border: '1px solid #1e3a5f', background: 'transparent', color: '#60a5fa',
+                  cursor: 'pointer', pointerEvents: 'auto',
+                }}
+              >📎 Yükle</button>
+            )}
+
             {/* Sohbeti temizle */}
             <button
               onClick={e => { e.stopPropagation(); clearChat() }}
@@ -1179,7 +1238,7 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               disabled={streaming}
               title="Sohbeti temizle (geçmişi sıfırla)"
               style={{
-                marginLeft: 'auto', padding: '2px 8px', borderRadius: '4px', fontSize: '20px',
+                marginLeft: loopable ? '0' : 'auto', padding: '2px 8px', borderRadius: '4px', fontSize: '20px',
                 border: confirmClear ? '1px solid #f87171' : '1px solid #1e3a5f',
                 background: confirmClear ? 'rgba(248,113,113,0.2)' : 'transparent',
                 color: confirmClear ? '#f87171' : '#4a6a8a',
@@ -1393,6 +1452,113 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               {streaming ? '⏳' : '→'}
             </button>
           </div>
+
+          {/* Dosya/klasör yükleme modalı — body'ye portal (yalnızca roomsession) */}
+          {loopable && uploadOpen && createPortal(
+            <div
+              onMouseDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget && !uploading) setUploadOpen(false) }}
+              onClick={(e) => e.stopPropagation()}
+              onWheel={(e) => e.stopPropagation()}
+              style={{ position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(6,10,18,0.82)', display: 'flex', justifyContent: 'center', alignItems: 'center', pointerEvents: 'auto', fontFamily: 'system-ui, sans-serif' }}
+            >
+              <div
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{ width: 'min(560px, 92vw)', maxHeight: '86vh', overflowY: 'auto', background: '#0d0d0d', border: '1px solid #1e3a5f', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,0.6)', color: '#e0e0e0', boxSizing: 'border-box' }}
+              >
+                {/* Başlık */}
+                <div style={{ padding: '14px 18px', background: 'linear-gradient(135deg,#1a2a3a,#0d1f2d)', borderBottom: '1px solid #1e3a5f', borderTopLeftRadius: 12, borderTopRightRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 22 }}>📎</span>
+                  <span style={{ color: '#60a5fa', fontWeight: 700, fontSize: 18 }}>Proje klasörüne yükle</span>
+                  <span style={{ color: '#4a6a8a', fontSize: 13 }}>room-projects/{String(currentRoomId ?? '').slice(-6) || '…'}/</span>
+                  <button
+                    onClick={() => { if (!uploading) setUploadOpen(false) }}
+                    disabled={uploading}
+                    title="Kapat"
+                    style={{ marginLeft: 'auto', width: 32, height: 32, borderRadius: 8, border: '1px solid #1e3a5f', background: 'transparent', color: '#8aa4c0', fontSize: 18, cursor: uploading ? 'not-allowed' : 'pointer' }}
+                  >✕</button>
+                </div>
+
+                <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  {/* Hedef alt klasör */}
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <span style={{ fontSize: 13, color: '#8aa4c0' }}>Hedef alt klasör (opsiyonel)</span>
+                    <input
+                      value={uploadSubdir}
+                      onChange={(e) => setUploadSubdir(e.target.value)}
+                      placeholder="ör. assets/img  (boş bırak = kök)"
+                      style={{ background: '#0d1f2d', border: '1px solid #2a5a8a', borderRadius: 6, color: '#e0e0e0', fontSize: 14, padding: '8px 10px', outline: 'none' }}
+                    />
+                  </label>
+
+                  {/* Seçim butonları */}
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      style={{ flex: 1, minWidth: 140, padding: '14px 12px', borderRadius: 8, border: '1px dashed #2a5a8a', background: 'rgba(96,165,250,0.06)', color: '#60a5fa', fontSize: 14, cursor: 'pointer' }}
+                    >📄 Dosya seç</button>
+                    <button
+                      onClick={() => dirInputRef.current?.click()}
+                      style={{ flex: 1, minWidth: 140, padding: '14px 12px', borderRadius: 8, border: '1px dashed #2a5a8a', background: 'rgba(96,165,250,0.06)', color: '#60a5fa', fontSize: 14, cursor: 'pointer' }}
+                    >📁 Klasör seç</button>
+                  </div>
+                  <input
+                    ref={fileInputRef} type="file" multiple
+                    onChange={(e) => addFiles(e.target.files, false)}
+                    style={{ display: 'none' }}
+                  />
+                  <input
+                    ref={dirInputRef} type="file" webkitdirectory="" directory="" multiple
+                    onChange={(e) => addFiles(e.target.files, true)}
+                    style={{ display: 'none' }}
+                  />
+
+                  {/* Bekleyen dosyalar */}
+                  {pendingFiles.length > 0 && (
+                    <div style={{ border: '1px solid #1e3a5f', borderRadius: 8, overflow: 'hidden' }}>
+                      <div style={{ padding: '8px 12px', background: '#0a0f1a', borderBottom: '1px solid #1e3a5f', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 13, color: '#8aa4c0' }}>{pendingFiles.length} dosya seçildi</span>
+                        <button onClick={() => setPendingFiles([])} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#f87171', fontSize: 12, cursor: 'pointer' }}>tümünü kaldır</button>
+                      </div>
+                      <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                        {pendingFiles.map((pf, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderBottom: '1px solid #12202f', fontSize: 13 }}>
+                            <span style={{ color: '#a0c0e0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pf.relPath}</span>
+                            <span style={{ marginLeft: 'auto', color: '#4a6a8a', fontSize: 11, flexShrink: 0 }}>{(pf.file.size / 1024).toFixed(0)} KB</span>
+                            <button onClick={() => removePending(i)} style={{ background: 'transparent', border: 'none', color: '#7a7163', fontSize: 14, cursor: 'pointer', flexShrink: 0 }}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Sonuç / hata */}
+                  {uploadResult?.error && (
+                    <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(248,113,113,0.12)', border: '1px solid #7f1d1d', color: '#fca5a5', fontSize: 13 }}>⚠ {uploadResult.error}</div>
+                  )}
+                  {uploadResult && !uploadResult.error && (
+                    <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(74,222,128,0.1)', border: '1px solid #14532d', color: '#86efac', fontSize: 13 }}>
+                      ✓ {uploadResult.count} dosya proje klasörüne yazıldı.
+                    </div>
+                  )}
+
+                  {/* Aksiyonlar */}
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => { if (!uploading) setUploadOpen(false) }}
+                      disabled={uploading}
+                      style={{ padding: '10px 18px', borderRadius: 8, border: '1px solid #1e3a5f', background: 'transparent', color: '#8aa4c0', fontSize: 14, cursor: uploading ? 'not-allowed' : 'pointer' }}
+                    >Kapat</button>
+                    <button
+                      onClick={doUpload}
+                      disabled={uploading || !pendingFiles.length}
+                      style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: (uploading || !pendingFiles.length) ? '#1e3a5f' : 'linear-gradient(135deg,#2563eb,#60a5fa)', color: '#fff', fontSize: 14, fontWeight: 600, cursor: (uploading || !pendingFiles.length) ? 'not-allowed' : 'pointer' }}
+                    >{uploading ? '⏳ Yükleniyor…' : `↑ Yükle${pendingFiles.length ? ` (${pendingFiles.length})` : ''}`}</button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
         </div>
       </Html>
     </mesh>

@@ -1,11 +1,11 @@
 # Graph Report - focus-room-main  (2026-07-01)
 
 ## Corpus Check
-- 73 files · ~565,362 words
+- 73 files · ~566,558 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 286 nodes · 314 edges · 12 communities detected
+- 287 nodes · 315 edges · 12 communities detected
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 10 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -57,7 +57,7 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.06
-Nodes (32): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+24 more)
+Nodes (30): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+22 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.06
@@ -72,8 +72,8 @@ Cohesion: 0.13
 Nodes (11): doorWorldPos(), canPassThrough(), canPassThroughOuter(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId(), wallTileCount() (+3 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.26
-Nodes (3): PersistentSession, sseLine(), userLine()
+Cohesion: 0.21
+Nodes (5): PersistentSession, setSSEHeaders(), sseLine(), streamClaudeToSSE(), userLine()
 
 ### Community 5 - "Community 5"
 Cohesion: 0.29
