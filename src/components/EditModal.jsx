@@ -241,7 +241,7 @@ export function EditModal() {
         closeModal()
         setHeaderBg('#1a1a2e')
         setHeaderColor('#ffffff')
-        setWidth(1)
+        setWidth(4)
         setHeight(1)
       } catch (err) {
         alert(err.message)
