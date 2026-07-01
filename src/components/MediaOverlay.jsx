@@ -1412,13 +1412,17 @@ function parseDefter(content) {
     const pages = Array.isArray(data?.pages) ? data.pages : []
     const norm = pages
       .filter(p => p && typeof p === 'object')
-      .map(p => ({
-        title: typeof p.title === 'string' ? p.title : '',
-        blocks: Array.isArray(p.blocks) ? p.blocks.filter(b => typeof b === 'string') : [],
-      }))
-    return norm.length ? norm : [{ title: '', blocks: [] }]
+      .map(p => {
+        const blocks = Array.isArray(p.blocks) ? p.blocks.filter(b => typeof b === 'string') : []
+        // saved: blocks ile paralel boolean dizisi (raw'a export edilmiş bloklar).
+        // Eski içerikte yoksa hepsi false; uzunluk her zaman blocks'a eşitlenir.
+        const rawSaved = Array.isArray(p.saved) ? p.saved : []
+        const saved = blocks.map((_, i) => rawSaved[i] === true)
+        return { title: typeof p.title === 'string' ? p.title : '', blocks, saved }
+      })
+    return norm.length ? norm : [{ title: '', blocks: [], saved: [] }]
   } catch {
-    return [{ title: '', blocks: [] }]
+    return [{ title: '', blocks: [], saved: [] }]
   }
 }
 
@@ -1429,9 +1433,10 @@ function defterSlug(text) {
   return (text || '').slice(0, 30).toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 25) || 'not'
 }
 
-function DefterBlock({ text, mediaId, onDelete, onChange }) {
+function DefterBlock({ text, mediaId, saved, onSaved, onDelete, onChange }) {
   const [copied, setCopied] = useState(false)
-  const [exported, setExported] = useState(false)
+  const [saving, setSaving] = useState(false)   // export isteği uçuyor mu
+  const [error, setError] = useState(false)     // export başarısız oldu mu
   const [fs, setFs] = useState(false)        // tam ekran açık mı
   const [editing, setEditing] = useState(false)  // tam ekranda düzenleme modu
 
@@ -1445,16 +1450,31 @@ function DefterBlock({ text, mediaId, onDelete, onChange }) {
 
   const exportRaw = async (e) => {
     e.stopPropagation()
-    if (!text?.trim()) return  // boş blok export edilmez
+    if (!text?.trim() || saving) return  // boş blok / uçan istek varken export etme
+    setError(false)
+    setSaving(true)
     try {
       const r = await fetch('/api/defter/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mediaId, content: text, slug: defterSlug(text) }),
       })
-      if (r.ok) { setExported(true); setTimeout(() => setExported(false), 2000) }
+      if (r.ok) {
+        onSaved()  // kalıcı "kaydedildi" işareti (içerikle birlikte diske yazılır)
+      } else {
+        // 404 (eski server / oluşmamış defter), 500 vb. — sessiz geçme, görünür hata ver.
+        let detail = ''
+        try { detail = (await r.json())?.error || '' } catch {}
+        console.error('[DefterBlock] export başarısız:', r.status, detail)
+        setError(true)
+        setTimeout(() => setError(false), 4000)
+      }
     } catch (err) {
       console.error('[DefterBlock] export failed', err)
+      setError(true)
+      setTimeout(() => setError(false), 4000)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -1487,16 +1507,28 @@ function DefterBlock({ text, mediaId, onDelete, onChange }) {
         >
           ⛶
         </button>
-        {exported ? (
-          <span style={{ padding: '2px 4px', color: '#4ade80', fontSize: '20px' }}>✓ kaydedildi</span>
+        {saved ? (
+          // Kalıcı: saved bayrağı defter içeriğiyle birlikte diske yazılır, refresh'te kalır.
+          // Tıklanınca tekrar export eder (raw dosyayı tazeler).
+          <button
+            onClick={exportRaw}
+            onPointerDown={e => e.stopPropagation()}
+            title="Kaydedildi — tekrar kaydetmek için tıkla"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#4ade80', fontSize: '20px', pointerEvents: 'auto' }}
+          >
+            ✓ kaydedildi
+          </button>
+        ) : error ? (
+          <span style={{ padding: '2px 4px', color: '#f87171', fontSize: '20px' }}>✕ kaydedilemedi</span>
         ) : (
           <button
             onClick={exportRaw}
             onPointerDown={e => e.stopPropagation()}
+            disabled={saving}
             title="Odanın raw klasörüne kaydet"
-            style={{ background: 'none', border: 'none', cursor: text?.trim() ? 'pointer' : 'not-allowed', padding: '2px 4px', color: text?.trim() ? '#e0b050' : '#5a4a20', fontSize: '20px', pointerEvents: 'auto' }}
+            style={{ background: 'none', border: 'none', cursor: text?.trim() && !saving ? 'pointer' : 'not-allowed', padding: '2px 4px', color: text?.trim() ? '#e0b050' : '#5a4a20', fontSize: '20px', pointerEvents: 'auto' }}
           >
-            💾 Kaydet
+            {saving ? '⟳ kaydediliyor…' : '💾 Kaydet'}
           </button>
         )}
         <button
@@ -1578,7 +1610,7 @@ function DefterMesh({ id, content, width, height }) {
 
   // Aktif sayfa indexi her zaman sınırlar içinde (silme/dış değişiklik sonrası).
   const safeIdx = Math.min(Math.max(0, pageIdx), pages.length - 1)
-  const page = pages[safeIdx] || { title: '', blocks: [] }
+  const page = pages[safeIdx] || { title: '', blocks: [], saved: [] }
 
   // Not: content prop'u yalnızca mount'ta okunur (useState initializer). Bu tile'ın tek
   // yazıcısı kendisidir; klon/yeni tile farklı id ile zaten yeniden mount olur — bu yüzden
@@ -1615,7 +1647,7 @@ function DefterMesh({ id, content, width, height }) {
   // doPersist: true → anında, 'debounce' → 600ms geciktir, false → yazma.
   const mutate = (fn, { persist: doPersist = true } = {}) => {
     setPages(prev => {
-      const next = fn(prev.map(p => ({ ...p, blocks: [...p.blocks] })))
+      const next = fn(prev.map(p => ({ ...p, blocks: [...p.blocks], saved: [...(p.saved || [])] })))
       if (doPersist === 'debounce') schedulePersist(next)
       else if (doPersist) persist(next)
       return next
@@ -1629,7 +1661,8 @@ function DefterMesh({ id, content, width, height }) {
     const text = draft.trim()
     if (!text) return  // boş blok ekleme
     mutate(prev => {
-      prev[safeIdx] = { ...prev[safeIdx], blocks: [...prev[safeIdx].blocks, text] }
+      const p = prev[safeIdx]
+      prev[safeIdx] = { ...p, blocks: [...p.blocks, text], saved: [...(p.saved || []), false] }
       return prev
     })
     setDraft('')
@@ -1637,7 +1670,23 @@ function DefterMesh({ id, content, width, height }) {
 
   const deleteBlock = (bi) => {
     mutate(prev => {
-      prev[safeIdx] = { ...prev[safeIdx], blocks: prev[safeIdx].blocks.filter((_, i) => i !== bi) }
+      const p = prev[safeIdx]
+      prev[safeIdx] = {
+        ...p,
+        blocks: p.blocks.filter((_, i) => i !== bi),
+        saved: (p.saved || []).filter((_, i) => i !== bi),
+      }
+      return prev
+    })
+  }
+
+  // Bir bloğun raw'a export edildiğini kalıcı işaretle (refresh sonrası "kaydedildi" kalsın).
+  const markSaved = (bi) => {
+    mutate(prev => {
+      const p = prev[safeIdx]
+      const saved = [...(p.saved || [])]
+      saved[bi] = true
+      prev[safeIdx] = { ...p, saved }
       return prev
     })
   }
@@ -1646,9 +1695,13 @@ function DefterMesh({ id, content, width, height }) {
   // (debounce: hızlı yazımda her tuşta PUT atılmaz).
   const editBlock = (bi, val) => {
     mutate(prev => {
-      const blocks = [...prev[safeIdx].blocks]
+      const p = prev[safeIdx]
+      const blocks = [...p.blocks]
       blocks[bi] = val
-      prev[safeIdx] = { ...prev[safeIdx], blocks }
+      // İçerik değişti → eski raw export'u stale; "kaydedildi" düşer, buton geri gelir.
+      const saved = [...(p.saved || [])]
+      saved[bi] = false
+      prev[safeIdx] = { ...p, blocks, saved }
       return prev
     }, { persist: 'debounce' })
   }
@@ -1662,14 +1715,14 @@ function DefterMesh({ id, content, width, height }) {
   }
 
   const newPage = () => {
-    mutate(prev => [...prev, { title: '', blocks: [] }])
+    mutate(prev => [...prev, { title: '', blocks: [], saved: [] }])
     setPageIdx(pages.length)  // yeni eklenen son sayfaya geç
   }
 
   const deletePage = () => {
     if (pages.length <= 1) {
       // Son sayfayı silme — yalnızca içeriğini boşalt.
-      mutate(() => [{ title: '', blocks: [] }])
+      mutate(() => [{ title: '', blocks: [], saved: [] }])
       setPageIdx(0)
       return
     }
@@ -1779,7 +1832,7 @@ function DefterMesh({ id, content, width, height }) {
               </div>
             )}
             {page.blocks.map((b, bi) => (
-              <DefterBlock key={bi} text={b} mediaId={id} onDelete={() => deleteBlock(bi)} onChange={(val) => editBlock(bi, val)} />
+              <DefterBlock key={bi} text={b} mediaId={id} saved={!!page.saved?.[bi]} onSaved={() => markSaved(bi)} onDelete={() => deleteBlock(bi)} onChange={(val) => editBlock(bi, val)} />
             ))}
           </div>
 

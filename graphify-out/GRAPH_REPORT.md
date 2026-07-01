@@ -1,11 +1,11 @@
 # Graph Report - focus-room-main  (2026-06-30)
 
 ## Corpus Check
-- 59 files · ~510,956 words
+- 72 files · ~600,058 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 258 nodes · 298 edges · 11 communities detected
+- 285 nodes · 314 edges · 12 communities detected
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 10 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -21,6 +21,7 @@
 - [[_COMMUNITY_Community 8|Community 8]]
 - [[_COMMUNITY_Community 9|Community 9]]
 - [[_COMMUNITY_Community 10|Community 10]]
+- [[_COMMUNITY_Community 14|Community 14]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `PersistentSession` - 15 edges
@@ -28,11 +29,11 @@
 3. `removeRoomDiskArtifacts()` - 6 edges
 4. `SessionPool` - 6 edges
 5. `verifyGoal()` - 6 edges
-6. `sessionRecallPath()` - 5 edges
-7. `roomBlueprintDir()` - 5 edges
-8. `SceneErrorBoundary` - 5 edges
-9. `encodeWallId()` - 5 edges
-10. `decodeWallId()` - 5 edges
+6. `roomGraphDir()` - 5 edges
+7. `sessionRecallPath()` - 5 edges
+8. `roomBlueprintDir()` - 5 edges
+9. `SceneErrorBoundary` - 5 edges
+10. `encodeWallId()` - 5 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `bootMigrate()` --calls--> `migrate()`  [INFERRED]
@@ -55,23 +56,23 @@
 ## Communities
 
 ### Community 0 - "Community 0"
-Cohesion: 0.07
-Nodes (26): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+18 more)
+Cohesion: 0.06
+Nodes (32): blueprintSkill(), buildSpawnEnv(), cliModel(), findSessionJsonl(), mcpArgs(), parseVerdict(), permissionArgs(), permSettingsJson() (+24 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.06
 Nodes (3): relTime(), SessionMesh(), TextureErrorBoundary
 
 ### Community 2 - "Community 2"
-Cohesion: 0.13
-Nodes (11): QuoteForm(), LoopRunner, makeTurnSink(), readRecall(), recallDir(), recallPath(), SessionPool, setSSEHeaders() (+3 more)
+Cohesion: 0.17
+Nodes (6): QuoteForm(), LoopRunner, makeTurnSink(), readRecall(), SessionPool, stopRoomBackgroundWork()
 
 ### Community 3 - "Community 3"
 Cohesion: 0.13
 Nodes (11): doorWorldPos(), canPassThrough(), canPassThroughOuter(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId(), wallTileCount() (+3 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.27
+Cohesion: 0.26
 Nodes (3): PersistentSession, sseLine(), userLine()
 
 ### Community 5 - "Community 5"
@@ -98,6 +99,10 @@ Nodes (2): getAncestors(), RoomNavHUD()
 Cohesion: 0.67
 Nodes (3): migrate(), readJson(), bootMigrate()
 
+### Community 14 - "Community 14"
+Cohesion: 0.67
+Nodes (1): Footer()
+
 ## Knowledge Gaps
 - **Thin community `Community 5`** (8 nodes): `WorldSelect.jsx`, `CardMenu()`, `ContextCard()`, `ContextModal()`, `DeleteConfirmModal()`, `hashIndex()`, `MenuItem()`, `WorldSelect()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -107,19 +112,19 @@ Nodes (3): migrate(), readJson(), bootMigrate()
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 9`** (5 nodes): `getAncestors()`, `HistoryLink()`, `NavLink()`, `RoomNavHUD()`, `RoomNavHUD.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 14`** (3 nodes): `Footer()`, `Footer.tsx`, `Footer.jsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `serializeSpecialDoor()` connect `Community 3` to `Community 0`?**
-  _High betweenness centrality (0.053) - this node is a cross-community bridge._
-- **Why does `PersistentSession` connect `Community 4` to `Community 0`, `Community 2`?**
-  _High betweenness centrality (0.030) - this node is a cross-community bridge._
+  _High betweenness centrality (0.044) - this node is a cross-community bridge._
+- **Why does `PersistentSession` connect `Community 4` to `Community 0`?**
+  _High betweenness centrality (0.025) - this node is a cross-community bridge._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.06 - nodes in this community are weakly interconnected._
-- **Should `Community 2` be split into smaller, more focused modules?**
-  _Cohesion score 0.13 - nodes in this community are weakly interconnected._
 - **Should `Community 3` be split into smaller, more focused modules?**
   _Cohesion score 0.13 - nodes in this community are weakly interconnected._
