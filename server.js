@@ -1934,6 +1934,40 @@ function writeRoomRaw(roomId, docs) {
   return rawDir
 }
 
+// Defter slug (client'taki defterSlug ile aynı kural) — \w unicode'suz olduğu için
+// Türkçe karakterler düşer; dosya adı güvenli kalır.
+function defterSlug(text) {
+  return (text || '').slice(0, 30).toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 25) || 'not'
+}
+
+// Defter tile'larının kaydedilmiş (saved=true) bloklarını raw/ ile bildirimsel eşitler.
+// Tek doğruluk kaynağı tile içeriğidir: önce odadaki TÜM defter-*.md silinir (eski
+// isimlendirme şemaları dahil), sonra her defter media'nın saved blokları yeniden
+// yazılır. Böylece tile'da silinen/değiştirilen bir not, bir sonraki Güncelle'de
+// grafdan da düşer; düzenlenip yeniden kaydedilen not çift düğüm bırakmaz.
+async function syncRoomDefterRaw(roomId) {
+  const rawDir = path.join(roomGraphDir(roomId), 'raw')
+  fs.mkdirSync(rawDir, { recursive: true })
+  for (const f of fs.readdirSync(rawDir)) {
+    if (f.startsWith('defter-')) fs.rmSync(path.join(rawDir, f), { force: true })
+  }
+  const defters = await prisma.media.findMany({ where: { roomId: String(roomId), type: 'defter' } })
+  for (const m of defters) {
+    let data
+    try { data = JSON.parse(m.content || '') } catch { continue }
+    const pages = Array.isArray(data?.pages) ? data.pages : []
+    pages.forEach((p, pi) => {
+      const blocks = Array.isArray(p?.blocks) ? p.blocks : []
+      const saved = Array.isArray(p?.saved) ? p.saved : []
+      blocks.forEach((b, bi) => {
+        if (saved[bi] !== true || typeof b !== 'string' || !b.trim()) return
+        const filename = `defter-${m.id}-${pi}-${bi}_${defterSlug(b)}.md`
+        fs.writeFileSync(path.join(rawDir, filename), b, 'utf8')
+      })
+    })
+  }
+}
+
 // Sohbet için odadaki ham metinleri (bütçeli) tek bir bağlam metnine birleştirir
 function roomCorpusText(docs, budgetChars = 24000) {
   let out = ''
@@ -2041,19 +2075,28 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
   const roomId = media.roomId
   const docs = await extractRoomTexts(roomId)
 
-  if (!docs.length) {
+  const dir = roomGraphDir(roomId)
+  fs.mkdirSync(dir, { recursive: true })
+  // Tile metinlerini yaz (chat-*/defter-* korunur), ardından defter raw'ını saved
+  // bloklardan bildirimsel olarak tazele (silinen/değişen notlar grafdan düşsün).
+  writeRoomRaw(roomId, docs)
+  await syncRoomDefterRaw(roomId)
+
+  // Graflanacak içerik kararını tazelenmiş raw klasörünün gerçek hali verir: tile
+  // metinleri + chat export + güncel defter export. Hepsi boşsa graphify'ı koşturma.
+  const rawDir = path.join(dir, 'raw')
+  let rawCount = 0
+  try { rawCount = fs.readdirSync(rawDir).filter(f => f.endsWith('.md')).length } catch {}
+
+  if (!rawCount) {
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
     res.setHeader('Connection', 'keep-alive')
     res.flushHeaders()
-    res.write(`data: ${JSON.stringify({ type: 'error', message: 'Bu odada metin/canvas yazısı yok. Önce metin veya canvas ekleyin.' })}\n\n`)
+    res.write(`data: ${JSON.stringify({ type: 'error', message: 'Bu odada graflanacak içerik yok. Önce metin/canvas ekleyin veya bir defter bloğunu kaydedin.' })}\n\n`)
     res.write('data: {"type":"done"}\n\n')
     return res.end()
   }
-
-  const dir = roomGraphDir(roomId)
-  fs.mkdirSync(dir, { recursive: true })
-  writeRoomRaw(roomId, docs)
 
   // Graf zaten varsa artımlı (--update) modda çalış: yalnızca yeni/değişen
   // metinleri yeniden işle, silinenleri grafdan çıkar. İlk kurulumda full build.
