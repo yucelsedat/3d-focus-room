@@ -925,6 +925,14 @@ app.put('/api/media/:id', async (req, res) => {
   if (content !== undefined) data.content = content;
 
   const updated = await prisma.media.update({ where: { id }, data });
+  // Defter içeriği tek doğruluk kaynağıdır: içerik her değiştiğinde raw/'u saved=true
+  // bloklardan bildirimsel yeniden izdüşür. Deterministik ad → aynı blok tekrar
+  // kaydedilse bile duplicate olmaz; silinen/düzenlenip saved'i düşen bloklar raw'dan da
+  // düşer. syncRoomDefterRaw fonksiyon bildirimi olduğundan hoist edilir (aşağıda tanımlı).
+  if (updated.type === 'defter' && content !== undefined) {
+    try { await syncRoomDefterRaw(updated.roomId) }
+    catch (e) { console.error('[defter] raw sync failed:', e.message) }
+  }
   res.json(serializeMedia(updated));
 });
 
@@ -1941,7 +1949,7 @@ function writeRoomRaw(roomId, docs) {
   return rawDir
 }
 
-// Defter slug (client'taki defterSlug ile aynı kural) — \w unicode'suz olduğu için
+// Defter blok metninden dosya adı slug'ı üretir — \w unicode'suz olduğu için
 // Türkçe karakterler düşer; dosya adı güvenli kalır.
 function defterSlug(text) {
   return (text || '').slice(0, 30).toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 25) || 'not'
@@ -2222,32 +2230,11 @@ app.post('/api/roomchat/export', async (req, res) => {
   }
 })
 
-// Defter bloğunu odanın raw klasörüne (room-graphs/<roomId>/raw/) .md olarak yazar.
-// roomchat/export ile aynı dizin; defter- prefix'i writeRoomRaw tazelemesinde korunur.
-app.post('/api/defter/export', async (req, res) => {
-  const { mediaId, content, slug } = req.body
-  if (!content?.trim()) return res.status(400).json({ error: 'İçerik gerekli' })
-
-  let media
-  try { media = await prisma.media.findUnique({ where: { id: BigInt(mediaId) } }) } catch {}
-  if (!media || media.type !== 'defter') return res.status(404).json({ error: 'Defter bulunamadı' })
-
-  try {
-    const rawDir = path.join(roomGraphDir(media.roomId), 'raw')
-    fs.mkdirSync(rawDir, { recursive: true })
-
-    const safeSlug = (typeof slug === 'string' && slug.trim()) ? slug.trim() : 'not'
-    const now = new Date()
-    const timestamp = now.toISOString().slice(0, 19).replace(/[-:]/g, '').slice(2, 8) + '_' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0')
-    const filename = `defter-${safeSlug}_${timestamp}.md`
-    fs.writeFileSync(path.join(rawDir, filename), content, 'utf8')
-
-    res.json({ success: true, filename })
-  } catch (err) {
-    console.error('[defter export] hatası:', err.message)
-    res.status(500).json({ error: 'Kayıt hatası' })
-  }
-})
+// Not: Eski /api/defter/export (timestamp'li tek dosya yazan) kaldırıldı. Defter
+// bloklarının raw/ izdüşümü artık tamamen bildirimseldir: bir blok "Kaydet"lenince
+// istemci saved=true'yu PUT /api/media/:id ile içeriğe yazar, server de içerikteki
+// saved bloklardan raw/'u deterministik olarak yeniden izdüşürür (syncRoomDefterRaw).
+// Böylece tek yazım yolu vardır → duplicate ve saved-kaybı yarışları ortadan kalkar.
 
 // ─── Room Session endpoints (izole proje klasöründe çalışan AI session) ──────
 

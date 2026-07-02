@@ -1593,16 +1593,13 @@ function parseDefter(content) {
 }
 
 // Defter bloğu: metni markdown olarak renkli render eder (session-markdown), tam ekran
-// görüntüle+düzenle (canvas reader-modal tarzı portal) açar, panoya kopyalar, odanın raw
-// klasörüne export eder ("kaydedildi" geri bildirimi) ve bloğu siler.
-function defterSlug(text) {
-  return (text || '').slice(0, 30).toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 25) || 'not'
-}
-
-function DefterBlock({ text, mediaId, saved, onSaved, onDelete, onChange }) {
+// görüntüle+düzenle (canvas reader-modal tarzı portal) açar, panoya kopyalar, bloğu kalıcı
+// kaydeder ("kaydedildi" geri bildirimi) ve bloğu siler. Kaydetme, saved=true'yu içeriğe
+// yazar (onSave); server bu içerikten raw/'u bildirimsel izdüşürür.
+function DefterBlock({ text, saved, onSave, onDelete, onChange }) {
   const [copied, setCopied] = useState(false)
-  const [saving, setSaving] = useState(false)   // export isteği uçuyor mu
-  const [error, setError] = useState(false)     // export başarısız oldu mu
+  const [saving, setSaving] = useState(false)   // kaydetme (PUT) uçuyor mu
+  const [error, setError] = useState(false)     // kaydetme başarısız oldu mu
   const [fs, setFs] = useState(false)        // tam ekran açık mı
   const [editing, setEditing] = useState(false)  // tam ekranda düzenleme modu
 
@@ -1614,31 +1611,20 @@ function DefterBlock({ text, mediaId, saved, onSaved, onDelete, onChange }) {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // Bloğu kalıcı kaydet: saved=true'yu içeriğe yazdır (onSave → PUT). Server raw/'u saved
+  // bloklardan yeniden izdüşürür. Diske yazım başarısızsa görünür "kaydedilemedi" ver.
   const exportRaw = async (e) => {
     e.stopPropagation()
-    if (!text?.trim() || saving) return  // boş blok / uçan istek varken export etme
+    if (!text?.trim() || saving) return  // boş blok / uçan istek varken kaydetme
     setError(false)
     setSaving(true)
     try {
-      const r = await fetch('/api/defter/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaId, content: text, slug: defterSlug(text) }),
-      })
-      if (r.ok) {
-        onSaved()  // kalıcı "kaydedildi" işareti (içerikle birlikte diske yazılır)
-      } else {
-        // 404 (eski server / oluşmamış defter), 500 vb. — sessiz geçme, görünür hata ver.
-        let detail = ''
-        try { detail = (await r.json())?.error || '' } catch {}
-        console.error('[DefterBlock] export başarısız:', r.status, detail)
+      const ok = await onSave()
+      if (!ok) {
+        console.error('[DefterBlock] kaydetme başarısız (PUT)')
         setError(true)
         setTimeout(() => setError(false), 4000)
       }
-    } catch (err) {
-      console.error('[DefterBlock] export failed', err)
-      setError(true)
-      setTimeout(() => setError(false), 4000)
     } finally {
       setSaving(false)
     }
@@ -1790,7 +1776,9 @@ function DefterMesh({ id, content, width, height }) {
     return () => cancelAnimationFrame(raf)
   }, [pages, safeIdx])
 
-  // Diske yaz (PUT content). Hata olsa bile yerel state korunur.
+  // Diske yaz (PUT content). Server, type==='defter' içeriği her değişince raw/'u saved
+  // bloklardan bildirimsel izdüşürür. Başarı/başarısızlığı boolean döndürür (Kaydet
+  // butonunun "kaydedilemedi" geri bildirimi buna dayanır). Hata olsa bile yerel state korunur.
   const persist = async (nextPages) => {
     try {
       const r = await fetch(`/api/media/${id}`, {
@@ -1798,9 +1786,11 @@ function DefterMesh({ id, content, width, height }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: JSON.stringify({ pages: nextPages }) }),
       })
-      if (r.ok) updateMedia(await r.json())
+      if (r.ok) { updateMedia(await r.json()); return true }
+      return false
     } catch (e) {
       console.error('[DefterMesh] save failed', e)
+      return false
     }
   }
 
@@ -1815,7 +1805,9 @@ function DefterMesh({ id, content, width, height }) {
     setPages(prev => {
       const next = fn(prev.map(p => ({ ...p, blocks: [...p.blocks], saved: [...(p.saved || [])] })))
       if (doPersist === 'debounce') schedulePersist(next)
-      else if (doPersist) persist(next)
+      // Anında yazım, bekleyen bir debounce yazımını geçersiz kılar: eski (ör. saved=false)
+      // bir debounce yazımının sonradan tetiklenip yeni saved=true'yu ezmesini engelle.
+      else if (doPersist) { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); persist(next) }
       return next
     })
   }
@@ -1846,15 +1838,18 @@ function DefterMesh({ id, content, width, height }) {
     })
   }
 
-  // Bir bloğun raw'a export edildiğini kalıcı işaretle (refresh sonrası "kaydedildi" kalsın).
-  const markSaved = (bi) => {
-    mutate(prev => {
-      const p = prev[safeIdx]
-      const saved = [...(p.saved || [])]
-      saved[bi] = true
-      prev[safeIdx] = { ...p, saved }
-      return prev
-    })
+  // Bir bloğu kalıcı KAYDET: saved=true işaretle ve diske yaz. Server, defter içeriği
+  // değişince raw/'u saved bloklardan bildirimsel izdüşürür (deterministik ad → duplicate
+  // yok). saved bayrağı içerikle diske yazıldığından refresh/uygulama yeniden açılışında
+  // "kaydedildi" kalır. Diske yazımın başarısını (boolean) döndürür.
+  const saveBlock = async (bi) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)  // bekleyen debounce'u iptal et
+    const next = pages.map(p => ({ ...p, blocks: [...p.blocks], saved: [...(p.saved || [])] }))
+    const p = next[safeIdx]
+    while (p.saved.length < p.blocks.length) p.saved.push(false)
+    p.saved[bi] = true
+    setPages(next)
+    return await persist(next)
   }
 
   // Tam ekran düzenlemeden gelen blok metni değişikliği — yerel state + diske yazar
@@ -1998,7 +1993,7 @@ function DefterMesh({ id, content, width, height }) {
               </div>
             )}
             {page.blocks.map((b, bi) => (
-              <DefterBlock key={bi} text={b} mediaId={id} saved={!!page.saved?.[bi]} onSaved={() => markSaved(bi)} onDelete={() => deleteBlock(bi)} onChange={(val) => editBlock(bi, val)} />
+              <DefterBlock key={bi} text={b} saved={!!page.saved?.[bi]} onSave={() => saveBlock(bi)} onDelete={() => deleteBlock(bi)} onChange={(val) => editBlock(bi, val)} />
             ))}
           </div>
 
