@@ -137,7 +137,7 @@ function ContextCard({ ctx, onPlay, onEdit, onDelete }) {
       <div style={{
         height: 180,
         background: ctx.coverImage
-          ? `url(${ctx.coverImage.startsWith('http') ? ctx.coverImage : API + ctx.coverImage}) center/cover no-repeat`
+          ? `url("${ctx.coverImage.startsWith('http') ? ctx.coverImage : API + ctx.coverImage}") center/cover no-repeat`
           : gradient,
         position: 'relative',
         flexShrink: 0,
@@ -237,7 +237,13 @@ function ContextModal({ onClose, onCreate, onUpdate, editCtx = null }) {
     setImageUrl('')
     setUrlInput('')
     const reader = new FileReader()
-    reader.onload = e => setImagePreview(e.target.result)
+    reader.onload = e => {
+      if (e.target.result) {
+        setImagePreview(e.target.result)
+        setError('')
+      }
+    }
+    reader.onerror = () => setError('Resim yüklenemedi')
     reader.readAsDataURL(file)
   }
 
@@ -251,11 +257,34 @@ function ContextModal({ onClose, onCreate, onUpdate, editCtx = null }) {
 
   useEffect(() => {
     function onPaste(e) {
-      const items = e.clipboardData?.items
-      if (!items) return
-      for (const item of items) {
-        if (item.type.startsWith('image/')) { applyFile(item.getAsFile()); return }
+      // İlk olarak files'ı check et (daha güvenilir)
+      if (e.clipboardData?.files?.length > 0) {
+        const file = e.clipboardData.files[0]
+        if (file.type.startsWith('image/')) {
+          applyFile(file)
+          return
+        }
       }
+
+      // items üzerinde döngü
+      const items = e.clipboardData?.items
+      if (!items) {
+        const text = e.clipboardData?.getData('text')
+        if (text?.startsWith('http')) applyUrl(text)
+        return
+      }
+
+      for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile()
+          if (file) {
+            applyFile(file)
+            return
+          }
+        }
+      }
+
+      // URL text'i try et
       const text = e.clipboardData.getData('text')
       if (text?.startsWith('http')) applyUrl(text)
     }
@@ -367,7 +396,7 @@ function ContextModal({ onClose, onCreate, onUpdate, editCtx = null }) {
               height: 180, borderRadius: 12,
               border: `2px dashed ${dragOver ? '#ff9500' : imagePreview ? 'transparent' : '#333'}`,
               background: imagePreview
-                ? `url(${imagePreview}) center/cover no-repeat #0a0a0a`
+                ? `url("${imagePreview}") center/cover no-repeat #0a0a0a`
                 : dragOver ? 'rgba(255,149,0,0.06)' : '#0a0a0a',
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               justifyContent: 'center', cursor: imagePreview ? 'default' : 'pointer',

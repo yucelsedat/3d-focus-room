@@ -40,6 +40,11 @@ const port = Number(process.env.PORT) || 5001;
 app.use(cors());
 app.use(express.json());
 
+// Yüklenen dosyaları (kapak görselleri, medya) statik olarak sun.
+// Kart kodu API + coverImage ile bu URL'lere doğrudan istek atıyor;
+// bu olmadan /uploads/... 404 döner ve kapak resmi siyah görünür.
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+
 // Ensure upload dirs exist
 const ensureDir = (dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
