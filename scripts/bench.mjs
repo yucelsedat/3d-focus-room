@@ -45,6 +45,18 @@ const SCENARIOS = {
     ],
     note: 'roomchat — 3 turluk sabit sohbet, kalıcı oturumun cache davranışı',
   },
+  // Faz 3 İş 3.1 ölçümü: turlar arası 6 dk bekleme — 5m TTL olsaydı cache düşerdi;
+  // 1H TTL + uzun idle ile 2./3. turun cacheWrite'ı düşük kalmalı (cache-hit kanıtı).
+  'roomchat-idlegap': {
+    tileType: 'roomchat',
+    gapSec: 360,
+    prompts: [
+      'Bu odada hangi içerikler var? Kısaca listele.',
+      'Bu içeriklerden en önemli 3 temayı çıkar ve her birini bir cümleyle açıkla.',
+      'Bu üç temayı tek bir cümlede birleştirerek özetle.',
+    ],
+    note: 'roomchat — 3 tur, turlar arası 6 dk boşluk; 1H cache + uzun idle doğrulaması',
+  },
 }
 
 // ── CLI argümanları ───────────────────────────────────────────────────────────
@@ -258,6 +270,10 @@ async function runRoomchat3turn() {
   const media = await api('POST', '/api/roomchat', tileBody())
   console.log(`  tile oluşturuldu: ${media.id}`)
   for (let i = 0; i < scenario.prompts.length; i++) {
+    if (i > 0 && scenario.gapSec) {
+      console.log(`  ${scenario.gapSec}s bekleniyor (idle-gap: cache/idle davranışı ölçümü)…`)
+      await sleep(scenario.gapSec * 1000)
+    }
     console.log(`  tur ${i + 1}/${scenario.prompts.length}: "${scenario.prompts[i].slice(0, 50)}…"`)
     await driveSSE('POST', '/api/roomchat/message', { mediaId: media.id, message: scenario.prompts[i] })
   }
@@ -268,6 +284,7 @@ const RUNNERS = {
   'direct-cafe': runDirectCafe,
   'roomsession-crud': runRoomsessionCrud,
   'roomchat-3turn': runRoomchat3turn,
+  'roomchat-idlegap': runRoomchat3turn,
 }
 
 // ── Ana akış ──────────────────────────────────────────────────────────────────

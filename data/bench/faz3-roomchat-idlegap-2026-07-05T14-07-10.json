@@ -1,0 +1,29 @@
+{
+  "scenario": "roomchat-idlegap",
+  "label": "faz3",
+  "note": "roomchat — 3 tur, turlar arası 6 dk boşluk; 1H cache + uzun idle doğrulaması",
+  "startedAt": "2026-07-05T14:07:10.276Z",
+  "finishedAt": "2026-07-05T14:20:47.991Z",
+  "durationSec": 818,
+  "mediaId": 1783260430285,
+  "error": null,
+  "usageDelta": {
+    "roomchat": {
+      "calls": 4,
+      "input": 322,
+      "cacheWrite": 7745,
+      "cacheRead": 24519,
+      "output": 787,
+      "processedTotal": 33373
+    }
+  },
+  "totals": {
+    "calls": 4,
+    "input": 322,
+    "cacheWrite": 7745,
+    "cacheRead": 24519,
+    "output": 787,
+    "processedTotal": 33373
+  },
+  "recall": null
+}

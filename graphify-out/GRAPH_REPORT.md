@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-07-04)
+# Graph Report - focus-room-main  (2026-07-05)
 
 ## Corpus Check
-- 119 files · ~12,296,516 words
+- 120 files · ~12,355,972 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 411 nodes · 446 edges · 23 communities detected
+- 429 nodes · 486 edges · 23 communities detected
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 15 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -39,12 +39,12 @@
 2. `LoopRunner` - 10 edges
 3. `SessionPool` - 9 edges
 4. `MultiAgentRunner` - 8 edges
-5. `removeRoomDiskArtifacts()` - 6 edges
-6. `writeRecall()` - 6 edges
-7. `verifyGoal()` - 6 edges
-8. `stopRoomBackgroundWork()` - 5 edges
-9. `roomGraphDir()` - 5 edges
-10. `readRecall()` - 5 edges
+5. `api()` - 8 edges
+6. `main()` - 7 edges
+7. `removeRoomDiskArtifacts()` - 6 edges
+8. `writeRecall()` - 6 edges
+9. `verifyGoal()` - 6 edges
+10. `stopRoomBackgroundWork()` - 5 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `bootMigrate()` --calls--> `migrate()`  [INFERRED]
@@ -67,32 +67,32 @@
 ## Communities
 
 ### Community 0 - "Community 0"
-Cohesion: 0.06
-Nodes (26): assignTaskIds(), blueprintSkill(), directManifest(), _loadUsageDaily(), parseManifest(), permissionArgs(), permSettingsJson(), readBlueprintSpec() (+18 more)
+Cohesion: 0.05
+Nodes (30): assignTaskIds(), blueprintSkill(), buildSpawnEnv(), cliModel(), directManifest(), _loadUsageDaily(), mcpArgs(), parseManifest() (+22 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.06
-Nodes (6): EditModal(), MarkdownMesh(), relTime(), SessionMesh(), TextureErrorBoundary, useSpeechToText()
+Cohesion: 0.1
+Nodes (16): QuoteForm(), addUsage(), ensureSessionOr429(), LoopRunner, makeTurnSink(), MultiAgentRunner, pidRssMb(), readAgentProfile() (+8 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.11
-Nodes (13): QuoteForm(), ensureSessionOr429(), LoopRunner, makeTurnSink(), MultiAgentRunner, pidRssMb(), readAgentProfile(), readRecall() (+5 more)
+Cohesion: 0.06
+Nodes (6): EditModal(), MarkdownMesh(), relTime(), SessionMesh(), TextureErrorBoundary, useSpeechToText()
 
 ### Community 3 - "Community 3"
 Cohesion: 0.12
 Nodes (13): doorWorldPos(), canPassThrough(), canPassThroughOuter(), isTyping(), Player(), decodeWallId(), encodeWallId(), getDoorInstanceIds() (+5 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.26
-Nodes (3): PersistentSession, sseLine(), userLine()
+Cohesion: 0.31
+Nodes (14): api(), cleanBenchProjectDir(), driveSSE(), ensureBenchRoom(), main(), pollLoopUntilDone(), runDirectCafe(), runRoomchat3turn() (+6 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.23
-Nodes (6): Cursor(), HeroCanvas(), useMediaQuery(), usePointerFine(), useReducedMotion(), useWebglReady()
+Cohesion: 0.25
+Nodes (4): logTurnUsage(), PersistentSession, sseLine(), userLine()
 
 ### Community 6 - "Community 6"
-Cohesion: 0.29
-Nodes (7): addUsage(), buildSpawnEnv(), cliModel(), mcpArgs(), parseVerdict(), runClaudeCapture(), verifyGoal()
+Cohesion: 0.23
+Nodes (6): Cursor(), HeroCanvas(), useMediaQuery(), usePointerFine(), useReducedMotion(), useWebglReady()
 
 ### Community 7 - "Community 7"
 Cohesion: 0.25
@@ -192,14 +192,14 @@ Nodes (1): Footer()
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `serializeSpecialDoor()` connect `Community 3` to `Community 0`?**
-  _High betweenness centrality (0.030) - this node is a cross-community bridge._
-- **Why does `PersistentSession` connect `Community 4` to `Community 0`, `Community 6`?**
-  _High betweenness centrality (0.015) - this node is a cross-community bridge._
+  _High betweenness centrality (0.028) - this node is a cross-community bridge._
+- **Why does `PersistentSession` connect `Community 5` to `Community 0`, `Community 1`?**
+  _High betweenness centrality (0.013) - this node is a cross-community bridge._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.06 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.06 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.1 - nodes in this community are weakly interconnected._
 - **Should `Community 2` be split into smaller, more focused modules?**
-  _Cohesion score 0.11 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06 - nodes in this community are weakly interconnected._
 - **Should `Community 3` be split into smaller, more focused modules?**
   _Cohesion score 0.12 - nodes in this community are weakly interconnected._

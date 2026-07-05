@@ -1571,6 +1571,15 @@ function streamClaudeToSSE(res, args, opts = {}) {
 // getirisi spawn gecikmesi (~1-2 sn). Boşta bekleyen ~300MB'lık claude süreci
 // RAM'i boşuna tutuyor; --resume ile devam sorunsuz.
 const PERSIST_IDLE_MS = 15 * 60 * 1000   // boşta 15 dk sonra process'i kapat (RAM)
+// Faz 3 İş 3.1: idle-timeout'u cache TTL kararıyla hizala (Faz 2 İş 2.2).
+// 1H cache'li interaktif tile'larda (roomchat/ai-session/bluprint) süreci daha uzun
+// yaşat: kullanıcı 20-30 dk sonra dönerse hem süreç hem cache sıcak → respawn +
+// cacheWrite yerine cache-hit. RAM güvenliği RSS bekçisi + hard cap'te zaten var;
+// bellek baskısında idle kurban yine tahliye edilir. 5M'li loop tile'ları 15 dk kalır.
+const PERSIST_IDLE_LONG_MS = 30 * 60 * 1000
+// Faz 3 İş 3.4: respawn sonrası ilk turun input+cacheWrite'ı bu eşiği aşarsa uyar
+// (JSONL geçmişi şişmiş demektir — içerik-diyeti kararının veri tetikleyicisi).
+const RESUME_COST_WARN_TOKENS = 100_000
 const PERSIST_MAX = 4                      // eşzamanlı kalıcı process tavanı (LRU tahliye)
 const PERSIST_HARD_MAX = 6                 // hepsi busy iken bile aşılamaz tavan → 429
 const MEM_SOFT_MB = 1200                   // havuz RSS toplamı bunu aşarsa idle kurban evict
@@ -1695,6 +1704,11 @@ class PersistentSession {
           const input = ev.usage.input_tokens || 0
           const cacheWrite = ev.usage.cache_creation_input_tokens || 0
           console.error(`[resume-cost] key=${this.key} respawn#${this.respawns} firstTurn=${Math.round((input + cacheWrite) / 1000)}k (input=${input} cacheWrite=${cacheWrite})`)
+          // Faz 3 İş 3.4: respawn sonrası ilk tur anormal pahalıysa uyar — bu eşiğin
+          // sık aşılması, hedefli içerik-diyeti (geçmiş özetleme) kararının tetikleyicisi.
+          if (input + cacheWrite > RESUME_COST_WARN_TOKENS) {
+            console.error(`[resume-cost] UYARI: key=${this.key} ilk tur ${Math.round((input + cacheWrite) / 1000)}k > ${RESUME_COST_WARN_TOKENS / 1000}k eşiği — geçmiş şişkin, içerik-diyeti değerlendir`)
+          }
         }
       }
       if (typeof ev.result === 'string') this.lastResult = ev.result   // recall özeti için son yanıt
@@ -1781,7 +1795,10 @@ class PersistentSession {
 
   _armIdle() {
     if (this.idleTimer) clearTimeout(this.idleTimer)
-    this.idleTimer = setTimeout(() => sessionPool.evict(this.key), PERSIST_IDLE_MS)
+    // 5M TTL'li hot-loop tile'ları kısa, 1H TTL'li interaktif tile'lar uzun idle (İş 3.1).
+    const tile = this.key.split(':')[0]
+    const idleMs = (tile === 'roomsession' || tile === 'multiagent') ? PERSIST_IDLE_MS : PERSIST_IDLE_LONG_MS
+    this.idleTimer = setTimeout(() => sessionPool.evict(this.key), idleMs)
   }
 
   _emitError(msg) {
@@ -1798,11 +1815,19 @@ class PersistentSession {
     if (this.queue.length) this._next()   // beklenen kapanış değilse --resume ile yeniden doğ
   }
 
-  // model/effort/izin değişti: ayarları güncelle ve process'i kapat.
-  // Sonraki mesaj --resume + yeni ayarlarla yeniden doğar (geçmiş korunur).
+  // Ayar güncellemesi. Faz 3 İş 3.2: her PATCH'te körlemesine respawn ETME —
+  // UI çoğu zaman ayar nesnesini olduğu gibi yeniden gönderir; değer değişmediyse
+  // süreci öldürmek cache prefix'ini boşuna yeniden yazdırır. Yalnız spawn
+  // argümanlarını/env'ini gerçekten etkileyen alanlar DEĞİŞTİYSE dispose et;
+  // sonraki mesaj --resume + yeni ayarlarla yeniden doğar (geçmiş korunur).
   applySettings(patch) {
+    const SPAWN_FIELDS = ['model', 'effort', 'permissionMode']   // model/permission → CLI arg, effort → CLAUDE_EFFORT env
+    const changed = SPAWN_FIELDS.some(
+      (k) => k in patch && String(patch[k] ?? '') !== String(this.settings[k] ?? '')
+    )
     this.settings = { ...this.settings, ...patch }
-    this.dispose()
+    if (changed) this.dispose()
+    else console.error(`[persist] applySettings: değişiklik yok, respawn atlandı key=${this.key}`)
   }
 
   dispose() {
@@ -2304,6 +2329,7 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
     '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
+    '--no-session-persistence',                   // Faz 3 İş 3.3: graf-build tek-atış, JSONL yazma
     ...mcpArgs('roomchat'),
     '--dangerously-skip-permissions',
     prompt,
@@ -2694,6 +2720,8 @@ async function verifyGoal({ goal, dir, model }) {
     // yanlışlıkla dosya değiştirme riski birlikte iner (plan.md P2-B).
     '--tools', 'Read,Glob,Grep,Bash',
     '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1: prefix sabit → spawn'lar arası cache-hit
+    // Faz 3 İş 3.3: tek-atış — asla --resume edilmez; JSONL yazma (disk + session listesi kirliliği).
+    '--no-session-persistence',
     '--model', vModel, ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
   ], { cwd: dir, usageType: 'verify', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
   // API-düzeyi hata veya boş çıktı: "hedef karşılanmadı" DEĞİL, altyapı arızası.
@@ -3141,6 +3169,7 @@ class MultiAgentRunner extends LoopRunner {
     const { text, failed, usage } = await runClaudeCapture([
       '--print', '--output-format=stream-json', '--verbose', '--max-turns', '4',
       '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
+      '--no-session-persistence',                   // Faz 3 İş 3.3: tek-atış, JSONL yazma
       '--model', cliModel('sonnet'), ...mcpArgs('orchestrate'), '--dangerously-skip-permissions', p,
     ], { cwd: this.dir, usageType: 'orchestrate', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
     addUsage(rec, usage)
@@ -3402,6 +3431,7 @@ app.post('/api/multiagent/:mediaId/architect', async (req, res) => {
     '--model', cliModel(profile.model || 'opus'),
     '--tools', 'Read',   // mimar yalnız okur + JSON üretir; tool tanım yükünü kıs
     '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
+    '--no-session-persistence',                   // Faz 3 İş 3.3: tek-atış, JSONL yazma
     ...mcpArgs('architect'),
     '--append-system-prompt', profile.body,
     '--dangerously-skip-permissions',
@@ -3743,6 +3773,7 @@ app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
     '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
+    '--no-session-persistence',                   // Faz 3 İş 3.3: spec-build tek-atış, JSONL yazma
     ...mcpArgs('bluprint'),
     '--dangerously-skip-permissions',
     prompt,
