@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-const API = 'http://localhost:5001'
+// Boş = relative istekler. Dev'de Vite /api'yi backend'e proxy'ler ve /uploads'ı
+// public/ üzerinden sunar; production'da backend aynı origin'den her ikisini sunar.
+// VITE_API_URL ile ayrı bir origin'e (ör. farklı porttaki backend) yönlendirilebilir.
+const API = import.meta.env.VITE_API_URL ?? ''
 
 const GRADIENTS = [
   'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
