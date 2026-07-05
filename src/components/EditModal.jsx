@@ -384,6 +384,36 @@ export function EditModal() {
       return
     }
 
+    if (activeTab === 'multiagent') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/multiagent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'MultiAgent tile oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setWidth(6)
+        setHeight(4)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (activeTab === 'bluprint') {
       setLoading(true)
       setLoadingStep('saving')
@@ -749,8 +779,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'bluprint' ? '📐' : m.type === 'defter' ? '📒' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'bluprint' ? 'Blueprint' : m.type === 'defter' ? 'Defter' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'bluprint' ? '📐' : m.type === 'multiagent' ? '🤝' : m.type === 'defter' ? '📒' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'bluprint' ? 'Blueprint' : m.type === 'multiagent' ? 'MultiAgent' : m.type === 'defter' ? 'Defter' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -977,6 +1007,12 @@ export function EditModal() {
             onClick={() => { setActiveTab('bluprint'); setWidth(6); setHeight(4) }}
           >
             📐 Blueprint
+          </button>
+          <button
+            style={activeTab === 'multiagent' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('multiagent'); setWidth(6); setHeight(4) }}
+          >
+            🤝 MultiAgent
           </button>
           <button
             style={activeTab === 'slide' ? s.activeTab : s.tab}
@@ -1229,6 +1265,20 @@ export function EditModal() {
                   )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* MultiAgent */}
+          {activeTab === 'multiagent' && (
+            <div style={s.inputGroup}>
+              <p style={{ color: '#c084fc', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>🤝 MultiAgent (mimar + ajan ekibi)</p>
+              <p style={{ color: '#777', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>
+                Bu tile'a bir <b>proje fikri</b> yazarsın; <b>mimar</b> (opus, tek sefer) teknoloji stack'ini ve ajan ekibini belirler.
+                Başlattığında <b>orkestratör</b> her iterasyonda sıradaki görevi seçer, ilgili <b>worker ajan</b> kendi izole
+                oturumunda görevi yapar, bağımsız <b>doğrulayıcı</b> hedefi denetler. Proje odanın klasöründe
+                (room-projects/&lt;oda&gt;/) geliştirilir; kesilirse kaldığı yerden devam eder (Recall).
+                Fikir girişi tile'ın kendi içindedir — burada sadece tile'ı oluştur.
+              </p>
             </div>
           )}
 

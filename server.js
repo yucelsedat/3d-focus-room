@@ -104,10 +104,14 @@ const _MCP_PROFILES = (() => {
   }
 })()
 // type: 'roomchat' | 'roomsession' | 'bluprint' | 'verify' | 'ai-session'
+//       | 'architect' | 'orchestrate' (multiagent tek-atış ajanları — MCP yükü istemez)
+//       | 'multiagent' (worker'lar — kod yazan rolün MCP tanım/RAM yüküne ihtiyacı yok)
 function mcpArgs(type) {
   if (type === 'roomchat')  return _MCP_PROFILES.roomchat
   if (type === 'bluprint')  return _NO_MCP
   if (type === 'verify')    return _NO_MCP
+  if (type === 'architect' || type === 'orchestrate') return _NO_MCP
+  if (type === 'multiagent') return _NO_MCP
   return _MCP_PROFILES.default   // roomsession, ai-session, bilinmeyen
 }
 
@@ -306,6 +310,7 @@ function stopRoomBackgroundWork(mediaIds) {
     for (const prefix of ['roomsession', 'bluprint', 'roomchat', 'ai-session']) {
       sessionPool.evict(`${prefix}:${key}`);
     }
+    sessionPool.evictPrefix(`multiagent:${key}:`);   // rol bazlı oturum ailesi
   }
 }
 
@@ -1012,6 +1017,16 @@ app.delete('/api/media/:id', async (req, res) => {
 
   if (item.type === 'session') removeSessionRecall(String(id));   // öksüz recall checkpoint'i bırakma
 
+  // Loop'lu tile silinirken çalışan runner'ı durdur ve havuz oturumlarını kapat —
+  // yoksa runner recall yazmaya (ve harcamaya) devam eder, havuzda ölü kayıt sızar.
+  if (item.type === 'roomsession' || item.type === 'multiagent') {
+    const key = String(id);
+    const loop = loopPool.get(key);
+    if (loop) { try { loop.abort(); } catch {} loopPool.delete(key); }
+    sessionPool.evict(`roomsession:${key}`);
+    sessionPool.evictPrefix(`multiagent:${key}:`);
+  }
+
   await prisma.media.delete({ where: { id } });
   res.json({ success: true });
 });
@@ -1300,7 +1315,7 @@ app.post('/api/session/live/message', (req, res) => {
     '--print', '--output-format=stream-json', '--verbose',
     '--resume', info.sessionId, '--dangerously-skip-permissions',
     message.trim()
-  ])
+  ], { usageType: 'live-session' })
 })
 
 // ─── Ortak yardımcılar (hem tek-atış streamClaudeToSSE hem kalıcı oturum yolu) ──
@@ -1324,6 +1339,82 @@ function buildSpawnEnv(envOverrides) {
   for (const v of CLAUDE_VOLATILE_ENV) delete env[v]
   return env
 }
+
+// ─── Günlük token sayacı (tile tipi bazında görünürlük) ──────────────────────
+// Her `result` olayının usage'ı gün → tileType kırılımıyla data/usage-daily.json'a
+// işlenir. Amaç: hangi tile tipinin ne yaktığını görmek — gelecek optimizasyonlar
+// (ve içerik-diyeti kararı) bu veriye dayansın. Yazım debounce'lu + atomic.
+// İzole ölçüm için env ile override edilebilir: bench sunucusu ayrı dosyaya yazar,
+// böylece dev sunucusuyla aynı usage-daily.json'u paylaşıp delta'yı kirletmez (faz1).
+const USAGE_FILE = process.env.USAGE_FILE
+  ? path.resolve(process.env.USAGE_FILE)
+  : path.join(__dirname, 'data', 'usage-daily.json')
+let _usageDaily = null
+let _usageFlushTimer = null
+
+function _loadUsageDaily() {
+  if (_usageDaily) return _usageDaily
+  try { _usageDaily = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8')) }
+  catch { _usageDaily = {} }
+  return _usageDaily
+}
+
+function _flushUsageDaily() {
+  _usageFlushTimer = null
+  try {
+    fs.mkdirSync(path.dirname(USAGE_FILE), { recursive: true })
+    const tmp = `${USAGE_FILE}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(_usageDaily, null, 2))
+    fs.renameSync(tmp, USAGE_FILE)
+  } catch (e) { console.error('[usage-daily] yazım hatası:', e.message) }
+}
+
+function recordGlobalUsage(tileType, u) {
+  if (!u || !tileType) return
+  const store = _loadUsageDaily()
+  const day = new Date().toISOString().slice(0, 10)
+  const byType = store[day] || (store[day] = {})
+  const t = byType[tileType] || (byType[tileType] = { calls: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, processedTotal: 0 })
+  t.calls += 1
+  t.input += u.input_tokens || 0
+  t.cacheWrite += u.cache_creation_input_tokens || 0
+  t.cacheRead += u.cache_read_input_tokens || 0
+  t.output += u.output_tokens || 0
+  // processedTotal: oturum penceresini tüketen asıl büyüklük — cacheRead dahil
+  // (dolar maliyeti düşük olsa da pencereyi doldurur, faz1 İş 1.2).
+  t.processedTotal = (t.processedTotal || 0) + (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+    + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0)
+  if (!_usageFlushTimer) {
+    _usageFlushTimer = setTimeout(_flushUsageDaily, 5000)
+    if (_usageFlushTimer.unref) _usageFlushTimer.unref()
+  }
+}
+
+// Tur-başı yapılandırılmış usage logu (faz1 İş 1.1): cacheRead'in tur tur nasıl
+// biriktiği çıplak gözle okunsun — multiagent 2.46M cacheRead kök nedeni bu
+// birikimdi. Tek satır, grep-dostu format.
+function logTurnUsage({ tile, key, turn, model, usage }) {
+  if (!usage) return
+  const inTok = usage.input_tokens || 0
+  const cw = usage.cache_creation_input_tokens || 0
+  const cr = usage.cache_read_input_tokens || 0
+  const out = usage.output_tokens || 0
+  console.error(`[turn-usage] tile=${tile || '?'} key=${key || '-'} turn=${turn || 1} in=${inTok} cw=${cw} cr=${cr} out=${out} total=${inTok + cw + cr + out} model=${model || '-'}`)
+}
+
+// Spawn arg listesinden bir bayrağın değerini oku (turn-usage logunda model için).
+function cliArgValue(args, flag) {
+  const i = args.indexOf(flag)
+  return i >= 0 && args[i + 1] ? args[i + 1] : null
+}
+
+app.get('/api/usage/daily', (req, res) => {
+  const days = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 7))
+  const store = _loadUsageDaily()
+  const out = {}
+  for (const day of Object.keys(store).sort().slice(-days)) out[day] = store[day]
+  res.json(out)
+})
 
 // Spawns the claude CLI and streams its stream-json output to an SSE response.
 // Handles both normal stdout mode and "background task" mode (when the CLI
@@ -1373,6 +1464,10 @@ function streamClaudeToSSE(res, args, opts = {}) {
     if (!line.trim()) return false
     try {
       const ev = JSON.parse(line)
+      if (ev.type === 'result' && ev.usage) {
+        recordGlobalUsage(opts.usageType, ev.usage)
+        logTurnUsage({ tile: opts.usageType, key: opts.usageKey || opts.usageType, turn: 1, model: cliArgValue(args, '--model'), usage: ev.usage })
+      }
       opts.onEvent?.(ev)
       if (FORWARD_TYPES.has(ev.type)) {
         res.write(`data: ${JSON.stringify(ev)}\n\n`)
@@ -1467,8 +1562,22 @@ function streamClaudeToSSE(res, args, opts = {}) {
 // modunda process açık kalır; her mesaj stdin'e bir NDJSON satırı olarak yazılır,
 // her mesaj bir tur üretir ve `result` ile biter. Process açık kaldığı için cache
 // turlar arası SICAK kalır (spike'ta doğrulandı: tur2 input 4130→395, cache_read↑).
-const PERSIST_IDLE_MS = 60 * 60 * 1000   // boşta 60 dk sonra process'i kapat (RAM)
+// Idle 15 dk: prompt cache TTL'i ~5 dk; sonrasında süreci canlı tutmanın tek
+// getirisi spawn gecikmesi (~1-2 sn). Boşta bekleyen ~300MB'lık claude süreci
+// RAM'i boşuna tutuyor; --resume ile devam sorunsuz.
+const PERSIST_IDLE_MS = 15 * 60 * 1000   // boşta 15 dk sonra process'i kapat (RAM)
 const PERSIST_MAX = 4                      // eşzamanlı kalıcı process tavanı (LRU tahliye)
+const PERSIST_HARD_MAX = 6                 // hepsi busy iken bile aşılamaz tavan → 429
+const MEM_SOFT_MB = 1200                   // havuz RSS toplamı bunu aşarsa idle kurban evict
+const MEM_FREE_MIN_MB = 400                // sistem boş RAM bunun altına inerse acil fren
+
+// /proc/<pid>/status'tan VmRSS (MB). MCP çocuklarını saymaz — kaba görünürlük.
+function pidRssMb(pid) {
+  try {
+    const m = fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/^VmRSS:\s+(\d+) kB/m)
+    return m ? Math.round(m[1] / 1024) : 0
+  } catch { return 0 }
+}
 
 // stream-json girdi zarfı (spike'ta doğrulanan şema)
 function userLine(text) {
@@ -1476,11 +1585,14 @@ function userLine(text) {
 }
 
 class PersistentSession {
-  constructor(key, { settings, cwd, sys }) {
+  constructor(key, { settings, cwd, sys, maxTurns, tools, maxBudgetUsd }) {
     this.key = key
     this.settings = { ...settings }          // { sessionId, model, effort, permissionMode }
     this.cwd = cwd || process.cwd()
     this.sys = sys || null                   // sabit append-system-prompt (variant'lar için)
+    this.maxTurns = Number(maxTurns) || null // tur başına araç-tur tavanı (azgın worker sigortası)
+    this.tools = tools || null               // built-in tool kısıtı (ör. 'Read,Edit,Write,Bash,Glob,Grep')
+    this.maxBudgetUsd = Number(maxBudgetUsd) || null // spawn başına sert $ tavanı (kaçak koşu sigortası)
     this.proc = null
     this.alive = false
     this.sessionId = settings.sessionId || null
@@ -1493,23 +1605,51 @@ class PersistentSession {
     this.lastUsed = Date.now()
     this.onSessionId = null                  // ilk sessionId yakalanınca (persist için)
     this.lastResult = ''                     // son tamamlanan turun result metni (recall özeti)
+    this.turnCount = 0                       // bu oturum nesnesinin tamamlanan tur sayısı (turn-usage logu)
+    this.respawns = 0                        // --resume ile yeniden doğuş sayısı (faz1 İş 1.4)
   }
 
   _spawn() {
+    const tile = this.key.split(':')[0]
     const a = [
       '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--model', cliModel(this.settings.model),
-      ...mcpArgs(this.key.split(':')[0]),
+      // Faz 2 İş 2.1: dinamik system-prompt bölümlerini (cwd/env/git/memory) ilk user
+      // mesajına taşı → cache prefix'i spawn'lar arası SABİT kalır, respawn sonrası
+      // cacheWrite yerine cache-hit. Default prompt + --append-system-prompt ile uyumlu.
+      '--exclude-dynamic-system-prompt-sections',
+      ...mcpArgs(tile),
     ]
     if (this.sys) a.push('--append-system-prompt', this.sys)
+    if (this.maxTurns) a.push('--max-turns', String(this.maxTurns))
+    // Tool kısıtı: system prompt'a giren tool tanımı sayısını (→ her spawn'ın
+    // cacheWrite'ı) düşürür; ayrıca worker'ın Task/WebSearch gibi token
+    // çarpanlarına erişimini keser (plan.md P2-B).
+    if (this.tools) a.push('--tools', this.tools)
+    if (this.maxBudgetUsd) a.push('--max-budget-usd', String(this.maxBudgetUsd))
     a.push(...permissionArgs(this.settings.permissionMode))
     if (this.sessionId) a.push('--resume', this.sessionId)   // geçmişi koru
 
     const envOverrides = {}
     if (this.settings.effort && this.settings.effort !== 'normal') envOverrides.CLAUDE_EFFORT = this.settings.effort
+    // Faz 2 İş 2.2 (TTL doğrulandı: result.usage.cache_creation kırılımı env'leri birebir izliyor):
+    // - hot loop (roomsession/multiagent): turlar dakikalar içinde ardışık → 5m TTL yeter,
+    //   cacheWrite 1.25× (1h'lik 2× yerine) — yazma %37.5 ucuz.
+    // - interaktif sohbet (roomchat/ai-session/bluprint): kullanıcı arada uzun düşünür →
+    //   1h TTL; geri dönünce cache-hit (5dk'da düşmüş cache'i yeniden yazmak yok).
+    if (tile === 'roomsession' || tile === 'multiagent') envOverrides.FORCE_PROMPT_CACHING_5M = '1'
+    else envOverrides.ENABLE_PROMPT_CACHING_1H = '1'
 
-    this.proc = spawn(CLAUDE_CLI, a, { cwd: this.cwd, env: buildSpawnEnv(envOverrides) })
-    console.error(`[persist] SPAWN key=${this.key} pid=${this.proc.pid} resume=${this.sessionId || 'none'}`)
+    // detached: claude kendi süreç grubunun lideri olur → dispose'da grup kill
+    // ile MCP çocukları (context7/exa vb.) da ölür, orphan birikmez.
+    // Respawn sayacı (faz1 İş 1.4): sessionId varken spawn = --resume ile yeniden
+    // doğuş (idle evict / çökme / ayar değişimi). Faz 3'ün etkisi bu sayıyla ölçülür.
+    if (this.sessionId) this.respawns += 1
+    this.proc = spawn(CLAUDE_CLI, a, { cwd: this.cwd, env: buildSpawnEnv(envOverrides), detached: true })
+    console.error(`[persist] SPAWN key=${this.key} pid=${this.proc.pid} resume=${this.sessionId || 'none'} respawns=${this.respawns}`)
+    // Resume-şişkinlik göstergesi: respawn sonrası İLK turun input+cacheWrite'ı
+    // loglanır ([resume-cost]) — içerik-diyeti (İş 1B) gerekli mi sorusunu bu cevaplar.
+    this._logResumeCost = !!this.sessionId
     this.alive = true
     this.stdoutBuf = ''
     this.proc.stdout.on('data', (c) => this._onStdout(c))
@@ -1541,6 +1681,17 @@ class PersistentSession {
       try { this.sink.write(sseLine(ev)) } catch {}
     }
     if (ev.type === 'result') {
+      if (ev.usage) {
+        this.turnCount += 1
+        recordGlobalUsage(this.key.split(':')[0], ev.usage)
+        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: this.settings.model, usage: ev.usage })
+        if (this._logResumeCost) {
+          this._logResumeCost = false
+          const input = ev.usage.input_tokens || 0
+          const cacheWrite = ev.usage.cache_creation_input_tokens || 0
+          console.error(`[resume-cost] key=${this.key} respawn#${this.respawns} firstTurn=${Math.round((input + cacheWrite) / 1000)}k (input=${input} cacheWrite=${cacheWrite})`)
+        }
+      }
       if (typeof ev.result === 'string') this.lastResult = ev.result   // recall özeti için son yanıt
       this._finishTurn()   // tur sınırı
     }
@@ -1562,12 +1713,6 @@ class PersistentSession {
     this.lastUsed = Date.now()
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null }
     if (!this.alive || !this.proc) {
-      // Respawn öncesi: şişkin JSONL'ı --resume'dan önce kırp → cache-warm maliyeti ↓.
-      // Yalnızca process yokken; canlı process dosyaya append ettiği için yarış/bozulma olmaz.
-      if (this.sessionId) {
-        try { await trimSessionJsonl(this.sessionId) }
-        catch (e) { console.error('[session-trim-respawn] hata:', e.message) }
-      }
       this._spawn()   // ilk tur ya da idle/çökme sonrası --resume ile yeniden doğ
     }
 
@@ -1631,16 +1776,7 @@ class PersistentSession {
 
   _armIdle() {
     if (this.idleTimer) clearTimeout(this.idleTimer)
-    this.idleTimer = setTimeout(async () => {
-      if (this.sessionId) {
-        try {
-          await trimSessionJsonl(this.sessionId)
-        } catch (e) {
-          console.error('[session-trim-idle] hata:', e.message)
-        }
-      }
-      sessionPool.evict(this.key)
-    }, PERSIST_IDLE_MS)
+    this.idleTimer = setTimeout(() => sessionPool.evict(this.key), PERSIST_IDLE_MS)
   }
 
   _emitError(msg) {
@@ -1669,7 +1805,10 @@ class PersistentSession {
     this._detachSink()
     if (this.proc) {
       try { this.proc.stdin.end() } catch {}
-      try { this.proc.kill() } catch {}
+      // Süreç GRUBUNU öldür (negatif pid) → MCP çocukları da temizlenir.
+      // Grup kill başarısız olursa tekil kill'e düş.
+      try { process.kill(-this.proc.pid, 'SIGTERM') }
+      catch { try { this.proc.kill() } catch {} }
     }
     this.proc = null
     this.alive = false
@@ -1678,12 +1817,24 @@ class PersistentSession {
 }
 
 class SessionPool {
-  constructor() { this.map = new Map() }
+  constructor() {
+    this.map = new Map()
+    // Bellek bekçisi: 60 sn'de bir havuz RSS'i + sistem boş RAM'i kontrol et.
+    this.watchdog = setInterval(() => this._memWatch(), 60000)
+    if (this.watchdog.unref) this.watchdog.unref()
+  }
 
   ensure(key, opts) {
     let s = this.map.get(key)
     if (!s) {
       this._evictIfFull()
+      // Busy-starvation koruması: kurban bulunamadıysa havuz PERSIST_MAX'ı
+      // aşabilir; hard cap'te yeni oturum açmayı reddet (çağıran 429 döndürür).
+      if (this.map.size >= PERSIST_HARD_MAX) {
+        const err = new Error('Tüm oturumlar meşgul, lütfen biraz sonra tekrar dene')
+        err.code = 'POOL_BUSY'
+        throw err
+      }
       s = new PersistentSession(key, opts)
       this.map.set(key, s)
     }
@@ -1697,19 +1848,74 @@ class SessionPool {
     if (s) { s.dispose(); this.map.delete(key) }
   }
 
+  // Verilen önekle başlayan TÜM oturumları tahliye et. multiagent tile'ın rol bazlı
+  // çok parçalı anahtar ailesi (multiagent:<mediaId>:<rol>) için gerekir — sabit
+  // "prefix:mediaId" tam-anahtar tahliyesi bunları yakalayamaz.
+  evictPrefix(prefix) {
+    for (const key of [...this.map.keys()]) {
+      if (key.startsWith(prefix)) this.evict(key)
+    }
+  }
+
   // Tavan dolduysa, meşgul olmayan en eski oturumu tahliye et.
   _evictIfFull() {
     if (this.map.size < PERSIST_MAX) return
+    const victim = this._idleVictim()
+    if (victim) this.evict(victim.key)
+  }
+
+  // Meşgul olmayan en eski (LRU) oturum; yoksa null.
+  _idleVictim() {
     let victim = null
     for (const s of this.map.values()) {
       if (s.busy) continue
       if (!victim || s.lastUsed < victim.lastUsed) victim = s
     }
-    if (victim) this.evict(victim.key)
+    return victim
+  }
+
+  // Bellek bekçisi: havuz RSS toplamını ve sistem boş RAM'i ölç, eşik aşımında
+  // idle oturumları tahliye et. Busy süreç asla öldürülmez (turu bozar).
+  _memWatch() {
+    if (this.map.size === 0) return
+    let poolRss = 0
+    const parts = []
+    for (const s of this.map.values()) {
+      const mb = s.proc ? pidRssMb(s.proc.pid) : 0
+      poolRss += mb
+      parts.push(`${s.key}=${mb}MB${s.busy ? '(busy)' : ''}`)
+    }
+    const freeMb = Math.round(os.freemem() / (1024 * 1024))
+    console.error(`[pool-mem] toplam=${poolRss}MB boşRAM=${freeMb}MB oturum=${this.map.size} [${parts.join(', ')}]`)
+
+    if (freeMb < MEM_FREE_MIN_MB) {
+      // Acil fren: busy olmayan TÜM oturumları bırak.
+      const idle = [...this.map.values()].filter((s) => !s.busy)
+      if (!idle.length) { console.error('[pool-mem] UYARI: boş RAM kritik ama tüm oturumlar meşgul — evict yok'); return }
+      console.error(`[pool-mem] ACİL: boş RAM ${freeMb}MB < ${MEM_FREE_MIN_MB}MB → ${idle.length} idle oturum evict`)
+      for (const s of idle) this.evict(s.key)
+      return
+    }
+    if (poolRss > MEM_SOFT_MB) {
+      const victim = this._idleVictim()
+      if (!victim) { console.error(`[pool-mem] UYARI: havuz RSS ${poolRss}MB > ${MEM_SOFT_MB}MB ama tüm oturumlar meşgul — evict yok`); return }
+      console.error(`[pool-mem] havuz RSS ${poolRss}MB > ${MEM_SOFT_MB}MB → evict ${victim.key}`)
+      this.evict(victim.key)
+    }
   }
 }
 
 const sessionPool = new SessionPool()
+
+// HTTP uçları için ensure sarmalayıcı: hard cap (POOL_BUSY) 429 olarak döner.
+// SSE header'ları henüz yazılmadığı için düz JSON yanıt güvenli.
+function ensureSessionOr429(res, key, opts) {
+  try { return sessionPool.ensure(key, opts) }
+  catch (e) {
+    if (e.code === 'POOL_BUSY') { res.status(429).json({ error: e.message }); return null }
+    throw e
+  }
+}
 
 // ─── Sohbeti temizle: canlı oturumu kapat + sessionId'yi sıfırla ─────────────
 // Geçmiş .jsonl dosyasına dokunmaz; sessionId null'lanınca history boş döner ve
@@ -1738,42 +1944,9 @@ app.post('/api/roomchat/:mediaId/clear',    makeClearHandler('roomchat',    'roo
 app.post('/api/roomsession/:mediaId/clear', makeClearHandler('roomsession', 'roomsession', 'Oda projesi bulunamadı'))
 app.post('/api/bluprint/:mediaId/clear',    makeClearHandler('bluprint',    'bluprint',    'Blueprint bulunamadı'))
 
-// ─── Session JSONL Optimization ────────────────────────────────────────────
-// Resume sırasında geçmiş JSONL'ı gönderilir. Çok sayıda tur varsa, token overhead.
-// trimSessionJsonl: son N tur tut, öncesini sil (token tasarrufu).
-// Cache expire (5 dk sonra) yeniden gönderilince token tasarrufu için
-// son 5 tur'a sınırladık (geçmiş overhead ~15K → ~7K)
-const TRIM_MAX_TURNS = 5
-
-async function findSessionJsonl(sessionId) {
-  const projectsDir = path.join(os.homedir(), '.claude', 'projects')
-  if (!fs.existsSync(projectsDir)) return null
-  for (const projDir of fs.readdirSync(projectsDir)) {
-    const sessionFile = path.join(projectsDir, projDir, 'sessions', `${sessionId}.jsonl`)
-    if (fs.existsSync(sessionFile)) return sessionFile
-  }
-  return null
-}
-
-async function trimSessionJsonl(sessionId) {
-  const jsonlPath = await findSessionJsonl(sessionId)
-  if (!jsonlPath) return
-
-  try {
-    const content = await fs.promises.readFile(jsonlPath, 'utf8')
-    const lines = content.trim().split('\n').filter(l => l.trim())
-
-    if (lines.length <= TRIM_MAX_TURNS) return
-
-    const trimmed = lines.slice(-TRIM_MAX_TURNS)
-    const oldCount = lines.length - trimmed.length
-
-    await fs.promises.writeFile(jsonlPath, trimmed.join('\n') + '\n')
-    console.error(`[session-trim] ${path.basename(jsonlPath)}: ${lines.length}→${trimmed.length} tur (${oldCount} silindi)`)
-  } catch (e) {
-    console.error('[session-trim] hata:', e.message)
-  }
-}
+// NOT: Eski trimSessionJsonl kaldırıldı — geçmiş diyeti CLI'ın kendi
+// microcompact/auto-compact'ine bırakıldı (idle>60dk sonrası resume'da eski
+// tool_result içerikleri CLI tarafından zaten temizlenerek gönderilir).
 
 // ─── Room Session (her oda için izole proje klasörü) ─────────────────────────
 // roomsession tile, session tile'a benzer ama Claude CLI odaya özel bir proje
@@ -1887,7 +2060,8 @@ app.post('/api/ai-session/message', async (req, res) => {
   // process'e stdin'den akar → prompt cache turlar arası korunur (token tasarrufu).
   // İlk init'te yakalanan sessionId media.content'e bir kez kaydedilir (eviction/
   // çökme sonrası --resume ile geçmiş korunsun diye).
-  const sess = sessionPool.ensure(`ai-session:${mediaId}`, { settings, cwd: process.cwd() })
+  const sess = ensureSessionOr429(res, `ai-session:${mediaId}`, { settings, cwd: process.cwd() })
+  if (!sess) return
   sess.send(res, message.trim(), {
     onInit: (sessionId) => {
       prisma.media.update({
@@ -2124,11 +2298,13 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
   streamClaudeToSSE(res, [
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
+    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
     ...mcpArgs('roomchat'),
     '--dangerously-skip-permissions',
     prompt,
   ], {
     cwd: dir,
+    usageType: 'roomchat-graph',
     onEvent: (ev) => {
       if (ev.type === 'result') {
         const cur = parseSessionContent(media.content)
@@ -2186,7 +2362,10 @@ app.post('/api/roomchat/message', async (req, res) => {
   const sysTokenEstimate = Math.ceil((sys?.length || 0) / 4)
   console.log(`[roomchat] spawn: sys≈${sysTokenEstimate}tok`)
 
-  const sess = sessionPool.ensure(key, { settings, cwd: process.cwd(), sys })
+  // Faz 2 İş 2.4: roomchat kod yazmaz — oda içeriği üzerine sohbet + graphify query
+  // (Bash). Yazma tool'larının tanım yükü her cacheWrite'ta ödeniyordu; kes.
+  const sess = ensureSessionOr429(res, key, { settings, cwd: process.cwd(), sys, tools: 'Read,Glob,Grep,Bash' })
+  if (!sess) return
   sess.send(res, message.trim(), {
     onInit: (sessionId) => {
       prisma.media.update({
@@ -2327,7 +2506,8 @@ app.post('/api/roomsession/message', async (req, res) => {
     sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri (ör. Next.js) burada kurulabilir ve geliştirilebilir.`
   }
 
-  const sess = sessionPool.ensure(key, { settings, cwd: dir, sys })
+  const sess = ensureSessionOr429(res, key, { settings, cwd: dir, sys })
+  if (!sess) return
   sess.send(res, message.trim(), {
     onInit: (sessionId) => {
       prisma.media.update({
@@ -2427,26 +2607,60 @@ function removeSessionRecall(mediaId) {
   try { fs.unlinkSync(sessionRecallPath(mediaId)) } catch {}
 }
 
-// Tek-atış Claude çağrısı; SSE'ye yazmaz, son `result` metnini Promise olarak döndürür.
-// Verifier (goal-check) subagent'ı için kullanılır.
-function runClaudeCapture(args, { cwd } = {}) {
+// Tek-atış Claude çağrısı; SSE'ye yazmaz, sonucu Promise ile döndürür:
+// { text, failed, usage }. `failed` = API-düzeyi hata mesajı (limit/auth/çökme).
+// '<synthetic>' modelli assistant, CLI'ın API hatasını metin olarak basmasıdır
+// (ör. "You've hit your session limit") — gerçek model yanıtı DEĞİLDİR; bunu
+// normal çıktı sanmak loop'un hata üstüne iterasyon yakmasına yol açar.
+function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
   return new Promise((resolve) => {
-    let buf = '', result = ''
+    let buf = '', text = '', failed = null, usage = null
     let proc
-    try { proc = spawn(CLAUDE_CLI, args, { cwd: cwd || process.cwd(), env: buildSpawnEnv({}) }) }
-    catch (e) { return resolve('') }
+    try { proc = spawn(CLAUDE_CLI, args, { cwd: cwd || process.cwd(), env: buildSpawnEnv(envOverrides || {}) }) }
+    catch (e) { return resolve({ text: '', failed: e.message, usage: null }) }
     proc.stdout.on('data', (c) => {
       buf += c.toString()
       const lines = buf.split('\n'); buf = lines.pop() ?? ''
       for (const line of lines) {
         if (!line.trim()) continue
-        try { const ev = JSON.parse(line); if (ev.type === 'result' && typeof ev.result === 'string') result = ev.result } catch {}
+        let ev
+        try { ev = JSON.parse(line) } catch { continue }
+        if (ev.type === 'assistant' && ev.message?.model === '<synthetic>') {
+          const t = (ev.message.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ')
+          failed = t || 'API hatası (synthetic yanıt)'
+        }
+        if (ev.type === 'result') {
+          if (typeof ev.result === 'string') text = ev.result
+          if (ev.usage) usage = ev.usage
+          if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
+            failed = failed || (text ? text.slice(0, 200) : `sonuç hatası (${ev.subtype || 'bilinmiyor'})`)
+          }
+        }
       }
     })
     proc.stderr.on('data', (c) => console.error('[loop-verify stderr]', c.toString().slice(0, 200)))
-    proc.on('close', () => resolve(result))
-    proc.on('error', () => resolve(''))
+    proc.on('close', () => {
+      recordGlobalUsage(usageType, usage)
+      logTurnUsage({ tile: usageType, key: usageType, turn: 1, model: cliArgValue(args, '--model'), usage })
+      resolve({ text, failed, usage })
+    })
+    proc.on('error', (e) => resolve({ text: '', failed: e.message, usage: null }))
   })
+}
+
+// Kümülatif token muhasebesi: her turun/spawn'ın usage'ını recall'a işler.
+// Amaç görünürlük (UI'da tüketim) + bütçe freni (MultiAgentRunner).
+function addUsage(rec, u) {
+  if (!u) return
+  const t = rec.usage || (rec.usage = { calls: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, processedTotal: 0 })
+  t.calls += 1
+  t.input += u.input_tokens || 0
+  t.cacheWrite += u.cache_creation_input_tokens || 0
+  t.cacheRead += u.cache_read_input_tokens || 0
+  t.output += u.output_tokens || 0
+  // İşlenen toplam: oturum penceresini tüketen asıl büyüklük (faz1 İş 1.2).
+  t.processedTotal = (t.processedTotal || 0) + (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+    + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0)
 }
 
 // Verifier çıktısını güvenli parse et: JSON bulunamazsa met:false (güvenli taraf).
@@ -2462,14 +2676,28 @@ function parseVerdict(text) {
 }
 
 // Doğrulanabilir hedefi kontrol eden ayrı (ucuz) Claude ajanı.
+// --max-turns tavanı: dosya okuma sarmalını sınırlar (token freni).
+// Doğrulama "dosyalara bak, tek satır JSON döndür" işi — pahalı tile modeliyle
+// koşturmak israf; her yerde haiku'ya sabit.
+const VERIFY_MODEL = 'claude-haiku-4-5-20251001'
 async function verifyGoal({ goal, dir, model }) {
-  const vModel = cliModel(model || 'claude-haiku-4-5-20251001')
-  const prompt = `Sen bir doğrulama ajanısın. Aşağıdaki hedefin ŞU AN karşılanıp karşılanmadığını değerlendir.\n\n## Hedef\n${goal}\n\n## Proje klasörü\n${dir}\nKlasördeki dosyaları oku/incele. Sadece gerçekten doğrulayabildiğini "met:true" say.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"met": true|false, "reason": "kısa gerekçe", "remaining": ["kalan iş", ...]}`
-  const out = await runClaudeCapture([
-    '--print', '--output-format=stream-json', '--verbose',
+  const vModel = cliModel(model || VERIFY_MODEL)
+  const prompt = `Sen bir doğrulama ajanısın. Aşağıdaki hedefin ŞU AN karşılanıp karşılanmadığını değerlendir.\n\n## Hedef\n${goal}\n\n## Proje klasörü\n${dir}\nKlasördeki dosyaları oku/incele. node_modules, dist, .git gibi bağımlılık/üretim klasörlerini İNCELEME. Sadece gerçekten doğrulayabildiğini "met:true" say.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"met": true|false, "reason": "kısa gerekçe", "remaining": ["kalan iş", ...]}`
+  const { text, failed, usage } = await runClaudeCapture([
+    '--print', '--output-format=stream-json', '--verbose', '--max-turns', '12',
+    // Doğrulayıcı salt-okur (+ test koşturabilsin diye Bash): tool tanım yükü ve
+    // yanlışlıkla dosya değiştirme riski birlikte iner (plan.md P2-B).
+    '--tools', 'Read,Glob,Grep,Bash',
+    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1: prefix sabit → spawn'lar arası cache-hit
     '--model', vModel, ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
-  ], { cwd: dir })
-  return parseVerdict(out)
+  ], { cwd: dir, usageType: 'verify', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+  // API-düzeyi hata veya boş çıktı: "hedef karşılanmadı" DEĞİL, altyapı arızası.
+  // error:true dönen verdict loop'u iterasyon yakmadan durdurur (matbaa vakası:
+  // limit dolunca 8 iterasyon boşa dönmüştü).
+  if (failed || !text.trim()) {
+    return { met: false, reason: failed || 'doğrulayıcı boş yanıt verdi', remaining: [], error: true, usage }
+  }
+  return { ...parseVerdict(text), usage }
 }
 
 // İş turunu mevcut roomsession PersistentSession'ı üzerinden sürmek için proxy sink.
@@ -2479,6 +2707,8 @@ function makeTurnSink(getClientSink) {
   let resolveDone
   const done = new Promise((r) => { resolveDone = r })
   let summary = ''
+  let failure = null   // API-düzeyi hata (limit vb.) — tur "başarılı" sayılmamalı
+  let usage = null     // turun result olayındaki token kullanımı (muhasebe için)
   const sink = {
     setHeader() {}, flushHeaders() {},
     write(chunk) {
@@ -2489,7 +2719,14 @@ function makeTurnSink(getClientSink) {
           const ev = JSON.parse(s.slice(6))
           if (ev.type === 'assistant') {
             const t = (ev.message?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ')
-            if (t) summary = t
+            if (ev.message?.model === '<synthetic>') failure = t || 'API hatası (synthetic yanıt)'
+            else if (t) summary = t
+          }
+          if (ev.type === 'result') {
+            if (ev.usage) usage = ev.usage
+            if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
+              failure = failure || String(ev.result || ev.subtype || 'bilinmeyen tur hatası').slice(0, 200)
+            }
           }
         }
       } catch {}
@@ -2500,7 +2737,7 @@ function makeTurnSink(getClientSink) {
     end() { resolveDone() },
     on() {},
   }
-  return { sink, done: done.then(() => summary) }
+  return { sink, done: done.then(() => ({ summary, failure, usage })) }
 }
 
 // Tek mediaId için tekil otonom loop sürücüsü (PersistentSession desenine analog).
@@ -2564,7 +2801,10 @@ class LoopRunner {
         if (this.aborted) break
 
         this._emit({ type: 'loop_verifying', iteration: rec.iteration + 1 })
-        const verdict = await verifyGoal({ goal: this.spec.goal, dir: this.dir, model: this.settings.model })
+        const verdict = await this._verifyTurn(rec)
+        // Altyapı arızası (limit/çökme): iterasyon yakmadan dur — recall korunur,
+        // limit yenilenince aynı yerden devam edilir.
+        if (verdict.error) throw new Error(`Doğrulayıcı çalıştırılamadı: ${verdict.reason}`)
 
         rec.iteration += 1
         rec.currentStep = (turnText || '').slice(0, 200)
@@ -2591,6 +2831,13 @@ class LoopRunner {
     }
   }
 
+  // Doğrulama turu — subclass, gereksiz spawn'ı atlamak için override edebilir.
+  async _verifyTurn(rec) {
+    const verdict = await verifyGoal({ goal: this.spec.goal, dir: this.dir, model: VERIFY_MODEL })
+    addUsage(rec, verdict.usage)
+    return verdict
+  }
+
   async _workTurn(rec) {
     const key = `roomsession:${this.mediaId}`
     let sys
@@ -2598,6 +2845,7 @@ class LoopRunner {
       sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${this.dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri burada kurulabilir ve geliştirilebilir.`
     }
     const sess = sessionPool.ensure(key, { settings: this.settings, cwd: this.dir, sys })
+    const respawns0 = sess.respawns   // koşu-başı respawn muhasebesi (faz1 İş 1.4)
     const { sink, done } = makeTurnSink(() => this.clientSink)
     sess.send(sink, this._workPrompt(rec), {
       onInit: (sessionId) => {
@@ -2607,7 +2855,11 @@ class LoopRunner {
         }).catch((err) => console.error('[loop] sessionId kayıt hatası:', err.message))
       },
     })
-    return await done
+    const turn = await done
+    addUsage(rec, turn.usage)
+    rec.respawns = (rec.respawns || 0) + Math.max(0, sess.respawns - respawns0)
+    if (turn.failure) throw new Error(`İş turu başarısız: ${turn.failure}`)
+    return turn.summary
   }
 
   _workPrompt(rec) {
@@ -2699,6 +2951,545 @@ app.get('/api/roomsession/:mediaId/loop/status', async (req, res) => {
   const recall = readRecall(media.roomId, req.params.mediaId)
   const runner = loopPool.get(String(req.params.mediaId))
   res.json({ recall: recall || null, running: !!(runner && runner.running) })
+})
+
+// ─── MultiAgent tile (fikir → mimar → orkestratör + worker ekibi → otonom proje) ──
+// Kullanıcı bir proje fikri yazar; Architect (opus, tek sefer) stack + ekip + görev
+// manifesti üretir. Loop başlayınca her iterasyonda tek-atış Orchestrator (sonnet,
+// ucuz) sıradaki görevi ve rolü seçer; ilgili worker kendi izole PersistentSession'ında
+// (multiagent:<mediaId>:<rol>) görevi yapar; bağımsız verifier (haiku) hedefi denetler.
+// Mevcut LoopRunner motoru (recall + SSE + verify) subclass ile genişletilir.
+// Agent profilleri repo içi .claude/agents/ altından okunur; runtime'da kurulum yok —
+// eksik profil loop başlamadan hata döner (güvenlik + öngörülebilirlik).
+
+const AGENTS_DIR = path.join(__dirname, '.claude', 'agents')
+
+// Bütçe freni: bir multiagent projesinin toplam üretim (output) token tavanı.
+// Output, hem API maliyetinde hem abonelik limitinde en ağır kalemdir; maxIterations
+// bu tavanı aşan tek bir azgın worker'ı durduramaz — bu sabit ikinci sigortadır.
+const MA_MAX_OUTPUT_TOKENS = 200_000
+// İşlenen TOPLAM token tavanı (input+cacheWrite+cacheRead+output). Kullanıcının
+// derdi dolar değil oturum penceresi: cacheRead de pencereyi tüketir (plan.md).
+// Referans: düzeltme öncesi basit iş 2.73M yakmıştı; sağlıklı koşu 150-250K bandında.
+const MA_MAX_TOTAL_TOKENS = 1_500_000
+// Worker'ların built-in tool seti: Task (alt-ajan çarpanı), WebSearch/WebFetch
+// (bağlam şişirici) bilinçli olarak dışarıda (plan.md P2-B).
+const MA_WORKER_TOOLS = 'Read,Edit,Write,Bash,Glob,Grep'
+// Spawn başına sert $ tavanı — tek görev turu bunun çok altında kalır; aşan tur
+// kaçaktır ve CLI tarafında kesilir (loop hatayı yakalar, recall korunur).
+const MA_WORKER_BUDGET_USD = 1.5
+
+// .claude/agents/<name>.md profilini oku: frontmatter'dan model, gövde system prompt.
+// Ad, path traversal'a karşı [a-zA-Z0-9_-] ile sınırlanır.
+function readAgentProfile(name) {
+  const safe = String(name || '').replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!safe) return null
+  let raw
+  try { raw = fs.readFileSync(path.join(AGENTS_DIR, `${safe}.md`), 'utf8') } catch { return null }
+  let body = raw, model = null
+  const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+  if (fm) {
+    body = raw.slice(fm[0].length)
+    const mm = fm[1].match(/^model:\s*(\S+)/m)
+    if (mm) model = mm[1]
+  }
+  body = body.trim()
+  return body ? { name: safe, model, body } : null
+}
+
+function listAgentProfiles() {
+  try { return fs.readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)) }
+  catch { return [] }
+}
+
+// Manifest'te referans verilen ama diskte olmayan profiller.
+function missingAgentProfiles(manifest) {
+  const names = [...new Set((manifest?.team || []).map(t => t.agentProfile))]
+  return names.filter(p => !readAgentProfile(p))
+}
+
+// Görevlere kararlı, okunur ID ata (ör. BE-01): eşleştirme kırılgan metin yerine ID ile
+// yapılır — orkestratör görev metnini yeniden yazarsa yanlış görevin "done" işaretlenip
+// iterasyon yakılmasını önler. Eski tile'larda kayıtlı düz string görevler de normalize edilir.
+function assignTaskIds(team) {
+  const used = new Set()
+  for (const t of team) {
+    const base = String(t.role || '').replace(/[^a-zA-ZğüşıöçĞÜŞİÖÇ0-9]/g, '').slice(0, 3).toUpperCase() || 'AG'
+    let a = base
+    for (let k = 2; used.has(a); k++) a = `${base}${k}`
+    used.add(a)
+    t.tasks = (Array.isArray(t.tasks) ? t.tasks : []).map((x, i) => {
+      const id = `${a}-${String(i + 1).padStart(2, '0')}`
+      return typeof x === 'string' ? { id, text: x } : { id: String(x?.id || id), text: String(x?.text ?? '').trim() }
+    }).filter(x => x.text)
+  }
+  return team
+}
+
+// Architect çıktısından manifesti güvenli parse et; geçersiz/eksikse null (güvenli taraf).
+function parseManifest(text) {
+  const m = String(text || '').match(/\{[\s\S]*\}/)
+  if (!m) return null
+  let j
+  try { j = JSON.parse(m[0]) } catch { return null }
+  if (!j || typeof j.goal !== 'string' || !j.goal.trim() || !Array.isArray(j.team)) return null
+  const team = j.team.map(t => ({
+    role: String(t?.role || '').trim(),
+    agentProfile: String(t?.agentProfile || '').trim(),
+    // Model kelepçesi: worker'lar yalnız sonnet/haiku olabilir — mimar yanlışlıkla
+    // opus atarsa maliyet patlar (opus ≈ 5x sonnet).
+    model: ['sonnet', 'haiku'].includes(String(t?.model || '').trim()) ? String(t.model).trim() : 'sonnet',
+    tasks: Array.isArray(t?.tasks) ? t.tasks.map(x => String(x).trim()).filter(Boolean) : [],
+  })).filter(t => t.role && t.agentProfile && t.tasks.length)
+  if (!team.length) return null
+  assignTaskIds(team)   // string[] → {id, text}[] (İş 3: kararlı görev ID'leri)
+  // Ölü koşu freni: her görev ~1 iterasyon + review + kurtarma payı. Mimarın verdiği
+  // değer bundan küçükse koşu bitiremeden 'maxed' olur ve TÜM token boşa gider.
+  // Varsayılan da minIter'dir (eski sabit 8 küçük manifestleri şişiriyordu — plan.md P0-B).
+  const taskCount = team.reduce((n, t) => n + t.tasks.length, 0)
+  const minIter = taskCount + 3
+  return {
+    stack: Array.isArray(j.stack) ? j.stack.map(String) : [],
+    goal: j.goal.trim(),
+    maxIterations: Math.max(minIter, Math.min(20, parseInt(j.maxIterations, 10) || minIter)),
+    projectBrief: String(j.projectBrief || '').trim(),
+    team,
+  }
+}
+
+// ── P0-A (plan.md): mimardan ÖNCE deterministik iş-boyutu kapısı ─────────────
+// Basit/tek-artifact fikirler multiagent'a hiç girmez: Opus mimar spawn'ı atlanır,
+// tek rol + tek görevlik sentetik manifest kurulur → 1 iş turu + 1 Haiku verify.
+// Ölçülen gerekçe: aynı tek-sayfa iş multiagent'ta 2.73M, tek turda ~30K token.
+// Kalite sıfatları ("awwwards'a layık", "şık") karmaşıklık DEĞİLDİR — routing'i etkilemez.
+const IDEA_COMPLEX_RE = /backend|api\b|veri\s*taban|database|sqlite|postgres|prisma|auth|login|üyelik|oturum\s*aç|ödeme|payment|e-?ticaret|e-?commerce|sepet|dashboard|panel|crud|websocket|gerçek\s*zaman|realtime|migration|docker|deploy|çok\s*sayfa|multi-?page|mobil\s*uygulama|react|next\.?js|vue|svelte|express|server|sunucu|oyun|game|3d|three\.?js|test\s*yaz|entegrasyon/i
+const IDEA_SIMPLE_RE = /tek\s*(sayfa|dosya)|single\s*page|one-?page|landing|kartvizit|portfoly|portfolio|basit|statik|static|bileşen|component|html\s*site|index\.html/i
+
+function classifyIdeaScale(idea) {
+  const t = String(idea || '')
+  if (IDEA_COMPLEX_RE.test(t)) return 'team'
+  if (IDEA_SIMPLE_RE.test(t)) return 'direct'
+  // Sinyalsiz kısa fikir ≈ küçük iş. Yanlış sınıflamada güvenlik ağı: verify
+  // "eksik" derse mevcut kurtarma akışı aynı role ek görev atayarak yükseltir.
+  return t.length <= 140 ? 'direct' : 'team'
+}
+
+// Tek rollük sentetik manifest — mimar (Opus) hiç çağrılmaz. Profil yoksa null
+// döner ve akış normal mimar yoluna düşer.
+function directManifest(idea) {
+  const profileName = ['web-frontend-expert', 'generalist-developer'].find(n => readAgentProfile(n))
+  if (!profileName) return null
+  const team = [{
+    role: 'gelistirici',
+    agentProfile: profileName,
+    model: 'sonnet',
+    tasks: [`Fikri tek seferde, eksiksiz ve çalışır durumda inşa et: ${idea}`],
+  }]
+  assignTaskIds(team)
+  return {
+    stack: [],
+    goal: `"${idea}" fikri proje klasöründe çalışır durumda: gerekli dosya(lar) mevcut, açıldığında/çalıştırıldığında hata yok ve fikirdeki temel işlevlerin hepsi yerinde.`,
+    maxIterations: 4,   // 1 görev + kurtarma payı (review direct'te atlanır)
+    projectBrief: String(idea || '').trim(),
+    direct: true,
+    team,
+  }
+}
+
+// Manifest güdümlü çok-ajanlı loop: LoopRunner'ın iş turu "orkestratör seçer →
+// worker yapar" olarak değişir; verify/recall/SSE mekanikleri aynen miras alınır.
+// spec = { goal, maxIterations, manifest }
+class MultiAgentRunner extends LoopRunner {
+  // Ortak tek oturum yok; rol oturumları rec.agentSessions'ta tutulur.
+  _sessionId() { return null }
+
+  // Manifest görev listesini rec.tasks'a tohumla (ilk çalıştırma veya manifest değişimi).
+  // Görev/hedef değişince review bayrağı da sıfırlanır; rol oturumları korunur.
+  _seedTasks(rec) {
+    const manifest = this.spec.manifest
+    const mHash = JSON.stringify([manifest.goal, manifest.team.map(t => [t.role, t.tasks.map(x => [x.id, x.text])])])
+    rec.agentSessions = rec.agentSessions || {}
+    if (rec.manifestHash === mHash && Array.isArray(rec.tasks)) return
+    rec.manifestHash = mHash
+    rec.tasks = []
+    for (const m of manifest.team) for (const t of m.tasks) rec.tasks.push({ id: t.id, role: m.role, task: t.text, status: 'pending' })
+    rec.reviewDone = false
+    rec.review = null
+    rec.activeRole = null
+  }
+
+  // Sıradaki görevi seç. TOKEN FRENİ: manifest, mimar tarafından bağımlılık
+  // sırasıyla üretilir — bekleyen görev varken LLM'e sormak gereksizdir; ilk
+  // bekleyeni doğrudan al (iterasyon başına bir sonnet spawn'ı ≈ 15-25k token
+  // tasarrufu; Claude Code system prompt'u her spawn'da yeniden ödenir).
+  // LLM orkestratör yalnız kurtarma durumunda çalışır: tüm görevler bitti ama
+  // hedef karşılanmadı → verdict'teki kalan işlerden birini uygun role atar.
+  async _orchestrate(rec) {
+    const manifest = this.spec.manifest
+    const pending = rec.tasks.filter(t => t.status === 'pending')
+    if (pending.length) return { nextRole: pending[0].role, task: pending[0].task, taskId: pending[0].id }
+    const remaining = rec.lastCheck && !rec.lastCheck.met ? (rec.lastCheck.remaining || []) : []
+    if (!remaining.length) return null
+
+    const doneList = rec.tasks.filter(t => t.status === 'done').map(t => `- [${t.role}] ${t.task}`).join('\n') || '- (yok)'
+    const p = `Sen çok-ajanlı bir yazılım projesinin orkestratörüsün. Tüm planlı görevler bitti ama hedef doğrulanamadı; kalan işlerden TEK birini en uygun role somut görev olarak ata.\n\n## Proje\n${manifest.projectBrief || manifest.goal}\n\n## Ekip rolleri\n${manifest.team.map(m => `- ${m.role}`).join('\n')}\n\n## Tamamlanan görevler\n${doneList}\n\n## Doğrulamada kalan işler\nGerekçe: ${rec.lastCheck.reason}\n${remaining.map(r => `- ${r}`).join('\n')}\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"nextRole": "<rol>", "task": "<somut görev>"}`
+    const { text, failed, usage } = await runClaudeCapture([
+      '--print', '--output-format=stream-json', '--verbose', '--max-turns', '4',
+      '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
+      '--model', cliModel('sonnet'), ...mcpArgs('orchestrate'), '--dangerously-skip-permissions', p,
+    ], { cwd: this.dir, usageType: 'orchestrate', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+    addUsage(rec, usage)
+    if (failed) throw new Error(`Orkestratör çalıştırılamadı: ${failed}`)
+    const m = (text || '').match(/\{[\s\S]*\}/)
+    if (m) {
+      try {
+        const j = JSON.parse(m[0])
+        const role = String(j.nextRole || '').trim(), task = String(j.task || '').trim()
+        if (task && manifest.team.some(x => x.role === role)) return { nextRole: role, task }
+      } catch {}
+    }
+    // Bozuk yanıt: ilk kalan işi ilk role ata — loop takılmasın.
+    return { nextRole: manifest.team[0].role, task: String(remaining[0]) }
+  }
+
+  // Worker turu — STATELESS EPOCH (plan.md P1-B): her GÖREV taze bağlamla başlar.
+  // Rol geçmişini görevden göreve --resume etmek cacheRead'i kadratik büyütür
+  // (ölçüm: aynı tek-sayfa iş için 2.46M cacheRead). Dosya sistemi zaten doğruluk
+  // kaynağı; rolün önceki işleri kısa roleState özeti olarak prompt'a girer.
+  // Tek istisna: AYNI görev yarıda kaldıysa (çökme/limit) o görevin oturumuna
+  // --resume edilir — çökme dayanıklılığı korunur.
+  async _workerTurn(rec, member, task, iterNo, taskId = null) {
+    const manifest = this.spec.manifest
+    const profile = readAgentProfile(member.agentProfile)
+    if (!profile) throw new Error(`Agent profili eksik: ${member.agentProfile}`)
+    const key = `multiagent:${this.mediaId}:${member.role}`
+
+    rec.agentTaskInProgress = rec.agentTaskInProgress || {}
+    const taskKey = taskId || String(task).slice(0, 80)   // kurtarma görevleri ID'siz olabilir
+    const resumeSameTask = rec.agentTaskInProgress[member.role] === taskKey
+    if (!resumeSameTask) {
+      sessionPool.evict(key)                    // sıcak süreç varsa geçmişiyle birlikte kapat
+      rec.agentSessions[member.role] = null     // yeni epoch: --resume edilmesin
+      rec.agentTaskInProgress[member.role] = taskKey
+      writeRecall(this.roomId, this.mediaId, rec)
+    }
+
+    let sys
+    if (!sessionPool.get(key)) {
+      sys = `${profile.body}\n\nProje özeti: ${manifest.projectBrief || manifest.goal}\nÇalışma klasörün: ${this.dir}. Tüm dosyaları bu klasörün içinde oluştur ve düzenle; dışına çıkma.`
+    }
+    const settings = {
+      sessionId: rec.agentSessions[member.role] || null,
+      model: member.model || profile.model || 'sonnet',
+      effort: 'normal', permissionMode: 'bypassPermissions',
+    }
+    // maxTurns: normal işi kesmeyecek kadar cömert, patolojik döngüyü (aynı dosyayı
+    // defalarca baştan yazma) durduracak mekanik tavan — yalnız multiagent worker'da.
+    // tools/maxBudgetUsd: plan.md P2 — tool tanım yükü ve kaçak koşu sigortası.
+    const sess = sessionPool.ensure(key, {
+      settings, cwd: this.dir, sys,
+      maxTurns: manifest.direct ? 20 : 30,
+      // Rol bazlı tool seti (Faz 2 İş 2.4): review gibi dar roller member.tools ile
+      // daha da kısılır; varsayılan worker seti MA_WORKER_TOOLS.
+      tools: member.tools || MA_WORKER_TOOLS,
+      maxBudgetUsd: MA_WORKER_BUDGET_USD,
+    })
+    const respawns0 = sess.respawns   // koşu-başı respawn muhasebesi (faz1 İş 1.4)
+    const { sink, done } = makeTurnSink(() => this.clientSink)
+    let p = `# Görev (iterasyon ${iterNo}/${rec.maxIterations})\nRolün: ${member.role}\nGörev: ${task}\n`
+    // roleState: taze bağlama rolün tamamlanan işlerinin kısa özeti (dosyalar diskte).
+    const doneByRole = rec.tasks.filter(t => t.role === member.role && t.status === 'done')
+    if (doneByRole.length) {
+      p += `\nBu rolün önceki görevleri (TAMAMLANDI — çıktıları çalışma klasöründe):\n${doneByRole.map(t => `- ${t.task}`).join('\n')}\nİşin, diskteki bu mevcut durumun devamıdır; önce ilgili dosyalara bak.\n`
+    }
+    if (rec.lastCheck && !rec.lastCheck.met && rec.lastCheck.remaining?.length) {
+      p += `\nSon doğrulamada eksik bulunanlar:\n${rec.lastCheck.remaining.map(r => `- ${r}`).join('\n')}\n`
+    }
+    p += `\nOtonom çalış: soru sorma, onay bekleme, AskUserQuestion/ExitPlanMode kullanma. Dosyaları doğrudan oluştur/düzenle; açıklama değil çalışan sonuç üret.`
+    // Token disiplini: output token en pahalı kalem (matbaa vakası: tek worker 63k
+    // output — style.css iki kez baştan yazılmıştı). Tek-sahip kuralı: plan.md P1-A.
+    p += `\nMaliyet disiplini: SADECE bu görevin kapsamındaki dosyalara dokun. Bir dosyayı baştan yazmayı (full-file write) en fazla BİR kez yap: dosya zaten varsa asla yeniden yazma, Edit ile hedefli değişiklik yap. Başka rolün sahibi olduğu dosyayı yeniden yazma; gerekiyorsa küçük Edit'le düzelt. Dosya içeriğini yanıtında tekrarlama. Bittiğinde ne yaptığını en fazla 2-3 cümleyle özetle.`
+    sess.send(sink, p, {
+      onInit: (sessionId) => {
+        rec.agentSessions[member.role] = sessionId
+        writeRecall(this.roomId, this.mediaId, rec)   // aynı görev çökerse --resume edilebilsin
+      },
+    })
+    const turn = await done
+    addUsage(rec, turn.usage)
+    rec.respawns = (rec.respawns || 0) + Math.max(0, sess.respawns - respawns0)
+    // Limit/API arızasında turu "başarılı" sayma: görev done işaretlenmez, loop
+    // status=error ile durur, recall korunur → limit yenilenince devam edilir.
+    if (turn.failure) throw new Error(`Worker turu başarısız (${member.role}): ${turn.failure}`)
+    // Epoch kapanışı: görev bitti — süreç ve oturum geçmişi sonraki göreve taşınmaz.
+    rec.agentTaskInProgress[member.role] = null
+    rec.agentSessions[member.role] = null
+    sessionPool.evict(key)
+    return turn.summary
+  }
+
+  // Token freni: bekleyen görev veya yapılmamış review varken doğrulayıcı spawn etme —
+  // bitmediğini zaten biliyoruz. Yalnız tüm işler + review bittikten sonra gerçek doğrula.
+  async _verifyTurn(rec) {
+    const pending = (rec.tasks || []).filter(t => t.status === 'pending')
+    const reviewPending = !rec.reviewDone && !!readAgentProfile('code-reviewer')
+    if (pending.length || reviewPending) {
+      return { met: false, reason: pending.length ? `${pending.length} görev bekliyor` : 'inceleme bekleniyor', remaining: [], usage: null }
+    }
+    return super._verifyTurn(rec)
+  }
+
+  async _workTurn(rec) {
+    const iterNo = rec.iteration + 1
+    this._seedTasks(rec)
+
+    // Bütçe frenleri (maxIterations'tan bağımsız sigortalar):
+    // 1) kümülatif üretim (output) — en pahalı kalem;
+    // 2) işlenen TOPLAM token — oturum penceresini tüketen asıl büyüklük (plan.md P2-A).
+    if ((rec.usage?.output || 0) >= MA_MAX_OUTPUT_TOKENS) {
+      throw new Error(`Token bütçe freni: üretim ${rec.usage.output.toLocaleString('tr')} token tavanı aştı (${MA_MAX_OUTPUT_TOKENS.toLocaleString('tr')}). Hedefi küçült veya yeni proje başlat.`)
+    }
+    const u = rec.usage || {}
+    const totalProcessed = (u.input || 0) + (u.cacheWrite || 0) + (u.cacheRead || 0) + (u.output || 0)
+    if (totalProcessed >= MA_MAX_TOTAL_TOKENS) {
+      throw new Error(`Token bütçe freni: işlenen toplam ${totalProcessed.toLocaleString('tr')} token tavanı aştı (${MA_MAX_TOTAL_TOKENS.toLocaleString('tr')}). Koşu durduruldu — recall korunuyor; hedefi küçültüp devam et.`)
+    }
+
+    // Tüm manifest görevleri bittiyse son adım: code-review turu (bir kez, hard-coded).
+    // Direct fast-path'te review atlanır (plan.md P0-A: 1 iş turu + 1 verify yeter).
+    const pending = rec.tasks.filter(t => t.status === 'pending')
+    if (!pending.length && this.spec.manifest.direct && !rec.reviewDone) rec.reviewDone = true
+    if (!pending.length && !rec.reviewDone && readAgentProfile('code-reviewer')) {
+      rec.reviewDone = true
+      rec.activeRole = 'code-reviewer'
+      writeRecall(this.roomId, this.mediaId, rec)
+      this._emit({ type: 'ma_task', iteration: iterNo, role: 'code-reviewer', task: 'Projeyi hedefe göre gözden geçir, kritik hataları düzelt' })
+      // Faz 2 İş 2.4: review rolü full-file Write alamaz — prompt zaten "Edit ile
+      // hedefli düzelt" diyor; tool seviyesinde de kilitle (Write/Bash yok).
+      const summary = await this._workerTurn(rec,
+        { role: 'code-reviewer', agentProfile: 'code-reviewer', model: 'sonnet', tools: 'Read,Glob,Grep,Edit' },
+        `Projeyi hedefe göre gözden geçir: "${this.spec.goal}". Bulduğun kritik hataları doğrudan ama Edit ile hedefli düzelt — dosyaları baştan yazma. Kritik olmayan iyileştirmeleri yalnız kısaca listele, uygulama.`, iterNo, 'REVIEW')
+      rec.review = (summary || '').slice(0, 1500)
+      rec.activeRole = null
+      this._emit({ type: 'ma_task_done', iteration: iterNo, role: 'code-reviewer', task: 'review', summary: (summary || '').slice(0, 300) })
+      return `[code-reviewer] ${summary}`
+    }
+
+    // 1) Orkestratör sıradaki görevi seçer.
+    this._emit({ type: 'ma_orchestrating', iteration: iterNo })
+    const choice = await this._orchestrate(rec)
+    if (!choice || this.aborted) return choice ? '' : 'Bekleyen görev kalmadı.'
+    const member = this.spec.manifest.team.find(m => m.role === choice.nextRole)
+    rec.activeRole = choice.nextRole
+    rec.currentStep = `[${choice.nextRole}] ${choice.task}`.slice(0, 200)
+    writeRecall(this.roomId, this.mediaId, rec)   // reconnect'te aktif rol görünsün
+    this._emit({ type: 'ma_task', iteration: iterNo, role: choice.nextRole, task: choice.task, taskId: choice.taskId || null })
+
+    // 2) Worker görevi yapar (taskId → stateless epoch'ta aynı-görev-resume anahtarı).
+    const summary = await this._workerTurn(rec, member, choice.task, iterNo, choice.taskId || null)
+
+    // 3) Görevi tamamlandı işaretle: önce kararlı ID, yoksa rolün ilk bekleyeni
+    //    (kurtarma görevi ID'sizdir); hiçbiri yoksa ad-hoc kayıt (RC-<iter>).
+    const hit = (choice.taskId ? rec.tasks.find(t => t.status === 'pending' && t.id === choice.taskId) : null)
+      || rec.tasks.find(t => t.status === 'pending' && t.role === choice.nextRole)
+    if (hit) { hit.status = 'done'; hit.iter = iterNo }
+    else rec.tasks.push({ id: `RC-${iterNo}`, role: choice.nextRole, task: choice.task, status: 'done', iter: iterNo, adhoc: true })
+    rec.activeRole = null
+    this._emit({ type: 'ma_task_done', iteration: iterNo, role: choice.nextRole, task: choice.task, summary: (summary || '').slice(0, 300) })
+    return `[${choice.nextRole}] ${choice.task} — ${summary}`
+  }
+
+  // Loop kalıcı bitince (met/maxed) rol oturumlarını kapat — havuzu meşgul etmesinler.
+  // 'stopped'ta kapatılmaz: kullanıcı kısa sürede devam ettirebilir (idle timer zaten var).
+  async start() {
+    await super.start()
+    const rec = readRecall(this.roomId, this.mediaId)
+    if (rec && (rec.status === 'met' || rec.status === 'maxed')) {
+      sessionPool.evictPrefix(`multiagent:${this.mediaId}:`)
+    }
+  }
+}
+
+// MultiAgent tile oluştur — content: { model, effort, permissionMode, idea, status }
+app.post('/api/multiagent', async (req, res) => {
+  const { tileId, width, height, position, rotation, model, effort, permissionMode, idea } = req.body
+  const id = BigInt(Date.now())
+  try {
+    const pos = JSON.parse(position)
+    const rot = JSON.parse(rotation)
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId: String(tileId),
+        type: 'multiagent',
+        width: parseFloat(width) || 6,
+        height: parseFloat(height) || 4,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+        content: formatSessionContent({
+          model: model || 'claude-fable-5', effort: effort || 'normal',
+          permissionMode: permissionMode || 'bypassPermissions',
+          idea: String(idea || ''), status: 'draft',
+        }),
+      },
+    })
+    try { fs.mkdirSync(roomProjectDir(activeRoomId), { recursive: true }) } catch {}
+    res.json(serializeMedia(media))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Architect fazı (SSE, tek atış): fikri analiz eder, manifest üretir, tile'a kaydeder.
+// Akışta assistant olayları (mimarın düşünüşü) + sonda architect_done { manifest }.
+app.post('/api/multiagent/:mediaId/architect', async (req, res) => {
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } }) } catch {}
+  if (!media || media.type !== 'multiagent') return res.status(404).json({ error: 'MultiAgent tile bulunamadı' })
+
+  const settings = parseSessionContent(media.content)
+  const idea = String(req.body?.idea || settings.idea || '').trim()
+  if (!idea) return res.status(400).json({ error: 'Proje fikri gerekli' })
+
+  // P0-A: basit iş kapısı — Opus mimar spawn'ı ve çok-rol manifesti atlanır.
+  if (classifyIdeaScale(idea) === 'direct') {
+    const manifest = directManifest(idea)
+    if (manifest) {
+      try {
+        await prisma.media.update({
+          where: { id: BigInt(req.params.mediaId) },
+          data: { content: formatSessionContent({ ...settings, idea, status: 'planned', manifest }) },
+        })
+      } catch (err) { return res.status(500).json({ error: err.message }) }
+      setSSEHeaders(res)
+      res.write(sseLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Basit iş tespit edildi — mimar atlandı: tek rol, tek görevlik hızlı plan kuruldu (token tasarrufu).' }] } }))
+      res.write(sseLine({ type: 'architect_done', manifest, missingProfiles: missingAgentProfiles(manifest), direct: true }))
+      res.write('data: {"type":"done"}\n\n')
+      return res.end()
+    }
+  }
+
+  const profile = readAgentProfile('project-architect')
+  if (!profile) return res.status(400).json({ error: 'project-architect profili eksik (.claude/agents/project-architect.md)' })
+
+  const dir = roomProjectDir(media.roomId)
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+
+  // Fikri hemen kalıcılaştır — SSE kopsa da draft korunur.
+  try {
+    await prisma.media.update({
+      where: { id: BigInt(req.params.mediaId) },
+      data: { content: formatSessionContent({ ...settings, idea, status: 'draft' }) },
+    })
+  } catch {}
+
+  const workers = listAgentProfiles().filter(n => n !== 'project-architect')
+  const prompt = `Proje fikri:\n${idea}\n\nKurulu agent profilleri (agentProfile alanında SADECE bunları kullan):\n${workers.map(w => `- ${w}`).join('\n')}\n\nSistem yönergendeki formatta SADECE JSON manifest üret. Bana soru sorma, onay bekleme.`
+
+  streamClaudeToSSE(res, [
+    '--print', '--output-format=stream-json', '--verbose',
+    '--model', cliModel(profile.model || 'opus'),
+    '--tools', 'Read',   // mimar yalnız okur + JSON üretir; tool tanım yükünü kıs
+    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
+    ...mcpArgs('architect'),
+    '--append-system-prompt', profile.body,
+    '--dangerously-skip-permissions',
+    prompt,
+  ], {
+    cwd: dir,
+    usageType: 'architect',
+    onEvent: (ev) => {
+      if (ev.type !== 'result' || typeof ev.result !== 'string') return
+      const manifest = parseManifest(ev.result)
+      if (!manifest) {
+        try { res.write(sseLine({ type: 'architect_error', message: 'Mimar geçerli bir manifest üretemedi. Fikri netleştirip tekrar dene.' })) } catch {}
+        return
+      }
+      // onEvent, forward+kapanıştan ÖNCE çağrılır → architect_done "done" sentinel'inden önce yazılır.
+      try { res.write(sseLine({ type: 'architect_done', manifest, missingProfiles: missingAgentProfiles(manifest) })) } catch {}
+      prisma.media.update({
+        where: { id: BigInt(req.params.mediaId) },
+        data: { content: formatSessionContent({ ...settings, idea, status: 'planned', manifest }) },
+      }).catch(err => console.error('[multiagent] manifest kayıt hatası:', err.message))
+    },
+  })
+})
+
+// MultiAgent loop başlat (SSE) — Recall varsa kaldığı yerden devam eder.
+app.post('/api/multiagent/:mediaId/loop/start', async (req, res) => {
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } }) } catch {}
+  if (!media || media.type !== 'multiagent') return res.status(404).json({ error: 'MultiAgent tile bulunamadı' })
+
+  const settings = parseSessionContent(media.content)
+  const manifest = settings.manifest
+  if (!manifest || !manifest.goal || !Array.isArray(manifest.team) || !manifest.team.length) {
+    return res.status(400).json({ error: 'Önce mimar ile ekip kur (manifest yok).' })
+  }
+  // Runtime'da profil kurulumu YOK — eksikse temiz hata (Claude spawn edilmeden).
+  const missing = missingAgentProfiles(manifest)
+  if (missing.length) {
+    return res.status(400).json({ error: `Eksik agent profilleri: ${missing.join(', ')} — .claude/agents/ altına ekle.` })
+  }
+  assignTaskIds(manifest.team)   // eski tile'larda kayıtlı string[] görevleri {id, text}'e normalize et
+
+  let runner = loopPool.get(String(req.params.mediaId))
+  if ((!runner || !runner.running) && activeLoopCount() >= MAX_ACTIVE_LOOPS) {
+    return res.status(429).json({ error: `Aynı anda en fazla ${MAX_ACTIVE_LOOPS} loop çalışabilir. Önce çalışan bir loop'u durdur.` })
+  }
+
+  const dir = roomProjectDir(media.roomId)
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+
+  // İş 2 tabanı kayıtlı eski manifest'lere de uygulansın: görev + review + kurtarma payı
+  // yoksa koşu bitiremeden 'maxed' olur (parseManifest yalnız yeni manifest'leri düzeltir).
+  // Varsayılan sabit 8 değil taskCount+3 — küçük manifestin tavanını şişirme (plan.md P0-B).
+  const taskCount = manifest.team.reduce((n, t) => n + t.tasks.length, 0)
+  const spec = { goal: manifest.goal, maxIterations: Math.max(taskCount + 3, manifest.maxIterations || (taskCount + 3)), manifest }
+  // settings.model verifier'a gider (LoopRunner.start) — plan gereği ucuz/bağımsız: haiku.
+  // Worker modelleri manifest'ten, architect modeli profilden gelir; tile ayarı kullanılmaz.
+  const runSettings = { ...settings, model: 'claude-haiku-4-5-20251001' }
+
+  if (!runner) {
+    runner = new MultiAgentRunner({ mediaId: req.params.mediaId, roomId: media.roomId, dir, spec, settings: runSettings })
+    loopPool.set(String(req.params.mediaId), runner)
+  } else {
+    runner.spec = spec; runner.settings = runSettings
+  }
+  runner.attach(res)
+  if (!runner.running) runner.start()   // await edilmez — sink üzerinden akar
+})
+
+// MultiAgent loop durdur — mevcut tur kibarca biter, döngü kırılır.
+app.post('/api/multiagent/:mediaId/loop/stop', (req, res) => {
+  const runner = loopPool.get(String(req.params.mediaId))
+  if (runner) runner.abort()
+  res.json({ ok: true })
+})
+
+// Tile durumu — mount/reconnect tek çağrıda kurulsun: content (idea/manifest) + recall + running.
+app.get('/api/multiagent/:mediaId/loop/status', async (req, res) => {
+  let media
+  try { media = await prisma.media.findUnique({ where: { id: BigInt(req.params.mediaId) } }) } catch {}
+  if (!media || media.type !== 'multiagent') return res.status(404).json({ error: 'MultiAgent tile bulunamadı' })
+  const settings = parseSessionContent(media.content)
+  const recall = readRecall(media.roomId, req.params.mediaId)
+  const runner = loopPool.get(String(req.params.mediaId))
+  const manifest = settings.manifest || null
+  res.json({
+    idea: settings.idea || '',
+    status: settings.status || 'draft',
+    manifest,
+    missingProfiles: manifest ? missingAgentProfiles(manifest) : [],
+    recall: recall || null,
+    running: !!(runner && runner.running),
+  })
 })
 
 // ─── Bluprint (oda projesini reconstruct PRD'sine çeviren tile) ──────────────
@@ -2946,11 +3737,13 @@ app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
   streamClaudeToSSE(res, [
     '--print', '--output-format=stream-json', '--verbose',
     '--model', cliModel(model),
+    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
     ...mcpArgs('bluprint'),
     '--dangerously-skip-permissions',
     prompt,
   ], {
     cwd: out,
+    usageType: 'bluprint-build',
     onEvent: (ev) => {
       if (ev.type === 'result') {
         if (entry.bestEffort) importBestEffortOutputs(out)
@@ -2993,7 +3786,8 @@ app.post('/api/bluprint/message', async (req, res) => {
     if (spec) sys += `\n\n# Proje Analiz/Spec Çıktısı (${spec.name})\n${spec.text}`
   }
 
-  const sess = sessionPool.ensure(key, { settings, cwd: dir, sys })
+  const sess = ensureSessionOr429(res, key, { settings, cwd: dir, sys })
+  if (!sess) return
   sess.send(res, message.trim(), {
     onInit: (sessionId) => {
       prisma.media.update({

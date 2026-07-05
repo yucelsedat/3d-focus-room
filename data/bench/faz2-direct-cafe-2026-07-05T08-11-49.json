@@ -1,0 +1,50 @@
+{
+  "scenario": "direct-cafe",
+  "label": "faz2",
+  "note": "multiagent tile — routing \"direct\"e düşmeli (mimar atlanır)",
+  "startedAt": "2026-07-05T08:11:49.863Z",
+  "finishedAt": "2026-07-05T08:15:03.275Z",
+  "durationSec": 193,
+  "mediaId": 1783239109887,
+  "error": null,
+  "usageDelta": {
+    "multiagent": {
+      "calls": 1,
+      "input": 5,
+      "cacheWrite": 28530,
+      "cacheRead": 29552,
+      "output": 13866,
+      "processedTotal": 71953
+    },
+    "verify": {
+      "calls": 1,
+      "input": 182,
+      "cacheWrite": 30396,
+      "cacheRead": 27705,
+      "output": 1257,
+      "processedTotal": 59540
+    }
+  },
+  "totals": {
+    "calls": 2,
+    "input": 187,
+    "cacheWrite": 58926,
+    "cacheRead": 57257,
+    "output": 15123,
+    "processedTotal": 131493
+  },
+  "recall": {
+    "iteration": 2,
+    "maxIterations": 4,
+    "status": "met",
+    "respawns": 0,
+    "usage": {
+      "calls": 2,
+      "input": 187,
+      "cacheWrite": 58926,
+      "cacheRead": 57257,
+      "output": 15123,
+      "processedTotal": 131493
+    }
+  }
+}

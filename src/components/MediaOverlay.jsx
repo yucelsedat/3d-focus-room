@@ -2,6 +2,7 @@ import React, { Suspense, Component, useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import CanvasMesh from './CanvasMesh'
 import HeaderMesh from './HeaderMesh'
+import MultiAgentTile from './MultiAgentTile'
 import { useTexture, useVideoTexture, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { marked } from 'marked'
@@ -2739,7 +2740,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isBluprint = type === 'bluprint'
   const isSlide    = type === 'slide'
   const isDefter   = type === 'defter'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint && !isSlide && !isDefter
+  const isMultiAgent = type === 'multiagent'
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint && !isSlide && !isDefter && !isMultiAgent
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -2758,6 +2760,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
           <RoomSessionMesh id={id} width={width} height={height} />
         ) : isBluprint ? (
           <BluprintMesh id={id} width={width} height={height} />
+        ) : isMultiAgent ? (
+          <MultiAgentTile id={id} width={width} height={height} />
         ) : isDefter ? (
           <DefterMesh id={id} content={content} width={width} height={height} />
         ) : isSlide ? (

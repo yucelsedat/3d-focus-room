@@ -244,14 +244,20 @@ export default function CanvasMesh({ id, content, width, height }) {
       e.stopImmediatePropagation()
       const cp = panRef.current
       if (e.ctrlKey || e.metaKey || ctrlRef.current) {
-        const rect = el?.getBoundingClientRect() ?? { left: 0, top: 0 }
+        const rect = el?.getBoundingClientRect() ?? { left: 0, top: 0, width: 1, height: 1 }
+        const scaleX = el ? (el.offsetWidth / (rect.width || 1)) : 1
+        const scaleY = el ? (el.offsetHeight / (rect.height || 1)) : 1
         const cz   = zoomRef.current
         const nz   = Math.min(8, Math.max(0.15, cz * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
-        const mx   = e.clientX - rect.left, my = e.clientY - rect.top
+        const offsetY = isEditMode ? tbH : 0
+        const mx   = (e.clientX - rect.left) * scaleX
+        const my   = (e.clientY - rect.top) * scaleY - offsetY
         setZoom(nz)
         setPan({ x: mx - (mx - cp.x) * (nz / cz), y: my - (my - cp.y) * (nz / cz) })
       } else {
-        setPan({ x: cp.x - e.deltaX, y: cp.y - e.deltaY })
+        const scaleX = el ? (el.offsetWidth / (el.getBoundingClientRect().width || 1)) : 1
+        const scaleY = el ? (el.offsetHeight / (el.getBoundingClientRect().height || 1)) : 1
+        setPan({ x: cp.x - e.deltaX * scaleX, y: cp.y - e.deltaY * scaleY })
       }
     }
     document.addEventListener('wheel', handler, { passive: false, capture: true })
@@ -446,17 +452,33 @@ export default function CanvasMesh({ id, content, width, height }) {
     setIsEditMode(true)
   }
 
+  const getInternalCoords = (clientX, clientY) => {
+    const el = containerRef.current
+    if (!el) return { ix: clientX, iy: clientY }
+    const rect = el.getBoundingClientRect()
+    const scaleX = rect.width ? el.offsetWidth / rect.width : 1
+    const scaleY = rect.height ? el.offsetHeight / rect.height : 1
+    const offsetY = isEditMode ? tbH : 0
+    return { 
+      ix: (clientX - rect.left) * scaleX, 
+      iy: (clientY - rect.top) * scaleY - offsetY
+    }
+  }
+
   const toSurface = (clientX, clientY) => {
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
+    const { ix, iy } = getInternalCoords(clientX, clientY)
     const z = zoomRef.current, p = panRef.current
-    return { x: (clientX - rect.left - p.x) / z, y: (clientY - rect.top - p.y) / z }
+    return { x: (ix - p.x) / z, y: (iy - p.y) / z }
   }
 
   const centerSurface = () => {
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return { x: 50, y: 50 }
-    return toSurface(rect.left + rect.width / 2, rect.top + tbH + 60)
+    const el = containerRef.current
+    if (!el) return { x: 50, y: 50 }
+    const offsetY = isEditMode ? tbH : 0
+    const ix = el.offsetWidth / 2
+    const iy = (el.offsetHeight - offsetY) / 2
+    const z = zoomRef.current, p = panRef.current
+    return { x: (ix - p.x) / z, y: (iy - p.y) / z }
   }
 
   // ── Background mousedown — pan OR marquee select ──────────────────────────
@@ -481,7 +503,8 @@ export default function CanvasMesh({ id, content, width, height }) {
     if (showUrlInput)   { setShowUrlInput(false); setUrlValue(''); return }
     if (showRoomSearch) { setShowRoomSearch(false); setRoomSearchText(''); return }
     setIsPanning(true)
-    setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y })
+    const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
+    setPanStart({ x: ix - pan.x, y: iy - pan.y })
   }
 
   // ── Unified mouse move ────────────────────────────────────────────────────
@@ -494,10 +517,23 @@ export default function CanvasMesh({ id, content, width, height }) {
       const pt = toSurface(e.clientX, e.clientY)
       setSelRect(prev => ({ ...prev, x2: pt.x, y2: pt.y })); return
     }
-    if (isPanning) { setPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y }); return }
+    if (isPanning) {
+      const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
+      setPan({ x: ix - panStart.x, y: iy - panStart.y }); return 
+    }
     if (resizeState) {
-      const dx = (e.clientX - resizeState.startX) / zoom
-      const dy = (e.clientY - resizeState.startY) / zoom
+      const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
+      const dx = (ix - resizeState.startX) / zoom
+      const dy = (iy - resizeState.startY) / zoom
+      if (resizeState.type === 'arrow') {
+        setItems(prev => prev.map(it => {
+          if (it.id !== resizeState.itemId) return it
+          const init = resizeState.initItem
+          if (resizeState.handle === 'start') return { ...it, x1: init.x1 + dx, y1: init.y1 + dy }
+          return { ...it, x2: init.x2 + dx, y2: init.y2 + dy }
+        }))
+        return
+      }
       const { handle: rh, initBounds: ib, initItems } = resizeState
       const isCorner = rh.length === 2  // nw ne se sw
       let nx = ib.x, ny = ib.y, nw, nh, scale
@@ -545,7 +581,9 @@ export default function CanvasMesh({ id, content, width, height }) {
       const dx = pt.x - dragState.startPt.x, dy = pt.y - dragState.startPt.y
       setItems(prev => prev.map(it => {
         const origin = dragState.origins.find(o => o.id === it.id)
-        return origin ? { ...it, x: origin.x + dx, y: origin.y + dy } : it
+        if (!origin) return it
+        if (it.type === 'arrow') return { ...it, x1: origin.x1 + dx, y1: origin.y1 + dy, x2: origin.x2 + dx, y2: origin.y2 + dy }
+        return { ...it, x: origin.x + dx, y: origin.y + dy }
       }))
     }
   }
@@ -592,11 +630,28 @@ export default function CanvasMesh({ id, content, width, height }) {
     }
     setSelectedIds(newIds)
 
-    // drag all selected box items
+    // drag all selected items
     const dragIds = newIds
     const pt = toSurface(e.clientX, e.clientY)
-    const origins = items.filter(it => dragIds.has(it.id) && it.type !== 'arrow').map(it => ({ id: it.id, x: it.x, y: it.y }))
+    const origins = items.filter(it => dragIds.has(it.id)).map(it => (
+      it.type === 'arrow' 
+        ? { id: it.id, x1: it.x1, y1: it.y1, x2: it.x2, y2: it.y2 } 
+        : { id: it.id, x: it.x, y: it.y }
+    ))
     if (!e.ctrlKey && !e.metaKey) setDragState({ origins, startPt: pt })
+  }
+
+  const onArrowHandleMouseDown = (e, item, handleType) => {
+    stop(e)
+    const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
+    setResizeState({
+      type: 'arrow',
+      handle: handleType,
+      itemId: item.id,
+      startX: ix,
+      startY: iy,
+      initItem: { ...item }
+    })
   }
 
   // ── Bounding-box resize handle mousedown ──────────────────────────────────
@@ -604,8 +659,9 @@ export default function CanvasMesh({ id, content, width, height }) {
     e.stopPropagation(); e.nativeEvent?.stopImmediatePropagation()
     const bounds = getBounds(selectedIds, items)
     if (!bounds) return
+    const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
     setResizeState({
-      handle, startX: e.clientX, startY: e.clientY,
+      handle, startX: ix, startY: iy,
       initBounds: bounds,
       initItems: items.filter(it => selectedIds.has(it.id) && it.type !== 'arrow').map(it => ({ id: it.id, x: it.x, y: it.y, w: it.w, h: it.h, fontSize: it.fontSize || 30 })),
     })
@@ -761,25 +817,38 @@ export default function CanvasMesh({ id, content, width, height }) {
         </marker>
       </defs>
       {items.filter(it => it.type === 'arrow').map(item => {
-        const isHov = editMode && hoveredArrowId === item.id
+        const isSel = selectedIds.has(item.id)
+        const isHov = editMode && (hoveredArrowId === item.id || isSel)
         return (
           <g key={item.id} style={{ pointerEvents: editMode ? 'auto' : 'none' }}
             onMouseEnter={() => editMode && setHoveredArrowId(item.id)}
             onMouseLeave={() => setHoveredArrowId(null)}
-            onMouseDown={e => { e.stopPropagation(); e.nativeEvent?.stopImmediatePropagation() }}
+            onMouseDown={e => { if (editMode) onItemMouseDown(e, item) }}
           >
-            <line x1={item.x1} y1={item.y1} x2={item.x2} y2={item.y2} stroke="transparent" strokeWidth={28} style={{ cursor: 'pointer' }} />
+            <line x1={item.x1} y1={item.y1} x2={item.x2} y2={item.y2} stroke="transparent" strokeWidth={28} style={{ cursor: 'move' }} />
             <line x1={item.x1} y1={item.y1} x2={item.x2} y2={item.y2}
               stroke={isHov ? '#60a5fa' : (item.color || '#e2e8f0')} strokeWidth={item.strokeWidth || 4}
-              markerEnd={item.hasArrow ? `url(#${markerId})` : undefined} style={{ pointerEvents: 'none' }} />
+              markerEnd={item.hasArrow ? `url(#${isHov ? markerIdPre : markerId})` : undefined} style={{ pointerEvents: 'none' }} />
             {isHov && (() => {
               const mx = (item.x1 + item.x2) / 2, my = (item.y1 + item.y2) / 2
               return (
-                <foreignObject x={mx - 22} y={my - 22} width={44} height={44} style={{ overflow: 'visible' }}>
-                  <button onMouseDown={e => { e.stopPropagation(); e.nativeEvent?.stopImmediatePropagation() }}
-                    onClick={() => { const toD = item.id; setItems(prev => { const next = prev.filter(it => it.id !== toD); scheduleSave(next, bgRef.current); return next }) }}
-                    style={{ width: 44, height: 44, background: '#ef4444', border: '2px solid #fff', borderRadius: '50%', color: '#fff', fontSize: 24, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>×</button>
-                </foreignObject>
+                <>
+                  <foreignObject x={mx - 22} y={my - 22} width={44} height={44} style={{ overflow: 'visible' }}>
+                    <button onMouseDown={stop}
+                      onClick={() => { const toD = item.id; setItems(prev => { const next = prev.filter(it => it.id !== toD); scheduleSave(next, bgRef.current); return next }) }}
+                      style={{ width: 44, height: 44, background: '#ef4444', border: '2px solid #fff', borderRadius: '50%', color: '#fff', fontSize: 24, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.5)', pointerEvents: 'auto' }}>×</button>
+                  </foreignObject>
+                  
+                  <foreignObject x={item.x1 - 12} y={item.y1 - 12} width={24} height={24} style={{ overflow: 'visible' }}>
+                    <div onMouseDown={e => onArrowHandleMouseDown(e, item, 'start')} 
+                         style={{ width: 24, height: 24, background: '#fff', border: '3px solid #60a5fa', borderRadius: '50%', cursor: 'pointer', pointerEvents: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }} />
+                  </foreignObject>
+                  
+                  <foreignObject x={item.x2 - 12} y={item.y2 - 12} width={24} height={24} style={{ overflow: 'visible' }}>
+                    <div onMouseDown={e => onArrowHandleMouseDown(e, item, 'end')} 
+                         style={{ width: 24, height: 24, background: '#fff', border: '3px solid #60a5fa', borderRadius: '50%', cursor: 'pointer', pointerEvents: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }} />
+                  </foreignObject>
+                </>
               )
             })()}
           </g>

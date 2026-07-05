@@ -1,0 +1,50 @@
+{
+  "scenario": "roomsession-crud",
+  "label": "baseline",
+  "note": "roomsession LoopFlow — iş turu kalıcı oturum + haiku verify",
+  "startedAt": "2026-07-05T07:44:15.400Z",
+  "finishedAt": "2026-07-05T07:48:13.860Z",
+  "durationSec": 238,
+  "mediaId": 1783237455427,
+  "error": null,
+  "usageDelta": {
+    "roomsession": {
+      "calls": 1,
+      "input": 6438,
+      "cacheWrite": 16565,
+      "cacheRead": 244369,
+      "output": 8197,
+      "processedTotal": 275569
+    },
+    "verify": {
+      "calls": 1,
+      "input": 98,
+      "cacheWrite": 5791,
+      "cacheRead": 205042,
+      "output": 2655,
+      "processedTotal": 213586
+    }
+  },
+  "totals": {
+    "calls": 2,
+    "input": 6536,
+    "cacheWrite": 22356,
+    "cacheRead": 449411,
+    "output": 10852,
+    "processedTotal": 489155
+  },
+  "recall": {
+    "iteration": 1,
+    "maxIterations": 6,
+    "status": "met",
+    "respawns": 0,
+    "usage": {
+      "calls": 2,
+      "input": 6536,
+      "cacheWrite": 22356,
+      "cacheRead": 449411,
+      "output": 10852,
+      "processedTotal": 489155
+    }
+  }
+}

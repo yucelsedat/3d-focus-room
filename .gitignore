@@ -27,6 +27,13 @@ dist-ssr
 public/uploads/*
 public/data/media.json
 
+# Günlük token sayacı (yerel telemetri)
+data/usage-daily.json
+
+# Bench izole usage ara dosyası (yerel ölçüm artığı). Sonuç JSON'ları
+# (data/bench/<label>-*.json) BASELINE.md'nin kaynağı olduğundan İZLENİR.
+data/bench/usage-bench.json
+
 # SQLite database & journal files (untracked — local dev data; recreate via `npm run migrate`)
 prisma/dev.db
 prisma/*.db-journal

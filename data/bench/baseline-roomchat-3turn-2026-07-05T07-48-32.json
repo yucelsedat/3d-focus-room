@@ -1,0 +1,29 @@
+{
+  "scenario": "roomchat-3turn",
+  "label": "baseline",
+  "note": "roomchat — 3 turluk sabit sohbet, kalıcı oturumun cache davranışı",
+  "startedAt": "2026-07-05T07:48:32.570Z",
+  "finishedAt": "2026-07-05T07:50:37.391Z",
+  "durationSec": 125,
+  "mediaId": 1783237712581,
+  "error": null,
+  "usageDelta": {
+    "roomchat": {
+      "calls": 3,
+      "input": 6442,
+      "cacheWrite": 16736,
+      "cacheRead": 193094,
+      "output": 3561,
+      "processedTotal": 219833
+    }
+  },
+  "totals": {
+    "calls": 3,
+    "input": 6442,
+    "cacheWrite": 16736,
+    "cacheRead": 193094,
+    "output": 3561,
+    "processedTotal": 219833
+  },
+  "recall": null
+}
