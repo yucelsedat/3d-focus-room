@@ -2,7 +2,7 @@ import { useRef, useMemo, useEffect, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { useTexture } from '@react-three/drei'
 import { useStore } from '../store/useStore'
-import { ROOM_CONFIGS, decodeWallId, encodeWallId, wallTileCount } from '../utils/roomConfig'
+import { ROOM_CONFIGS, decodeWallId, wallTileCount } from '../utils/roomConfig'
 import * as THREE from 'three'
 
 const TILE_SIZE = 1
