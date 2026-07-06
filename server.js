@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
-import { ROOM_CONFIGS, getDoorInstanceIds, getReturnAnchorId, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
+import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename).replace('/src/server', '');
@@ -143,6 +143,10 @@ async function bootMigrate() {
 }
 
 // ─── Multer ───────────────────────────────────────────────────────────────────
+// Yüklenen dosya adında path traversal'ı (../ vb.) engelle: dizin bileşenlerini
+// at, yalnızca temel adı kullan. Normal dosya adları değişmeden korunur.
+const safeName = (originalname) => path.basename(originalname || 'file');
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     let type = 'images';
@@ -152,7 +156,7 @@ const storage = multer.diskStorage({
     cb(null, `public/uploads/${type}/`);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    cb(null, `${Date.now()}-${safeName(file.originalname)}`);
   }
 });
 const upload = multer({ storage });
@@ -160,14 +164,14 @@ const upload = multer({ storage });
 const uploadCover = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
-    filename: (req, file, cb) => cb(null, `cover-${Date.now()}-${file.originalname}`),
+    filename: (req, file, cb) => cb(null, `cover-${Date.now()}-${safeName(file.originalname)}`),
   }),
 });
 
 const canvasUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
-    filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${file.originalname}`),
+    filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${safeName(file.originalname)}`),
   }),
 });
 
@@ -775,91 +779,106 @@ app.post('/api/fetch-url', async (req, res) => {
 });
 
 app.post('/api/add-text', async (req, res) => {
-  const { tileId, content, width, height, position, rotation } = req.body;
-  const pos = JSON.parse(position);
-  const rot = JSON.parse(rotation);
-  const id = BigInt(Date.now());
+  try {
+    const { tileId, content, width, height, position, rotation } = req.body;
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const id = BigInt(Date.now());
 
-  const media = await prisma.media.create({
-    data: {
-      id,
-      roomId: activeRoomId,
-      tileId,
-      type: 'markdown',
-      content,
-      width: parseFloat(width) || 1,
-      height: parseFloat(height) || 1,
-      posX: parseFloat(pos[0]) || 0,
-      posY: parseFloat(pos[1]) || 0,
-      posZ: parseFloat(pos[2]) || 0,
-      rotX: parseFloat(rot[0]) || 0,
-      rotY: parseFloat(rot[1]) || 0,
-      rotZ: parseFloat(rot[2]) || 0,
-      rotOrder: String(rot[3] || 'XYZ'),
-    },
-  });
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId,
+        type: 'markdown',
+        content,
+        width: parseFloat(width) || 1,
+        height: parseFloat(height) || 1,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+      },
+    });
 
-  res.json(serializeMedia(media));
+    res.json(serializeMedia(media));
+  } catch (err) {
+    console.error('[add-text] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/canvas', async (req, res) => {
-  const { tileId, width, height, position, rotation, bg = '#1a1a2e' } = req.body;
-  const pos = JSON.parse(position);
-  const rot = JSON.parse(rotation);
-  const id = BigInt(Date.now());
-  const content = JSON.stringify({ items: [], bg });
+  try {
+    const { tileId, width, height, position, rotation, bg = '#1a1a2e' } = req.body;
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const id = BigInt(Date.now());
+    const content = JSON.stringify({ items: [], bg });
 
-  const media = await prisma.media.create({
-    data: {
-      id,
-      roomId: activeRoomId,
-      tileId,
-      type: 'canvas',
-      url: null,
-      content,
-      width: parseFloat(width) || 8,
-      height: parseFloat(height) || 4.5,
-      posX: parseFloat(pos[0]) || 0,
-      posY: parseFloat(pos[1]) || 0,
-      posZ: parseFloat(pos[2]) || 0,
-      rotX: parseFloat(rot[0]) || 0,
-      rotY: parseFloat(rot[1]) || 0,
-      rotZ: parseFloat(rot[2]) || 0,
-      rotOrder: String(rot[3] || 'XYZ'),
-    },
-  });
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId,
+        type: 'canvas',
+        url: null,
+        content,
+        width: parseFloat(width) || 8,
+        height: parseFloat(height) || 4.5,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+      },
+    });
 
-  res.json(serializeMedia(media));
+    res.json(serializeMedia(media));
+  } catch (err) {
+    console.error('[canvas] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/header', async (req, res) => {
-  const { tileId, width, height, position, rotation, bg = '#1a1a2e', color = '#ffffff', text = '' } = req.body;
-  const pos = JSON.parse(position);
-  const rot = JSON.parse(rotation);
-  const id = BigInt(Date.now());
-  const content = JSON.stringify({ text, bg, color });
+  try {
+    const { tileId, width, height, position, rotation, bg = '#1a1a2e', color = '#ffffff', text = '' } = req.body;
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const id = BigInt(Date.now());
+    const content = JSON.stringify({ text, bg, color });
 
-  const media = await prisma.media.create({
-    data: {
-      id,
-      roomId: activeRoomId,
-      tileId,
-      type: 'header',
-      url: null,
-      content,
-      width: parseFloat(width) || 4,
-      height: parseFloat(height) || 1,
-      posX: parseFloat(pos[0]) || 0,
-      posY: parseFloat(pos[1]) || 0,
-      posZ: parseFloat(pos[2]) || 0,
-      rotX: parseFloat(rot[0]) || 0,
-      rotY: parseFloat(rot[1]) || 0,
-      rotZ: parseFloat(rot[2]) || 0,
-      rotOrder: String(rot[3] || 'XYZ'),
-    },
-  });
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId,
+        type: 'header',
+        url: null,
+        content,
+        width: parseFloat(width) || 4,
+        height: parseFloat(height) || 1,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+      },
+    });
 
-  res.json(serializeMedia(media));
+    res.json(serializeMedia(media));
+  } catch (err) {
+    console.error('[header] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Defter tile — Claude'a bağlı OLMAYAN yerel not defteri. İçerik tamamen
@@ -1279,12 +1298,13 @@ app.get('/api/session/live', (req, res) => {
   res.flushHeaders()
 
   // Send all existing messages as init
+  let lineCount = 0
   try {
     const content = fs.existsSync(info.jsonlPath) ? fs.readFileSync(info.jsonlPath, 'utf8') : ''
     const messages = parseLiveMessages(content)
     res.write(`data: ${JSON.stringify({ type: 'init', messages })}\n\n`)
-    var lineCount = content.split('\n').filter(Boolean).length
-  } catch { var lineCount = 0 }
+    lineCount = content.split('\n').filter(Boolean).length
+  } catch { lineCount = 0 }
 
   // Watch for new lines
   let lastLineCount = lineCount
