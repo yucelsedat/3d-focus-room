@@ -1,0 +1,5 @@
+# Uygulamanın kendi ürettiği oda içerikleri — ana bilgi grafına dahil edilmesin
+room-graphs/
+room-projects/
+room-blueprints/
+public/
