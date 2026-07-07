@@ -1348,6 +1348,13 @@ app.post('/api/session/live/message', (req, res) => {
 // ─── Ortak yardımcılar (hem tek-atış streamClaudeToSSE hem kalıcı oturum yolu) ──
 // CLI stream-json çıktısında tarayıcıya ilettiğimiz event türleri.
 const FORWARD_TYPES = new Set(['assistant', 'tool', 'result', 'system'])
+
+// Faz D: token-token akış. Bu tile'ların spawn'ına --include-partial-messages
+// eklenir; CLI'dan gelen stream_event/text_delta parçaları SSE'ye kompakt
+// {type:'delta', id, text} olarak iner (ham stream_event iletilmez — hacim
+// küçük kalır, SSE sözleşmesi geriye uyumlu ek alır). multiagent bilinçli
+// hariç: hot-loop, UI'ı delta render etmiyor, ek çıktı hacmi gereksiz.
+const PARTIAL_STREAM_TILES = new Set(['ai-session', 'roomchat', 'bluprint', 'roomsession'])
 // Spawn edilen claude'a sızdırmamamız gereken oynak env değişkenleri.
 const CLAUDE_VOLATILE_ENV = ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
   'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']
@@ -1657,6 +1664,8 @@ class PersistentSession {
       '--exclude-dynamic-system-prompt-sections',
       ...mcpArgs(tile),
     ]
+    // Faz D: interaktif tile'larda token-token akış (stream_event → SSE delta).
+    if (PARTIAL_STREAM_TILES.has(tile)) a.push('--include-partial-messages')
     if (this.sys) a.push('--append-system-prompt', this.sys)
     if (this.maxTurns) a.push('--max-turns', String(this.maxTurns))
     // Tool kısıtı: system prompt'a giren tool tanımı sayısını (→ her spawn'ın
@@ -1717,6 +1726,18 @@ class PersistentSession {
         this.pendingControls.delete(rid)
         if (ev.response.subtype === 'error') pending.reject(new Error(ev.response.error || 'control_request reddedildi'))
         else pending.resolve(ev.response)
+      }
+      return
+    }
+    // Faz D: stream_event'i ham iletme — yalnız text_delta'yı kompakt {type:'delta'}
+    // olarak SSE'ye indir. id = o an akan assistant mesajının id'si (message_start'tan);
+    // frontend finali aynı stream-<id> baloncuğuna yazdığı için tur sonunda delta
+    // birikimi tam metinle kendiliğinden değiştirilir (çakışma/çift render yok).
+    if (ev.type === 'stream_event') {
+      const e = ev.event
+      if (e?.type === 'message_start' && e.message?.id) this._partialMsgId = e.message.id
+      else if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta' && e.delta.text && this.sink) {
+        try { this.sink.write(sseLine({ type: 'delta', id: this._partialMsgId || null, text: e.delta.text })) } catch {}
       }
       return
     }
