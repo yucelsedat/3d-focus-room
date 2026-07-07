@@ -1213,17 +1213,35 @@ app.post('/api/permission/ask', (req, res) => {
     stream.write(`data: ${JSON.stringify(payload)}\n\n`)
   } catch {}
 
+  // Faz E: oturum artık kullanıcıdan girdi bekliyor → tile rozeti 'girdi bekliyor'.
+  const kind = isQuestion ? 'question' : isPlan ? 'plan' : 'permission'
+  findSessionBySid(session_id)?._setStatus('input_needed', { kind, toolUseId: tool_use_id, toolName: tool_name })
+
   const timer = setTimeout(() => {
-    if (pendingPermissions.delete(tool_use_id)) res.json({ decision: 'deny', reason: 'Zaman aşımı' })
+    if (pendingPermissions.delete(tool_use_id)) {
+      res.json({ decision: 'deny', reason: 'Zaman aşımı' })
+      // Faz E: deny ile tur devam ediyor → rozet running'e dönsün.
+      const s = findSessionBySid(session_id)
+      if (s?.status === 'input_needed') s._setStatus('running')
+    }
   }, PERM_TIMEOUT_MS)
 
   pendingPermissions.set(tool_use_id, {
+    sessionId: session_id,   // Faz E: karar gelince rozeti geri çevirmek için
     resolve: (decision, reason) => {
       clearTimeout(timer)
       res.json({ decision, reason: reason || '' })
     },
   })
 })
+
+// Faz E: session_id → canlı PersistentSession (havuz küçük, tarama ucuz).
+// İzin köprüsü PersistentSession dışında aktığı için rozet geçişleri buradan bulunur.
+function findSessionBySid(sid) {
+  if (!sid) return null
+  for (const s of sessionPool.map.values()) if (s.sessionId === sid) return s
+  return null
+}
 
 // Tarayıcı kullanıcının kararını buraya yollar
 app.post('/api/permission/decision', (req, res) => {
@@ -1232,6 +1250,9 @@ app.post('/api/permission/decision', (req, res) => {
   if (!pending) return res.status(404).json({ error: 'Bekleyen izin isteği yok' })
   pendingPermissions.delete(toolUseId)
   pending.resolve(decision === 'allow' ? 'allow' : 'deny', reason)
+  // Faz E: karar verildi, tur devam ediyor → rozet running'e dönsün.
+  const s = findSessionBySid(pending.sessionId)
+  if (s?.status === 'input_needed') s._setStatus('running')
   res.json({ ok: true })
 })
 
@@ -1651,6 +1672,21 @@ class PersistentSession {
     this.turnCount = 0                       // bu oturum nesnesinin tamamlanan tur sayısı (turn-usage logu)
     this.respawns = 0                        // --resume ile yeniden doğuş sayısı (faz1 İş 1.4)
     this.pendingControls = new Map()         // Faz B: request_id → {resolve, reject, timeout} (control_response eşleştirme)
+    this.status = 'idle'                     // Faz E: idle | running | input_needed | error (frontend rozeti)
+    this.pendingAction = null                // Faz E: input_needed'da ne beklendiği { kind, toolUseId, toolName? }
+  }
+
+  // Faz E: durum makinesi. Değişimde SSE'ye {type:'status'} yaz — frontend
+  // tile rozetini günceller ("çalışıyor / girdi bekliyor / boşta / hata").
+  // claude-client setStatus/status_change deseni; busy/alive iç bayrakları
+  // aynen kalır, bu katman yalnız görünürlük ekler.
+  _setStatus(status, pendingAction = null) {
+    if (this.status === status && this.pendingAction === pendingAction) return
+    this.status = status
+    this.pendingAction = pendingAction
+    if (this.sink) {
+      try { this.sink.write(sseLine({ type: 'status', status, pendingAction })) } catch {}
+    }
   }
 
   _spawn() {
@@ -1770,6 +1806,10 @@ class PersistentSession {
         }
       }
       if (typeof ev.result === 'string') this.lastResult = ev.result   // recall özeti için son yanıt
+      // Faz E: tur sınırı — interrupt'la kesilen tur is_error=true döner ama bu
+      // kullanıcı isteğidir, 'hata' rozeti yanıltıcı olur → idle say.
+      this._setStatus(ev.is_error && !this._interrupted ? 'error' : 'idle')
+      this._interrupted = false
       this._finishTurn()   // tur sınırı
     }
   }
@@ -1801,6 +1841,8 @@ class PersistentSession {
     this.heartbeat = setInterval(() => {
       if (this.sink) { try { this.sink.write(': ping\n\n') } catch {} }
     }, 15000)
+
+    this._setStatus('running')   // Faz E: tur başladı (sink bağlı → event frontend'e ulaşır)
 
     try {
       await this._write(userLine(job.message))
@@ -1869,6 +1911,7 @@ class PersistentSession {
   async interrupt() {
     if (!this.alive || !this.proc) throw new Error('canlı süreç yok')
     if (!this.busy) throw new Error('çalışan tur yok')
+    this._interrupted = true   // Faz E: gelecek is_error result'ı 'hata' değil 'idle' sayılsın
     // Ağır tool koşusu ortasında control_response gecikebilir → 10sn tolerans.
     await this._control({ subtype: 'interrupt' }, 10000)
   }
@@ -1922,6 +1965,7 @@ class PersistentSession {
   }
 
   _emitError(msg) {
+    this._setStatus('error')   // Faz E (sink kapanmadan önce yaz ki event ulaşsın)
     if (this.sink) { try { this.sink.write(sseLine({ type: 'error', message: msg })); this.sink.end() } catch {} }
   }
 

@@ -741,6 +741,16 @@ function PlanReview({ req, onApprove, onReject }) {
   )
 }
 
+// Faz E: oturum durum makinesi rozeti (SessionMesh + SkillChatMesh ortak).
+// Backend SSE {type:'status'} eventleriyle besler; en değerlisi input_needed —
+// tile'ın senden izin/yanıt/plan onayı beklediğini uzaktan görünür kılar.
+const SESSION_STATUS_BADGE = {
+  idle:         { text: 'hazır',            color: '#4ade80' },
+  running:      { text: 'çalışıyor…',       color: '#60a5fa' },
+  input_needed: { text: '⚠ girdi bekliyor', color: '#fbbf24' },
+  error:        { text: 'hata',             color: '#ef4444' },
+}
+
 function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '🤖', label = 'Claude' }) {
   const currentRoomId = useStore(s => s.currentRoomId)
   const w = parseFloat(width)
@@ -766,6 +776,7 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
   const [interrupting, setInterrupting] = useState(false)  // Faz C: durdurma isteği uçuşta
+  const [sessStatus, setSessStatus] = useState('idle')     // Faz E: idle|running|input_needed|error rozeti
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
   const [pendingQuestions, setPendingQuestions] = useState([])  // bekleyen AskUserQuestion soruları
   const [pendingPlans, setPendingPlans] = useState([])  // bekleyen ExitPlanMode plan onayları
@@ -944,6 +955,9 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
 
             if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
 
+            // Faz E: backend durum makinesi → tile rozeti.
+            if (ev.type === 'status' && ev.status) setSessStatus(ev.status)
+
             // Faz D: token-token akış — delta parçalarını aktif ai baloncuğuna
             // biriktir. Backend delta.id'yi gerçek assistant message id'sinden
             // türetir; final 'assistant' eventi aynı msgId ile gelince aşağıdaki
@@ -1080,6 +1094,8 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
     } finally {
       setStreaming(false)
       setThinking(false)
+      // Faz E: SSE kapandı — hata rozeti kalıcı, diğerleri boşta'ya döner.
+      setSessStatus(s => s === 'error' ? s : 'idle')
       activeAiRef.current = null
       setTimeout(() => inputRef.current?.focus(), 50)
     }
@@ -1281,10 +1297,15 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
             >{confirmClear ? 'Emin misin?' : '🗑 Temizle'}</button>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: connected ? '#4ade80' : '#ef4444', display: 'inline-block' }} />
-              <span style={{ color: connected ? '#4ade80' : '#ef4444', fontSize: '18px' }}>
-                {connected ? 'hazır' : 'yükleniyor...'}
-              </span>
+              {(() => {   // Faz E: bağlantı + oturum durumu tek rozette
+                const b = connected
+                  ? (SESSION_STATUS_BADGE[sessStatus] || SESSION_STATUS_BADGE.idle)
+                  : { text: 'yükleniyor...', color: '#ef4444' }
+                return (<>
+                  <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: b.color, display: 'inline-block' }} />
+                  <span style={{ color: b.color, fontSize: '18px', fontWeight: sessStatus === 'input_needed' ? 700 : 400 }}>{b.text}</span>
+                </>)
+              })()}
             </div>
           </div>
 
@@ -2143,6 +2164,7 @@ function SkillChatMesh({ id, width, height, variant }) {
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
   const [interrupting, setInterrupting] = useState(false)  // Faz C: durdurma isteği uçuşta
+  const [sessStatus, setSessStatus] = useState('idle')     // Faz E: idle|running|input_needed|error rozeti
   const [status, setStatus]           = useState({ exists: false, nodeCount: 0, featureCount: 0, builtAt: null })
   const [skill, setSkill]             = useState('reconstruct')
   const [scope, setScope]             = useState('')
@@ -2367,6 +2389,9 @@ function SkillChatMesh({ id, width, height, variant }) {
 
             if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
 
+            // Faz E: backend durum makinesi → tile rozeti.
+            if (ev.type === 'status' && ev.status) setSessStatus(ev.status)
+
             // Faz D: token-token akış — delta parçalarını aktif ai baloncuğuna
             // biriktir. Backend delta.id'yi gerçek assistant message id'sinden
             // türetir; final 'assistant' eventi aynı msgId ile gelince aşağıdaki
@@ -2447,6 +2472,8 @@ function SkillChatMesh({ id, width, height, variant }) {
     } finally {
       setStreaming(false)
       setThinking(false)
+      // Faz E: SSE kapandı — hata rozeti kalıcı, diğerleri boşta'ya döner.
+      setSessStatus(s => s === 'error' ? s : 'idle')
       activeAiRef.current = null
       setTimeout(() => inputRef.current?.focus(), 50)
     }
@@ -2628,6 +2655,15 @@ function SkillChatMesh({ id, width, height, variant }) {
                 {rebuildLog}
               </span>
             )}
+            {/* Faz E: oturum durumu rozeti — yalnız idle dışında göster (çubuk sade kalsın) */}
+            {sessStatus !== 'idle' && (() => {
+              const b = SESSION_STATUS_BADGE[sessStatus] || SESSION_STATUS_BADGE.idle
+              return (
+                <span style={{ marginLeft: 'auto', color: b.color, fontSize: '18px', flexShrink: 0, fontWeight: sessStatus === 'input_needed' ? 700 : 400 }}>
+                  ● {b.text}
+                </span>
+              )
+            })()}
           </div>
 
           {/* Loading bar */}
