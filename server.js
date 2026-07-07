@@ -1841,6 +1841,17 @@ class PersistentSession {
     return promise
   }
 
+  // Faz C: çalışan turu süreci ÖLDÜRMEDEN kes. CLI turu iptal eder ve result
+  // eventini normal akışla gönderir → _finishTurn tur sınırını her zamanki gibi
+  // kapatır (SSE done, kuyruk devam). Süreç canlı, pid aynı, cache sıcak —
+  // dispose+respawn'ın [resume-cost] cacheWrite cezası ödenmez.
+  async interrupt() {
+    if (!this.alive || !this.proc) throw new Error('canlı süreç yok')
+    if (!this.busy) throw new Error('çalışan tur yok')
+    // Ağır tool koşusu ortasında control_response gecikebilir → 10sn tolerans.
+    await this._control({ subtype: 'interrupt' }, 10000)
+  }
+
   _finishTurn() {
     if (this.sink) { try { this.sink.write('data: {"type":"done"}\n\n'); this.sink.end() } catch {} }
     this._detachSink()
@@ -2108,6 +2119,29 @@ app.post('/api/ai-session/:mediaId/clear',  makeClearHandler('session',     'ai-
 app.post('/api/roomchat/:mediaId/clear',    makeClearHandler('roomchat',    'roomchat',    'Oda sohbeti bulunamadı'))
 app.post('/api/roomsession/:mediaId/clear', makeClearHandler('roomsession', 'roomsession', 'Oda projesi bulunamadı'))
 app.post('/api/bluprint/:mediaId/clear',    makeClearHandler('bluprint',    'bluprint',    'Blueprint bulunamadı'))
+
+// ─── Faz C: çalışan turu respawn'sız kes (interrupt control_request) ─────────
+// clear'dan farkı: süreç ÖLDÜRÜLMEZ — CLI turu iptal eder, result normal gelir,
+// pid ve sıcak cache korunur; sonraki mesaj respawn cezası ödemeden devam eder.
+function makeInterruptHandler(poolPrefix) {
+  return async (req, res) => {
+    const s = sessionPool.get(`${poolPrefix}:${req.params.mediaId}`)
+    if (!s) return res.status(404).json({ error: 'aktif oturum yok' })
+    try {
+      const pid = s.proc?.pid
+      await s.interrupt()
+      res.json({ ok: true, pid, alive: s.alive })
+    } catch (e) {
+      // canlı süreç/tur yoksa ya da control_response zaman aşımı → 409; istemci
+      // gerekirse clear'a (süreç öldürme) düşebilir.
+      res.status(409).json({ error: e.message })
+    }
+  }
+}
+app.post('/api/ai-session/:mediaId/interrupt',  makeInterruptHandler('ai-session'))
+app.post('/api/roomchat/:mediaId/interrupt',    makeInterruptHandler('roomchat'))
+app.post('/api/roomsession/:mediaId/interrupt', makeInterruptHandler('roomsession'))
+app.post('/api/bluprint/:mediaId/interrupt',    makeInterruptHandler('bluprint'))
 
 // NOT: Eski trimSessionJsonl kaldırıldı — geçmiş diyeti CLI'ın kendi
 // microcompact/auto-compact'ine bırakıldı (idle>60dk sonrası resume'da eski

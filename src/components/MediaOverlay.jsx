@@ -765,6 +765,7 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   const [effort, setEffort]           = useState('normal')
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
+  const [interrupting, setInterrupting] = useState(false)  // Faz C: durdurma isteği uçuşta
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
   const [pendingQuestions, setPendingQuestions] = useState([])  // bekleyen AskUserQuestion soruları
   const [pendingPlans, setPendingPlans] = useState([])  // bekleyen ExitPlanMode plan onayları
@@ -994,6 +995,16 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               const created = ev.usage.cache_creation_input_tokens || 0
               setContextTokens({ used: fresh + cached + created, window: 200000, fresh, cached, created })
             }
+  }
+
+  // Faz C: çalışan turu respawn'sız kes. Backend interrupt control_request'i
+  // gönderir; CLI turu iptal edip result'ı normal yollar → SSE done ile
+  // streaming zaten false'a düşer, ekstra state temizliği gerekmez.
+  const interruptTurn = async () => {
+    if (!streaming || interrupting) return
+    setInterrupting(true)
+    try { await fetch(`${apiBase}/${id}/interrupt`, { method: 'POST' }) } catch {}
+    setInterrupting(false)
   }
 
   const submit = async () => {
@@ -1441,16 +1452,19 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               }}
             />
             <button
-              onClick={(e) => { e.stopPropagation(); submit() }}
-              disabled={streaming || !connected}
+              onClick={(e) => { e.stopPropagation(); streaming ? interruptTurn() : submit() }}
+              disabled={!connected || interrupting}
+              title={streaming ? 'Turu durdur (oturum canlı kalır)' : 'Gönder'}
               style={{
-                background: (streaming || !connected) ? '#1e3a5f' : 'linear-gradient(135deg,#2563eb,#60a5fa)',
+                background: !connected ? '#1e3a5f'
+                  : streaming ? 'linear-gradient(135deg,#dc2626,#f87171)'
+                  : 'linear-gradient(135deg,#2563eb,#60a5fa)',
                 border: 'none', borderRadius: '5px', color: '#fff', padding: '0 14px',
-                cursor: (streaming || !connected) ? 'not-allowed' : 'pointer',
+                cursor: (!connected || interrupting) ? 'not-allowed' : 'pointer',
                 fontSize: '32px', height: '52px', flexShrink: 0, pointerEvents: 'auto',
               }}
             >
-              {streaming ? '⏳' : '→'}
+              {streaming ? (interrupting ? '⏳' : '⏹') : '→'}
             </button>
           </div>
 
@@ -2106,6 +2120,7 @@ function SkillChatMesh({ id, width, height, variant }) {
   const [effort, setEffort]           = useState('normal')
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
+  const [interrupting, setInterrupting] = useState(false)  // Faz C: durdurma isteği uçuşta
   const [status, setStatus]           = useState({ exists: false, nodeCount: 0, featureCount: 0, builtAt: null })
   const [skill, setSkill]             = useState('reconstruct')
   const [scope, setScope]             = useState('')
@@ -2248,6 +2263,14 @@ function SkillChatMesh({ id, width, height, variant }) {
       setRebuilding(false)
       loadHistory()
     }
+  }
+
+  // Faz C: çalışan turu respawn'sız kes (SessionMesh'teki interruptTurn ile aynı desen).
+  const interruptTurn = async () => {
+    if (!streaming || interrupting) return
+    setInterrupting(true)
+    try { await fetch(`${variant.apiBase}/${id}/interrupt`, { method: 'POST' }) } catch {}
+    setInterrupting(false)
   }
 
   const submit = async () => {
@@ -2684,16 +2707,19 @@ function SkillChatMesh({ id, width, height, variant }) {
               }}
             />
             <button
-              onClick={(e) => { e.stopPropagation(); submit() }}
-              disabled={streaming || rebuilding || !connected}
+              onClick={(e) => { e.stopPropagation(); streaming ? interruptTurn() : submit() }}
+              disabled={rebuilding || !connected || interrupting}
+              title={streaming ? 'Turu durdur (oturum canlı kalır)' : 'Gönder'}
               style={{
-                background: (streaming || rebuilding || !connected) ? '#3a2e5e' : 'linear-gradient(135deg,#7c3aed,#a78bfa)',
+                background: (rebuilding || !connected) ? '#3a2e5e'
+                  : streaming ? 'linear-gradient(135deg,#dc2626,#f87171)'
+                  : 'linear-gradient(135deg,#7c3aed,#a78bfa)',
                 border: 'none', borderRadius: '5px', color: '#fff', padding: '0 14px',
-                cursor: (streaming || rebuilding || !connected) ? 'not-allowed' : 'pointer',
+                cursor: (rebuilding || !connected || interrupting) ? 'not-allowed' : 'pointer',
                 fontSize: '32px', height: '52px', flexShrink: 0, pointerEvents: 'auto',
               }}
             >
-              {streaming ? '⏳' : '→'}
+              {streaming ? (interrupting ? '⏳' : '⏹') : '→'}
             </button>
           </div>
         </div>
