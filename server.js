@@ -7,6 +7,7 @@ import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { once } from 'events';
+import { randomUUID } from 'crypto';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
@@ -1642,6 +1643,7 @@ class PersistentSession {
     this.lastResult = ''                     // son tamamlanan turun result metni (recall özeti)
     this.turnCount = 0                       // bu oturum nesnesinin tamamlanan tur sayısı (turn-usage logu)
     this.respawns = 0                        // --resume ile yeniden doğuş sayısı (faz1 İş 1.4)
+    this.pendingControls = new Map()         // Faz B: request_id → {resolve, reject, timeout} (control_response eşleştirme)
   }
 
   _spawn() {
@@ -1704,6 +1706,20 @@ class PersistentSession {
     if (!line.trim()) return
     let ev
     try { ev = JSON.parse(line) } catch { return }
+    // Faz B: control_response'u bekleyen _control() çağrısıyla eşleştir.
+    // Zarf: { type:'control_response', response:{ subtype:'success'|'error', request_id, error? } }
+    // FORWARD_TYPES'ta olmadığı için SSE'ye sızmaz; burada tüketilir.
+    if (ev.type === 'control_response') {
+      const rid = ev.response?.request_id
+      const pending = rid && this.pendingControls.get(rid)
+      if (pending) {
+        clearTimeout(pending.timeout)
+        this.pendingControls.delete(rid)
+        if (ev.response.subtype === 'error') pending.reject(new Error(ev.response.error || 'control_request reddedildi'))
+        else pending.resolve(ev.response)
+      }
+      return
+    }
     // Her tur başında bir init gelir (aynı session_id) — idempotent ele al.
     if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
       if (!this.sessionId) {
@@ -1799,6 +1815,32 @@ class PersistentSession {
     })
   }
 
+  // Faz B: canlı sürece control_request yaz, control_response'u bekle.
+  // claude-client sendControlRequest deseni (client.ts:1251). Bu katman sayesinde
+  // ayar değişimi/interrupt süreç ÖLDÜRMEDEN yapılır → sıcak cache korunur,
+  // respawn'ın [resume-cost] cacheWrite cezası ödenmez.
+  async _control(request, timeoutMs = 5000) {
+    if (!this.alive || !this.proc) throw new Error('control_request için canlı süreç yok')
+    const requestId = randomUUID()
+    const promise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingControls.delete(requestId)
+        reject(new Error(`control_response zaman aşımı (${request.subtype}, ${timeoutMs}ms)`))
+      }, timeoutMs)
+      this.pendingControls.set(requestId, { resolve, reject, timeout })
+    })
+    try {
+      await this._write(JSON.stringify({ type: 'control_request', request_id: requestId, request }) + '\n')
+    } catch (e) {
+      // Yazım başarısızsa bekleyen kaydı temizle — aksi halde timeout'ta
+      // dinleyicisiz reject → unhandled rejection olur.
+      const pending = this.pendingControls.get(requestId)
+      if (pending) { clearTimeout(pending.timeout); this.pendingControls.delete(requestId) }
+      throw e
+    }
+    return promise
+  }
+
   _finishTurn() {
     if (this.sink) { try { this.sink.write('data: {"type":"done"}\n\n'); this.sink.end() } catch {} }
     this._detachSink()
@@ -1855,6 +1897,10 @@ class PersistentSession {
     console.error(`[persist] CLOSE key=${this.key} code=${code} busy=${this.busy}`)
     this.alive = false
     this.proc = null
+    // Faz B: bekleyen control_request'ler yanıtsız kaldı — timeout'u beklemeden
+    // hemen reddet (çağıran _applySettingsViaControl fallback'ine düşer).
+    for (const [, p] of this.pendingControls) { clearTimeout(p.timeout); p.reject(new Error(`süreç kapandı (kod ${code})`)) }
+    this.pendingControls.clear()
     if (this.busy && this.sink) this._emitError(`oturum süreci kapandı (kod ${code})`)
     this._detachSink()
     this.busy = false
@@ -1863,17 +1909,60 @@ class PersistentSession {
 
   // Ayar güncellemesi. Faz 3 İş 3.2: her PATCH'te körlemesine respawn ETME —
   // UI çoğu zaman ayar nesnesini olduğu gibi yeniden gönderir; değer değişmediyse
-  // süreci öldürmek cache prefix'ini boşuna yeniden yazdırır. Yalnız spawn
-  // argümanlarını/env'ini gerçekten etkileyen alanlar DEĞİŞTİYSE dispose et;
-  // sonraki mesaj --resume + yeni ayarlarla yeniden doğar (geçmiş korunur).
+  // süreci öldürmek cache prefix'ini boşuna yeniden yazdırır.
+  // Faz B: değişiklik varsa önce control_request ile RESPAWN'SIZ uygulamayı dene
+  // (süreç canlı kalır → sıcak cache korunur, [resume-cost] cezası yok):
+  //   - model        → set_model (cliModel normalize edilmiş adla)
+  //   - permissionMode → set_permission_mode; AMA yalnız plan↔acceptEdits arası.
+  //     Gerekçe: permissionArgs() moda göre spawn-time konfig de değiştiriyor —
+  //     'ask' farklı PreToolUse hook matcher'ı ('*'), 'off' --dangerously-skip-
+  //     permissions bayrağı taşır. Bunlar control ile değişmez → respawn şart.
+  //   - effort       → CLAUDE_EFFORT env, spawn'da sabit → control'le değişmez, respawn şart.
+  // Control yolu başarısızsa (timeout/error) eski davranışa (dispose→resume) düşülür.
   applySettings(patch) {
     const SPAWN_FIELDS = ['model', 'effort', 'permissionMode']   // model/permission → CLI arg, effort → CLAUDE_EFFORT env
-    const changed = SPAWN_FIELDS.some(
+    const changedFields = SPAWN_FIELDS.filter(
       (k) => k in patch && String(patch[k] ?? '') !== String(this.settings[k] ?? '')
     )
+    const prevPerm = this.settings.permissionMode
     this.settings = { ...this.settings, ...patch }
-    if (changed) this.dispose()
-    else console.error(`[persist] applySettings: değişiklik yok, respawn atlandı key=${this.key}`)
+    if (!changedFields.length) {
+      console.error(`[persist] applySettings: değişiklik yok, respawn atlandı key=${this.key}`)
+      return
+    }
+    // Süreç zaten ölü → dispose/control gereksiz; sonraki spawn yeni ayarları kullanır.
+    if (!this.alive || !this.proc) {
+      console.error(`[persist] applySettings: süreç ölü, ayarlar sonraki spawn'a bırakıldı key=${this.key} (${changedFields.join(',')})`)
+      return
+    }
+    // effort env-var → respawn kaçınılmaz.
+    if (changedFields.includes('effort')) { this.dispose(); return }
+    // permissionMode değişimi control ile yalnız hook-konfigürasyonu aynı kalan
+    // plan↔acceptEdits geçişinde güvenli; ask/off içeren geçişler respawn ister.
+    const CONTROL_SAFE_PERM = new Set(['plan', 'acceptEdits'])
+    if (changedFields.includes('permissionMode') &&
+        !(CONTROL_SAFE_PERM.has(prevPerm) && CONTROL_SAFE_PERM.has(this.settings.permissionMode))) {
+      this.dispose(); return
+    }
+    // Fire-and-forget: route handler'lar applySettings'i beklemiyor; hata
+    // fallback'i (dispose) içeride ele alınır, unhandled rejection çıkmaz.
+    this._applySettingsViaControl(changedFields)
+  }
+
+  async _applySettingsViaControl(changedFields) {
+    try {
+      if (changedFields.includes('permissionMode')) {
+        await this._control({ subtype: 'set_permission_mode', mode: this.settings.permissionMode })
+      }
+      if (changedFields.includes('model')) {
+        await this._control({ subtype: 'set_model', model: cliModel(this.settings.model) })
+      }
+      console.error(`[persist] applySettings: control_request ile respawn'sız uygulandı key=${this.key} (${changedFields.join(',')}) pid=${this.proc?.pid}`)
+    } catch (e) {
+      // Graceful fallback: eski davranış — dispose; sonraki mesaj --resume ile doğar.
+      console.error(`[persist] applySettings: control yolu başarısız (${e.message}) → dispose fallback key=${this.key}`)
+      this.dispose()
+    }
   }
 
   dispose() {
