@@ -1071,6 +1071,70 @@ app.get('/api/youtube-meta', async (req, res) => {
   }
 });
 
+// Generic link meta proxy — Open Graph title + image for any URL (avoids CORS)
+app.get('/api/link-meta', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url gerekli' });
+  let target;
+  try { target = new URL(url); } catch { return res.status(400).json({ error: 'geçersiz url' }); }
+  if (!/^https?:$/.test(target.protocol)) return res.status(400).json({ error: 'yalnızca http(s)' });
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(url, {
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; FocusRoomBot/1.0; +link-preview)',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+    }).finally(() => clearTimeout(timer));
+    if (!r.ok) return res.json({ title: '', image: '', siteName: target.hostname });
+    // Sadece HTML'in başını oku — büyük gövdeleri baştan kes
+    const reader = r.body?.getReader?.();
+    let html = '';
+    if (reader) {
+      const dec = new TextDecoder();
+      while (html.length < 200000) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        html += dec.decode(value, { stream: true });
+        if (/<\/head>/i.test(html)) break;
+      }
+      reader.cancel().catch(() => {});
+    } else {
+      html = (await r.text()).slice(0, 200000);
+    }
+
+    const pick = (names) => {
+      for (const name of names) {
+        const re = new RegExp(
+          `<meta[^>]+(?:property|name)=["']${name}["'][^>]*>`, 'i');
+        const tag = html.match(re)?.[0];
+        if (tag) {
+          const c = tag.match(/content=["']([^"']*)["']/i)?.[1];
+          if (c) return c.trim();
+        }
+      }
+      return '';
+    };
+
+    let title = pick(['og:title', 'twitter:title']);
+    if (!title) title = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim() || '';
+    let image = pick(['og:image:secure_url', 'og:image', 'twitter:image', 'twitter:image:src']);
+    if (image) { try { image = new URL(image, target).href; } catch { image = ''; } }
+    const siteName = pick(['og:site_name']) || target.hostname;
+
+    res.json({
+      title: title ? title.replace(/\s+/g, ' ').slice(0, 300) : '',
+      image,
+      siteName,
+    });
+  } catch (err) {
+    res.json({ title: '', image: '', siteName: target.hostname });
+  }
+});
+
 // ─── Live Session (works standalone — no VS Code required) ───────────────────
 
 const CWD_KEY = process.cwd().replace(/\//g, '-') // e.g. -home-sedat-projects-...

@@ -364,13 +364,24 @@ export default function CanvasMesh({ id, content, width, height }) {
         return
       }
 
-      const isImgUrl = (() => { try { const { pathname } = new URL(text); return /\.(jpe?g|png|gif|webp|svg|bmp|avif|tiff?)(\?.*)?$/i.test(pathname) } catch { return false } })()
+      const parsedUrl = (() => { try { const u = new URL(text); return /^https?:$/.test(u.protocol) && u.hostname.includes('.') ? u : null } catch { return null } })()
+      const isImgUrl = parsedUrl ? /\.(jpe?g|png|gif|webp|svg|bmp|avif|tiff?)(\?.*)?$/i.test(parsedUrl.pathname) : false
       const pt = centerSurface()
       if (isImgUrl) {
         const dims = await getImageNaturalSize(text)
         const iw   = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
         const ih   = dims ? Math.round(iw * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
         const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: iw, h: ih, url: text }
+        setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
+      } else if (parsedUrl) {
+        // Generic link — Open Graph görsel + başlıktan kart oluştur
+        setPasteMsg('loading')
+        let title = '', thumbUrl = '', siteName = parsedUrl.hostname
+        try {
+          const r = await fetch(`/api/link-meta?url=${encodeURIComponent(text)}`)
+          if (r.ok) { const d = await r.json(); title = d.title || ''; thumbUrl = d.image || ''; siteName = d.siteName || siteName }
+        } catch {}
+        const ni = { id: crypto.randomUUID(), type: 'link', x: pt.x, y: pt.y, w: 480, h: 300, url: text, thumbUrl, title, siteName }
         setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
       } else {
         const ni = { id: crypto.randomUUID(), type: 'text', x: pt.x, y: pt.y, w: 500, h: 220, content: text || '', fontSize: 30 }
@@ -889,8 +900,36 @@ export default function CanvasMesh({ id, content, width, height }) {
     </div>
   )
 
+  // ── Generic link card (Open Graph görsel + başlık; görsel yoksa gri) ────────
+  const LinkCard = ({ item, clickable = false }) => {
+    const [imgOk, setImgOk] = useState(true)
+    const hasImg = !!item.thumbUrl && imgOk
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#3a3f47', cursor: clickable ? 'pointer' : 'inherit', boxSizing: 'border-box' }}
+        {...(clickable ? { onMouseDown: stop, onClick: (e) => { stop(e); navigator.clipboard?.writeText(item.url).catch(() => {}) } } : {})}>
+        {hasImg ? (
+          <img src={item.thumbUrl} alt="" draggable={false} onError={() => setImgOk(false)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
+        ) : (
+          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+            <span style={{ fontSize: 64, opacity: 0.35 }}>🔗</span>
+          </div>
+        )}
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: hasImg ? 'linear-gradient(transparent, rgba(0,0,0,0.88))' : 'rgba(0,0,0,0.25)', padding: '28px 14px 12px', color: '#fff', pointerEvents: 'none' }}>
+          {item.title && (
+            <div style={{ fontSize: 28, lineHeight: 1.35, fontWeight: 600, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>{item.title}</div>
+          )}
+          {item.siteName && (
+            <div style={{ fontSize: 20, marginTop: 6, opacity: 0.7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.siteName}</div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   const renderBoxContent = (item) => {
     if (item.type === 'room')    return <RoomChip item={item} />
+    if (item.type === 'link')    return <LinkCard item={item} />
     if (item.type === 'youtube') return <YoutubeCard item={item} />
     if (item.type === 'image') return <img src={item.url} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'fill', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
     if (item.type === 'text' && editingItemId === item.id) {
@@ -955,6 +994,10 @@ export default function CanvasMesh({ id, content, width, height }) {
                 ) : item.type === 'youtube' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
                     <YoutubeCard item={item} clickable />
+                  </div>
+                ) : item.type === 'link' ? (
+                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+                    <LinkCard item={item} clickable />
                   </div>
                 ) : item.type === 'text' ? (
                   item.markdown && item.content
@@ -1194,8 +1237,6 @@ export default function CanvasMesh({ id, content, width, height }) {
               {items.filter(it => it.type !== 'arrow').map(item => {
                 const isSel  = selectedIds.has(item.id)
                 const isHov  = hoveredItemId === item.id
-                const isDrag = dragState?.origins.some(o => o.id === item.id)
-                const showHL = isSel || (isHov && !drawMode)
                 return (
                   <div key={item.id} style={{
                     position: 'absolute', left: item.x, top: item.y, width: item.w,
