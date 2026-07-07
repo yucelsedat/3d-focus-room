@@ -6,6 +6,8 @@ import os from 'os';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { once } from 'events';
+import { randomUUID } from 'crypto';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
@@ -1211,17 +1213,35 @@ app.post('/api/permission/ask', (req, res) => {
     stream.write(`data: ${JSON.stringify(payload)}\n\n`)
   } catch {}
 
+  // Faz E: oturum artık kullanıcıdan girdi bekliyor → tile rozeti 'girdi bekliyor'.
+  const kind = isQuestion ? 'question' : isPlan ? 'plan' : 'permission'
+  findSessionBySid(session_id)?._setStatus('input_needed', { kind, toolUseId: tool_use_id, toolName: tool_name })
+
   const timer = setTimeout(() => {
-    if (pendingPermissions.delete(tool_use_id)) res.json({ decision: 'deny', reason: 'Zaman aşımı' })
+    if (pendingPermissions.delete(tool_use_id)) {
+      res.json({ decision: 'deny', reason: 'Zaman aşımı' })
+      // Faz E: deny ile tur devam ediyor → rozet running'e dönsün.
+      const s = findSessionBySid(session_id)
+      if (s?.status === 'input_needed') s._setStatus('running')
+    }
   }, PERM_TIMEOUT_MS)
 
   pendingPermissions.set(tool_use_id, {
+    sessionId: session_id,   // Faz E: karar gelince rozeti geri çevirmek için
     resolve: (decision, reason) => {
       clearTimeout(timer)
       res.json({ decision, reason: reason || '' })
     },
   })
 })
+
+// Faz E: session_id → canlı PersistentSession (havuz küçük, tarama ucuz).
+// İzin köprüsü PersistentSession dışında aktığı için rozet geçişleri buradan bulunur.
+function findSessionBySid(sid) {
+  if (!sid) return null
+  for (const s of sessionPool.map.values()) if (s.sessionId === sid) return s
+  return null
+}
 
 // Tarayıcı kullanıcının kararını buraya yollar
 app.post('/api/permission/decision', (req, res) => {
@@ -1230,6 +1250,9 @@ app.post('/api/permission/decision', (req, res) => {
   if (!pending) return res.status(404).json({ error: 'Bekleyen izin isteği yok' })
   pendingPermissions.delete(toolUseId)
   pending.resolve(decision === 'allow' ? 'allow' : 'deny', reason)
+  // Faz E: karar verildi, tur devam ediyor → rozet running'e dönsün.
+  const s = findSessionBySid(pending.sessionId)
+  if (s?.status === 'input_needed') s._setStatus('running')
   res.json({ ok: true })
 })
 
@@ -1346,6 +1369,13 @@ app.post('/api/session/live/message', (req, res) => {
 // ─── Ortak yardımcılar (hem tek-atış streamClaudeToSSE hem kalıcı oturum yolu) ──
 // CLI stream-json çıktısında tarayıcıya ilettiğimiz event türleri.
 const FORWARD_TYPES = new Set(['assistant', 'tool', 'result', 'system'])
+
+// Faz D: token-token akış. Bu tile'ların spawn'ına --include-partial-messages
+// eklenir; CLI'dan gelen stream_event/text_delta parçaları SSE'ye kompakt
+// {type:'delta', id, text} olarak iner (ham stream_event iletilmez — hacim
+// küçük kalır, SSE sözleşmesi geriye uyumlu ek alır). multiagent bilinçli
+// hariç: hot-loop, UI'ı delta render etmiyor, ek çıktı hacmi gereksiz.
+const PARTIAL_STREAM_TILES = new Set(['ai-session', 'roomchat', 'bluprint', 'roomsession'])
 // Spawn edilen claude'a sızdırmamamız gereken oynak env değişkenleri.
 const CLAUDE_VOLATILE_ENV = ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
   'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']
@@ -1641,6 +1671,22 @@ class PersistentSession {
     this.lastResult = ''                     // son tamamlanan turun result metni (recall özeti)
     this.turnCount = 0                       // bu oturum nesnesinin tamamlanan tur sayısı (turn-usage logu)
     this.respawns = 0                        // --resume ile yeniden doğuş sayısı (faz1 İş 1.4)
+    this.pendingControls = new Map()         // Faz B: request_id → {resolve, reject, timeout} (control_response eşleştirme)
+    this.status = 'idle'                     // Faz E: idle | running | input_needed | error (frontend rozeti)
+    this.pendingAction = null                // Faz E: input_needed'da ne beklendiği { kind, toolUseId, toolName? }
+  }
+
+  // Faz E: durum makinesi. Değişimde SSE'ye {type:'status'} yaz — frontend
+  // tile rozetini günceller ("çalışıyor / girdi bekliyor / boşta / hata").
+  // claude-client setStatus/status_change deseni; busy/alive iç bayrakları
+  // aynen kalır, bu katman yalnız görünürlük ekler.
+  _setStatus(status, pendingAction = null) {
+    if (this.status === status && this.pendingAction === pendingAction) return
+    this.status = status
+    this.pendingAction = pendingAction
+    if (this.sink) {
+      try { this.sink.write(sseLine({ type: 'status', status, pendingAction })) } catch {}
+    }
   }
 
   _spawn() {
@@ -1654,6 +1700,8 @@ class PersistentSession {
       '--exclude-dynamic-system-prompt-sections',
       ...mcpArgs(tile),
     ]
+    // Faz D: interaktif tile'larda token-token akış (stream_event → SSE delta).
+    if (PARTIAL_STREAM_TILES.has(tile)) a.push('--include-partial-messages')
     if (this.sys) a.push('--append-system-prompt', this.sys)
     if (this.maxTurns) a.push('--max-turns', String(this.maxTurns))
     // Tool kısıtı: system prompt'a giren tool tanımı sayısını (→ her spawn'ın
@@ -1703,6 +1751,32 @@ class PersistentSession {
     if (!line.trim()) return
     let ev
     try { ev = JSON.parse(line) } catch { return }
+    // Faz B: control_response'u bekleyen _control() çağrısıyla eşleştir.
+    // Zarf: { type:'control_response', response:{ subtype:'success'|'error', request_id, error? } }
+    // FORWARD_TYPES'ta olmadığı için SSE'ye sızmaz; burada tüketilir.
+    if (ev.type === 'control_response') {
+      const rid = ev.response?.request_id
+      const pending = rid && this.pendingControls.get(rid)
+      if (pending) {
+        clearTimeout(pending.timeout)
+        this.pendingControls.delete(rid)
+        if (ev.response.subtype === 'error') pending.reject(new Error(ev.response.error || 'control_request reddedildi'))
+        else pending.resolve(ev.response)
+      }
+      return
+    }
+    // Faz D: stream_event'i ham iletme — yalnız text_delta'yı kompakt {type:'delta'}
+    // olarak SSE'ye indir. id = o an akan assistant mesajının id'si (message_start'tan);
+    // frontend finali aynı stream-<id> baloncuğuna yazdığı için tur sonunda delta
+    // birikimi tam metinle kendiliğinden değiştirilir (çakışma/çift render yok).
+    if (ev.type === 'stream_event') {
+      const e = ev.event
+      if (e?.type === 'message_start' && e.message?.id) this._partialMsgId = e.message.id
+      else if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta' && e.delta.text && this.sink) {
+        try { this.sink.write(sseLine({ type: 'delta', id: this._partialMsgId || null, text: e.delta.text })) } catch {}
+      }
+      return
+    }
     // Her tur başında bir init gelir (aynı session_id) — idempotent ele al.
     if (ev.type === 'system' && ev.subtype === 'init' && ev.session_id) {
       if (!this.sessionId) {
@@ -1732,6 +1806,10 @@ class PersistentSession {
         }
       }
       if (typeof ev.result === 'string') this.lastResult = ev.result   // recall özeti için son yanıt
+      // Faz E: tur sınırı — interrupt'la kesilen tur is_error=true döner ama bu
+      // kullanıcı isteğidir, 'hata' rozeti yanıltıcı olur → idle say.
+      this._setStatus(ev.is_error && !this._interrupted ? 'error' : 'idle')
+      this._interrupted = false
       this._finishTurn()   // tur sınırı
     }
   }
@@ -1764,13 +1842,78 @@ class PersistentSession {
       if (this.sink) { try { this.sink.write(': ping\n\n') } catch {} }
     }, 15000)
 
+    this._setStatus('running')   // Faz E: tur başladı (sink bağlı → event frontend'e ulaşır)
+
     try {
-      this.proc.stdin.write(userLine(job.message))
+      await this._write(userLine(job.message))
     } catch (e) {
       this._emitError(e.message)
       this.busy = false
       this._next()
     }
+  }
+
+  // Faz A: stdin backpressure. Uzun mesajlarda (büyük yapıştırma, blueprint spec)
+  // kernel yazma buffer'ı dolarsa write() false döner; drain beklemeden yazmaya
+  // devam etmek NDJSON çerçevesini bozabilir (kısmi satır → JSON.parse fail).
+  // claude-client writeToStdin deseni: false → 'drain' beklenir. Süreç await
+  // sırasında ölürse 'error'/'close' ile reddet, çağıran (_next) _emitError'a düşer.
+  async _write(data) {
+    const stdin = this.proc && this.proc.stdin
+    if (!stdin || stdin.destroyed) throw new Error('stdin kapalı (süreç yok)')
+    if (stdin.write(data)) return   // buffer'a sığdı, drain gereksiz
+    // write() false → yüksek su seviyesi; drain'i bekle ama süreç ölürse çık.
+    await new Promise((resolve, reject) => {
+      const onDrain = () => { cleanup(); resolve() }
+      const onErr = (e) => { cleanup(); reject(e instanceof Error ? e : new Error(String(e))) }
+      const onClose = () => { cleanup(); reject(new Error('stdin drain beklerken süreç kapandı')) }
+      const cleanup = () => {
+        stdin.removeListener('drain', onDrain)
+        stdin.removeListener('error', onErr)
+        stdin.removeListener('close', onClose)
+      }
+      stdin.once('drain', onDrain)
+      stdin.once('error', onErr)
+      stdin.once('close', onClose)
+    })
+  }
+
+  // Faz B: canlı sürece control_request yaz, control_response'u bekle.
+  // claude-client sendControlRequest deseni (client.ts:1251). Bu katman sayesinde
+  // ayar değişimi/interrupt süreç ÖLDÜRMEDEN yapılır → sıcak cache korunur,
+  // respawn'ın [resume-cost] cacheWrite cezası ödenmez.
+  async _control(request, timeoutMs = 5000) {
+    if (!this.alive || !this.proc) throw new Error('control_request için canlı süreç yok')
+    const requestId = randomUUID()
+    const promise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingControls.delete(requestId)
+        reject(new Error(`control_response zaman aşımı (${request.subtype}, ${timeoutMs}ms)`))
+      }, timeoutMs)
+      this.pendingControls.set(requestId, { resolve, reject, timeout })
+    })
+    try {
+      await this._write(JSON.stringify({ type: 'control_request', request_id: requestId, request }) + '\n')
+    } catch (e) {
+      // Yazım başarısızsa bekleyen kaydı temizle — aksi halde timeout'ta
+      // dinleyicisiz reject → unhandled rejection olur.
+      const pending = this.pendingControls.get(requestId)
+      if (pending) { clearTimeout(pending.timeout); this.pendingControls.delete(requestId) }
+      throw e
+    }
+    return promise
+  }
+
+  // Faz C: çalışan turu süreci ÖLDÜRMEDEN kes. CLI turu iptal eder ve result
+  // eventini normal akışla gönderir → _finishTurn tur sınırını her zamanki gibi
+  // kapatır (SSE done, kuyruk devam). Süreç canlı, pid aynı, cache sıcak —
+  // dispose+respawn'ın [resume-cost] cacheWrite cezası ödenmez.
+  async interrupt() {
+    if (!this.alive || !this.proc) throw new Error('canlı süreç yok')
+    if (!this.busy) throw new Error('çalışan tur yok')
+    this._interrupted = true   // Faz E: gelecek is_error result'ı 'hata' değil 'idle' sayılsın
+    // Ağır tool koşusu ortasında control_response gecikebilir → 10sn tolerans.
+    await this._control({ subtype: 'interrupt' }, 10000)
   }
 
   _finishTurn() {
@@ -1822,6 +1965,7 @@ class PersistentSession {
   }
 
   _emitError(msg) {
+    this._setStatus('error')   // Faz E (sink kapanmadan önce yaz ki event ulaşsın)
     if (this.sink) { try { this.sink.write(sseLine({ type: 'error', message: msg })); this.sink.end() } catch {} }
   }
 
@@ -1829,6 +1973,10 @@ class PersistentSession {
     console.error(`[persist] CLOSE key=${this.key} code=${code} busy=${this.busy}`)
     this.alive = false
     this.proc = null
+    // Faz B: bekleyen control_request'ler yanıtsız kaldı — timeout'u beklemeden
+    // hemen reddet (çağıran _applySettingsViaControl fallback'ine düşer).
+    for (const [, p] of this.pendingControls) { clearTimeout(p.timeout); p.reject(new Error(`süreç kapandı (kod ${code})`)) }
+    this.pendingControls.clear()
     if (this.busy && this.sink) this._emitError(`oturum süreci kapandı (kod ${code})`)
     this._detachSink()
     this.busy = false
@@ -1837,17 +1985,60 @@ class PersistentSession {
 
   // Ayar güncellemesi. Faz 3 İş 3.2: her PATCH'te körlemesine respawn ETME —
   // UI çoğu zaman ayar nesnesini olduğu gibi yeniden gönderir; değer değişmediyse
-  // süreci öldürmek cache prefix'ini boşuna yeniden yazdırır. Yalnız spawn
-  // argümanlarını/env'ini gerçekten etkileyen alanlar DEĞİŞTİYSE dispose et;
-  // sonraki mesaj --resume + yeni ayarlarla yeniden doğar (geçmiş korunur).
+  // süreci öldürmek cache prefix'ini boşuna yeniden yazdırır.
+  // Faz B: değişiklik varsa önce control_request ile RESPAWN'SIZ uygulamayı dene
+  // (süreç canlı kalır → sıcak cache korunur, [resume-cost] cezası yok):
+  //   - model        → set_model (cliModel normalize edilmiş adla)
+  //   - permissionMode → set_permission_mode; AMA yalnız plan↔acceptEdits arası.
+  //     Gerekçe: permissionArgs() moda göre spawn-time konfig de değiştiriyor —
+  //     'ask' farklı PreToolUse hook matcher'ı ('*'), 'off' --dangerously-skip-
+  //     permissions bayrağı taşır. Bunlar control ile değişmez → respawn şart.
+  //   - effort       → CLAUDE_EFFORT env, spawn'da sabit → control'le değişmez, respawn şart.
+  // Control yolu başarısızsa (timeout/error) eski davranışa (dispose→resume) düşülür.
   applySettings(patch) {
     const SPAWN_FIELDS = ['model', 'effort', 'permissionMode']   // model/permission → CLI arg, effort → CLAUDE_EFFORT env
-    const changed = SPAWN_FIELDS.some(
+    const changedFields = SPAWN_FIELDS.filter(
       (k) => k in patch && String(patch[k] ?? '') !== String(this.settings[k] ?? '')
     )
+    const prevPerm = this.settings.permissionMode
     this.settings = { ...this.settings, ...patch }
-    if (changed) this.dispose()
-    else console.error(`[persist] applySettings: değişiklik yok, respawn atlandı key=${this.key}`)
+    if (!changedFields.length) {
+      console.error(`[persist] applySettings: değişiklik yok, respawn atlandı key=${this.key}`)
+      return
+    }
+    // Süreç zaten ölü → dispose/control gereksiz; sonraki spawn yeni ayarları kullanır.
+    if (!this.alive || !this.proc) {
+      console.error(`[persist] applySettings: süreç ölü, ayarlar sonraki spawn'a bırakıldı key=${this.key} (${changedFields.join(',')})`)
+      return
+    }
+    // effort env-var → respawn kaçınılmaz.
+    if (changedFields.includes('effort')) { this.dispose(); return }
+    // permissionMode değişimi control ile yalnız hook-konfigürasyonu aynı kalan
+    // plan↔acceptEdits geçişinde güvenli; ask/off içeren geçişler respawn ister.
+    const CONTROL_SAFE_PERM = new Set(['plan', 'acceptEdits'])
+    if (changedFields.includes('permissionMode') &&
+        !(CONTROL_SAFE_PERM.has(prevPerm) && CONTROL_SAFE_PERM.has(this.settings.permissionMode))) {
+      this.dispose(); return
+    }
+    // Fire-and-forget: route handler'lar applySettings'i beklemiyor; hata
+    // fallback'i (dispose) içeride ele alınır, unhandled rejection çıkmaz.
+    this._applySettingsViaControl(changedFields)
+  }
+
+  async _applySettingsViaControl(changedFields) {
+    try {
+      if (changedFields.includes('permissionMode')) {
+        await this._control({ subtype: 'set_permission_mode', mode: this.settings.permissionMode })
+      }
+      if (changedFields.includes('model')) {
+        await this._control({ subtype: 'set_model', model: cliModel(this.settings.model) })
+      }
+      console.error(`[persist] applySettings: control_request ile respawn'sız uygulandı key=${this.key} (${changedFields.join(',')}) pid=${this.proc?.pid}`)
+    } catch (e) {
+      // Graceful fallback: eski davranış — dispose; sonraki mesaj --resume ile doğar.
+      console.error(`[persist] applySettings: control yolu başarısız (${e.message}) → dispose fallback key=${this.key}`)
+      this.dispose()
+    }
   }
 
   dispose() {
@@ -1993,6 +2184,29 @@ app.post('/api/ai-session/:mediaId/clear',  makeClearHandler('session',     'ai-
 app.post('/api/roomchat/:mediaId/clear',    makeClearHandler('roomchat',    'roomchat',    'Oda sohbeti bulunamadı'))
 app.post('/api/roomsession/:mediaId/clear', makeClearHandler('roomsession', 'roomsession', 'Oda projesi bulunamadı'))
 app.post('/api/bluprint/:mediaId/clear',    makeClearHandler('bluprint',    'bluprint',    'Blueprint bulunamadı'))
+
+// ─── Faz C: çalışan turu respawn'sız kes (interrupt control_request) ─────────
+// clear'dan farkı: süreç ÖLDÜRÜLMEZ — CLI turu iptal eder, result normal gelir,
+// pid ve sıcak cache korunur; sonraki mesaj respawn cezası ödemeden devam eder.
+function makeInterruptHandler(poolPrefix) {
+  return async (req, res) => {
+    const s = sessionPool.get(`${poolPrefix}:${req.params.mediaId}`)
+    if (!s) return res.status(404).json({ error: 'aktif oturum yok' })
+    try {
+      const pid = s.proc?.pid
+      await s.interrupt()
+      res.json({ ok: true, pid, alive: s.alive })
+    } catch (e) {
+      // canlı süreç/tur yoksa ya da control_response zaman aşımı → 409; istemci
+      // gerekirse clear'a (süreç öldürme) düşebilir.
+      res.status(409).json({ error: e.message })
+    }
+  }
+}
+app.post('/api/ai-session/:mediaId/interrupt',  makeInterruptHandler('ai-session'))
+app.post('/api/roomchat/:mediaId/interrupt',    makeInterruptHandler('roomchat'))
+app.post('/api/roomsession/:mediaId/interrupt', makeInterruptHandler('roomsession'))
+app.post('/api/bluprint/:mediaId/interrupt',    makeInterruptHandler('bluprint'))
 
 // NOT: Eski trimSessionJsonl kaldırıldı — geçmiş diyeti CLI'ın kendi
 // microcompact/auto-compact'ine bırakıldı (idle>60dk sonrası resume'da eski

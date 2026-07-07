@@ -741,6 +741,16 @@ function PlanReview({ req, onApprove, onReject }) {
   )
 }
 
+// Faz E: oturum durum makinesi rozeti (SessionMesh + SkillChatMesh ortak).
+// Backend SSE {type:'status'} eventleriyle besler; en değerlisi input_needed —
+// tile'ın senden izin/yanıt/plan onayı beklediğini uzaktan görünür kılar.
+const SESSION_STATUS_BADGE = {
+  idle:         { text: 'hazır',            color: '#4ade80' },
+  running:      { text: 'çalışıyor…',       color: '#60a5fa' },
+  input_needed: { text: '⚠ girdi bekliyor', color: '#fbbf24' },
+  error:        { text: 'hata',             color: '#ef4444' },
+}
+
 function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '🤖', label = 'Claude' }) {
   const currentRoomId = useStore(s => s.currentRoomId)
   const w = parseFloat(width)
@@ -765,6 +775,8 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
   const [effort, setEffort]           = useState('normal')
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
+  const [interrupting, setInterrupting] = useState(false)  // Faz C: durdurma isteği uçuşta
+  const [sessStatus, setSessStatus] = useState('idle')     // Faz E: idle|running|input_needed|error rozeti
   const [pendingPerms, setPendingPerms] = useState([])  // bekleyen izin istekleri
   const [pendingQuestions, setPendingQuestions] = useState([])  // bekleyen AskUserQuestion soruları
   const [pendingPlans, setPendingPlans] = useState([])  // bekleyen ExitPlanMode plan onayları
@@ -943,6 +955,31 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
 
             if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
 
+            // Faz E: backend durum makinesi → tile rozeti.
+            if (ev.type === 'status' && ev.status) setSessStatus(ev.status)
+
+            // Faz D: token-token akış — delta parçalarını aktif ai baloncuğuna
+            // biriktir. Backend delta.id'yi gerçek assistant message id'sinden
+            // türetir; final 'assistant' eventi aynı msgId ile gelince aşağıdaki
+            // handler içeriği tam metinle DEĞİŞTİRİR → birikim kendiliğinden
+            // temiz haliyle kapanır, çift render olmaz.
+            if (ev.type === 'delta' && ev.text) {
+              setThinking(false)
+              const dMsgId = ev.id || 'partial'
+              const dId = `stream-${dMsgId}`
+              if (!streamSeenIds.has(dMsgId)) {
+                streamSeenIds.add(dMsgId)
+                activeAiRef.current = { id: dId, msgId: dMsgId }
+                setMessages(prev =>
+                  prev.some(m => m.id === dId) ? prev
+                    : [...prev, { id: dId, role: 'ai', content: ev.text }]
+                )
+              } else if (activeAiRef.current?.msgId === dMsgId) {
+                const eid = activeAiRef.current.id
+                setMessages(prev => prev.map(m => m.id === eid ? { ...m, content: m.content + ev.text } : m))
+              }
+            }
+
             if (ev.type === 'assistant') {
               const msgId  = ev.message?.id
               const blocks = ev.message?.content ?? []
@@ -996,6 +1033,16 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
             }
   }
 
+  // Faz C: çalışan turu respawn'sız kes. Backend interrupt control_request'i
+  // gönderir; CLI turu iptal edip result'ı normal yollar → SSE done ile
+  // streaming zaten false'a düşer, ekstra state temizliği gerekmez.
+  const interruptTurn = async () => {
+    if (!streaming || interrupting) return
+    setInterrupting(true)
+    try { await fetch(`${apiBase}/${id}/interrupt`, { method: 'POST' }) } catch {}
+    setInterrupting(false)
+  }
+
   const submit = async () => {
     const msg = inputRef.current?.value?.trim() ?? ''
     if (!msg || streaming) return
@@ -1047,6 +1094,8 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
     } finally {
       setStreaming(false)
       setThinking(false)
+      // Faz E: SSE kapandı — hata rozeti kalıcı, diğerleri boşta'ya döner.
+      setSessStatus(s => s === 'error' ? s : 'idle')
       activeAiRef.current = null
       setTimeout(() => inputRef.current?.focus(), 50)
     }
@@ -1248,10 +1297,15 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
             >{confirmClear ? 'Emin misin?' : '🗑 Temizle'}</button>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: connected ? '#4ade80' : '#ef4444', display: 'inline-block' }} />
-              <span style={{ color: connected ? '#4ade80' : '#ef4444', fontSize: '18px' }}>
-                {connected ? 'hazır' : 'yükleniyor...'}
-              </span>
+              {(() => {   // Faz E: bağlantı + oturum durumu tek rozette
+                const b = connected
+                  ? (SESSION_STATUS_BADGE[sessStatus] || SESSION_STATUS_BADGE.idle)
+                  : { text: 'yükleniyor...', color: '#ef4444' }
+                return (<>
+                  <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: b.color, display: 'inline-block' }} />
+                  <span style={{ color: b.color, fontSize: '18px', fontWeight: sessStatus === 'input_needed' ? 700 : 400 }}>{b.text}</span>
+                </>)
+              })()}
             </div>
           </div>
 
@@ -1441,16 +1495,19 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
               }}
             />
             <button
-              onClick={(e) => { e.stopPropagation(); submit() }}
-              disabled={streaming || !connected}
+              onClick={(e) => { e.stopPropagation(); streaming ? interruptTurn() : submit() }}
+              disabled={!connected || interrupting}
+              title={streaming ? 'Turu durdur (oturum canlı kalır)' : 'Gönder'}
               style={{
-                background: (streaming || !connected) ? '#1e3a5f' : 'linear-gradient(135deg,#2563eb,#60a5fa)',
+                background: !connected ? '#1e3a5f'
+                  : streaming ? 'linear-gradient(135deg,#dc2626,#f87171)'
+                  : 'linear-gradient(135deg,#2563eb,#60a5fa)',
                 border: 'none', borderRadius: '5px', color: '#fff', padding: '0 14px',
-                cursor: (streaming || !connected) ? 'not-allowed' : 'pointer',
+                cursor: (!connected || interrupting) ? 'not-allowed' : 'pointer',
                 fontSize: '32px', height: '52px', flexShrink: 0, pointerEvents: 'auto',
               }}
             >
-              {streaming ? '⏳' : '→'}
+              {streaming ? (interrupting ? '⏳' : '⏹') : '→'}
             </button>
           </div>
 
@@ -2106,6 +2163,8 @@ function SkillChatMesh({ id, width, height, variant }) {
   const [effort, setEffort]           = useState('normal')
   const [permMode, setPermMode]       = useState('bypassPermissions')
   const [contextTokens, setContextTokens] = useState(null)
+  const [interrupting, setInterrupting] = useState(false)  // Faz C: durdurma isteği uçuşta
+  const [sessStatus, setSessStatus] = useState('idle')     // Faz E: idle|running|input_needed|error rozeti
   const [status, setStatus]           = useState({ exists: false, nodeCount: 0, featureCount: 0, builtAt: null })
   const [skill, setSkill]             = useState('reconstruct')
   const [scope, setScope]             = useState('')
@@ -2250,6 +2309,14 @@ function SkillChatMesh({ id, width, height, variant }) {
     }
   }
 
+  // Faz C: çalışan turu respawn'sız kes (SessionMesh'teki interruptTurn ile aynı desen).
+  const interruptTurn = async () => {
+    if (!streaming || interrupting) return
+    setInterrupting(true)
+    try { await fetch(`${variant.apiBase}/${id}/interrupt`, { method: 'POST' }) } catch {}
+    setInterrupting(false)
+  }
+
   const submit = async () => {
     const msg = inputRef.current?.value?.trim() ?? ''
     if (!msg || streaming || rebuilding) return
@@ -2322,6 +2389,31 @@ function SkillChatMesh({ id, width, height, variant }) {
 
             if (ev.type === 'system' && ev.subtype === 'thinking_tokens') setThinking(true)
 
+            // Faz E: backend durum makinesi → tile rozeti.
+            if (ev.type === 'status' && ev.status) setSessStatus(ev.status)
+
+            // Faz D: token-token akış — delta parçalarını aktif ai baloncuğuna
+            // biriktir. Backend delta.id'yi gerçek assistant message id'sinden
+            // türetir; final 'assistant' eventi aynı msgId ile gelince aşağıdaki
+            // handler içeriği tam metinle DEĞİŞTİRİR → birikim kendiliğinden
+            // temiz haliyle kapanır, çift render olmaz.
+            if (ev.type === 'delta' && ev.text) {
+              setThinking(false)
+              const dMsgId = ev.id || 'partial'
+              const dId = `stream-${dMsgId}`
+              if (!streamSeenIds.has(dMsgId)) {
+                streamSeenIds.add(dMsgId)
+                activeAiRef.current = { id: dId, msgId: dMsgId }
+                setMessages(prev =>
+                  prev.some(m => m.id === dId) ? prev
+                    : [...prev, { id: dId, role: 'ai', content: ev.text }]
+                )
+              } else if (activeAiRef.current?.msgId === dMsgId) {
+                const eid = activeAiRef.current.id
+                setMessages(prev => prev.map(m => m.id === eid ? { ...m, content: m.content + ev.text } : m))
+              }
+            }
+
             if (ev.type === 'assistant') {
               const msgId  = ev.message?.id
               const blocks = ev.message?.content ?? []
@@ -2380,6 +2472,8 @@ function SkillChatMesh({ id, width, height, variant }) {
     } finally {
       setStreaming(false)
       setThinking(false)
+      // Faz E: SSE kapandı — hata rozeti kalıcı, diğerleri boşta'ya döner.
+      setSessStatus(s => s === 'error' ? s : 'idle')
       activeAiRef.current = null
       setTimeout(() => inputRef.current?.focus(), 50)
     }
@@ -2561,6 +2655,15 @@ function SkillChatMesh({ id, width, height, variant }) {
                 {rebuildLog}
               </span>
             )}
+            {/* Faz E: oturum durumu rozeti — yalnız idle dışında göster (çubuk sade kalsın) */}
+            {sessStatus !== 'idle' && (() => {
+              const b = SESSION_STATUS_BADGE[sessStatus] || SESSION_STATUS_BADGE.idle
+              return (
+                <span style={{ marginLeft: 'auto', color: b.color, fontSize: '18px', flexShrink: 0, fontWeight: sessStatus === 'input_needed' ? 700 : 400 }}>
+                  ● {b.text}
+                </span>
+              )
+            })()}
           </div>
 
           {/* Loading bar */}
@@ -2684,16 +2787,19 @@ function SkillChatMesh({ id, width, height, variant }) {
               }}
             />
             <button
-              onClick={(e) => { e.stopPropagation(); submit() }}
-              disabled={streaming || rebuilding || !connected}
+              onClick={(e) => { e.stopPropagation(); streaming ? interruptTurn() : submit() }}
+              disabled={rebuilding || !connected || interrupting}
+              title={streaming ? 'Turu durdur (oturum canlı kalır)' : 'Gönder'}
               style={{
-                background: (streaming || rebuilding || !connected) ? '#3a2e5e' : 'linear-gradient(135deg,#7c3aed,#a78bfa)',
+                background: (rebuilding || !connected) ? '#3a2e5e'
+                  : streaming ? 'linear-gradient(135deg,#dc2626,#f87171)'
+                  : 'linear-gradient(135deg,#7c3aed,#a78bfa)',
                 border: 'none', borderRadius: '5px', color: '#fff', padding: '0 14px',
-                cursor: (streaming || rebuilding || !connected) ? 'not-allowed' : 'pointer',
+                cursor: (rebuilding || !connected || interrupting) ? 'not-allowed' : 'pointer',
                 fontSize: '32px', height: '52px', flexShrink: 0, pointerEvents: 'auto',
               }}
             >
-              {streaming ? '⏳' : '→'}
+              {streaming ? (interrupting ? '⏳' : '⏹') : '→'}
             </button>
           </div>
         </div>
