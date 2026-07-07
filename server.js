@@ -6,6 +6,7 @@ import os from 'os';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { once } from 'events';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
@@ -1765,12 +1766,37 @@ class PersistentSession {
     }, 15000)
 
     try {
-      this.proc.stdin.write(userLine(job.message))
+      await this._write(userLine(job.message))
     } catch (e) {
       this._emitError(e.message)
       this.busy = false
       this._next()
     }
+  }
+
+  // Faz A: stdin backpressure. Uzun mesajlarda (büyük yapıştırma, blueprint spec)
+  // kernel yazma buffer'ı dolarsa write() false döner; drain beklemeden yazmaya
+  // devam etmek NDJSON çerçevesini bozabilir (kısmi satır → JSON.parse fail).
+  // claude-client writeToStdin deseni: false → 'drain' beklenir. Süreç await
+  // sırasında ölürse 'error'/'close' ile reddet, çağıran (_next) _emitError'a düşer.
+  async _write(data) {
+    const stdin = this.proc && this.proc.stdin
+    if (!stdin || stdin.destroyed) throw new Error('stdin kapalı (süreç yok)')
+    if (stdin.write(data)) return   // buffer'a sığdı, drain gereksiz
+    // write() false → yüksek su seviyesi; drain'i bekle ama süreç ölürse çık.
+    await new Promise((resolve, reject) => {
+      const onDrain = () => { cleanup(); resolve() }
+      const onErr = (e) => { cleanup(); reject(e instanceof Error ? e : new Error(String(e))) }
+      const onClose = () => { cleanup(); reject(new Error('stdin drain beklerken süreç kapandı')) }
+      const cleanup = () => {
+        stdin.removeListener('drain', onDrain)
+        stdin.removeListener('error', onErr)
+        stdin.removeListener('close', onClose)
+      }
+      stdin.once('drain', onDrain)
+      stdin.once('error', onErr)
+      stdin.once('close', onClose)
+    })
   }
 
   _finishTurn() {
