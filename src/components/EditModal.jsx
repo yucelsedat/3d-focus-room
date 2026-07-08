@@ -384,6 +384,36 @@ export function EditModal() {
       return
     }
 
+    if (activeTab === 'projectview') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/projectview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+          })
+        })
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || 'ProjectView tile oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setWidth(3)
+        setHeight(1)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (activeTab === 'multiagent') {
       setLoading(true)
       setLoadingStep('saving')
@@ -779,8 +809,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'bluprint' ? '📐' : m.type === 'multiagent' ? '🤝' : m.type === 'defter' ? '📒' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'bluprint' ? 'Blueprint' : m.type === 'multiagent' ? 'MultiAgent' : m.type === 'defter' ? 'Defter' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'projectview' ? '🖥' : m.type === 'bluprint' ? '📐' : m.type === 'multiagent' ? '🤝' : m.type === 'defter' ? '📒' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'projectview' ? 'ProjectView' : m.type === 'bluprint' ? 'Blueprint' : m.type === 'multiagent' ? 'MultiAgent' : m.type === 'defter' ? 'Defter' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -890,7 +920,7 @@ export function EditModal() {
                       style={{ ...s.deleteBtn, background: clonedMedia?.id === m.id ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${clonedMedia?.id === m.id ? '#60a5fa' : '#333'}`, color: clonedMedia?.id === m.id ? '#60a5fa' : '#888' }}
                       title="Bu medyayı başka bir duvara kopyala"
                       onClick={() => {
-                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', bluprint: 'Blueprint', defter: 'Defter' }
+                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', projectview: 'ProjectView', bluprint: 'Blueprint', defter: 'Defter' }
                         setClonedMedia(clonedMedia?.id === m.id ? null : { id: m.id, type: m.type, label: typeLabel[m.type] || m.type })
                       }}
                     >
@@ -1001,6 +1031,12 @@ export function EditModal() {
             onClick={() => { setActiveTab('roomsession'); setWidth(6); setHeight(4) }}
           >
             🏗 RoomProject
+          </button>
+          <button
+            style={activeTab === 'projectview' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('projectview'); setWidth(3); setHeight(1) }}
+          >
+            🖥 ProjectView
           </button>
           <button
             style={activeTab === 'bluprint' ? s.activeTab : s.tab}
@@ -1268,6 +1304,19 @@ export function EditModal() {
             </div>
           )}
 
+          {/* ProjectView */}
+          {activeTab === 'projectview' && (
+            <div style={s.inputGroup}>
+              <p style={{ color: '#60a5fa', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>🖥 ProjectView (canlı önizleme)</p>
+              <p style={{ color: '#777', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>
+                Bu odanın proje klasörünü (room-projects/&lt;oda&gt;/) otomatik <b>algılar</b> (Vite / Next.js / statik index.html),
+                gerekiyorsa bağımlılıkları kurar ve bir <b>dev server</b> başlatır. Duvara kompakt bir <b>link kartı</b> gelir:
+                durum + localhost linki + <b>yeni sekmede aç</b> butonu. Önce <b>RoomProject</b> ile bu odada bir web
+                projesi geliştirmiş olman gerekir. Ekstra girdi yok — tile'ı oluştur, arka planda başlar.
+              </p>
+            </div>
+          )}
+
           {/* MultiAgent */}
           {activeTab === 'multiagent' && (
             <div style={s.inputGroup}>
@@ -1440,7 +1489,7 @@ export function EditModal() {
           )}
 
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -1469,7 +1518,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
