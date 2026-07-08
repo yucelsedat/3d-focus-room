@@ -1081,67 +1081,120 @@ app.get('/api/youtube-meta', async (req, res) => {
 });
 
 // Generic link meta proxy — Open Graph title + image for any URL (avoids CORS)
+// Bazı siteler bot UA'yı engeller (Medium), bazıları tarayıcı UA'yı (Cloudflare
+// fingerprint uyuşmazlığı) — biri boş dönerse diğeriyle tekrar denenir.
+const LINK_META_UAS = [
+  'Mozilla/5.0 (compatible; FocusRoomBot/1.0; +link-preview)',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+];
+
+const decodeHtmlEntities = (s) => s
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ''; } })
+  .replace(/&#(\d+);/g, (_, d) => { try { return String.fromCodePoint(+d); } catch { return ''; } })
+  .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
+// HTML'in başını (</head>'e kadar, en fazla ~200KB) ham bayt olarak indirip
+// doğru charset ile decode eder. HTML olmayan yanıtlarda (görsel vs.) null döner.
+async function fetchHtmlHead(url, userAgent) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(url, {
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': userAgent,
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US,en;q=0.8',
+      },
+    });
+    const contentType = r.headers.get('content-type') || '';
+    if (!r.ok || (contentType && !/text\/html|application\/xhtml/i.test(contentType))) {
+      r.body?.cancel?.().catch?.(() => {});
+      return null;
+    }
+    const chunks = [];
+    let total = 0;
+    const reader = r.body?.getReader?.();
+    if (reader) {
+      const probe = new TextDecoder();
+      let probed = '';
+      while (total < 200000) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        total += value.length;
+        probed += probe.decode(value, { stream: true });
+        if (/<\/head>/i.test(probed)) break;
+      }
+      reader.cancel().catch(() => {});
+    } else {
+      chunks.push(new Uint8Array(await r.arrayBuffer()));
+    }
+    const buf = Buffer.concat(chunks);
+    let html = buf.toString('utf8');
+    let charset = contentType.match(/charset=["']?([\w-]+)/i)?.[1]
+      || html.match(/<meta[^>]+charset=["']?([\w-]+)/i)?.[1] || '';
+    if (charset && !/^utf-?8$/i.test(charset)) {
+      try { html = new TextDecoder(charset).decode(buf); } catch {}
+    }
+    return html.slice(0, 200000);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseLinkMeta(html, target) {
+  const pick = (names) => {
+    for (const name of names) {
+      const re = new RegExp(
+        `<meta[^>]+(?:property|name)=["']${name}["'][^>]*>`, 'i');
+      const tag = html.match(re)?.[0];
+      if (tag) {
+        // tırnak tipine duyarlı — content="it's fine" apostrofta kesilmesin
+        const m = tag.match(/content="([^"]*)"|content='([^']*)'/i);
+        const c = m?.[1] ?? m?.[2];
+        if (c) return decodeHtmlEntities(c.trim());
+      }
+    }
+    return '';
+  };
+
+  let title = pick(['og:title', 'twitter:title']);
+  if (!title) {
+    const t = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim();
+    if (t) title = decodeHtmlEntities(t);
+  }
+  let image = pick(['og:image:secure_url', 'og:image', 'twitter:image', 'twitter:image:src']);
+  if (image) { try { image = new URL(image, target).href; } catch { image = ''; } }
+  const siteName = pick(['og:site_name']) || target.hostname;
+
+  return {
+    title: title ? title.replace(/\s+/g, ' ').slice(0, 300) : '',
+    image,
+    siteName,
+  };
+}
+
 app.get('/api/link-meta', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'url gerekli' });
   let target;
   try { target = new URL(url); } catch { return res.status(400).json({ error: 'geçersiz url' }); }
   if (!/^https?:$/.test(target.protocol)) return res.status(400).json({ error: 'yalnızca http(s)' });
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
-    const r = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: 'follow',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; FocusRoomBot/1.0; +link-preview)',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
-    }).finally(() => clearTimeout(timer));
-    if (!r.ok) return res.json({ title: '', image: '', siteName: target.hostname });
-    // Sadece HTML'in başını oku — büyük gövdeleri baştan kes
-    const reader = r.body?.getReader?.();
-    let html = '';
-    if (reader) {
-      const dec = new TextDecoder();
-      while (html.length < 200000) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        html += dec.decode(value, { stream: true });
-        if (/<\/head>/i.test(html)) break;
-      }
-      reader.cancel().catch(() => {});
-    } else {
-      html = (await r.text()).slice(0, 200000);
-    }
 
-    const pick = (names) => {
-      for (const name of names) {
-        const re = new RegExp(
-          `<meta[^>]+(?:property|name)=["']${name}["'][^>]*>`, 'i');
-        const tag = html.match(re)?.[0];
-        if (tag) {
-          const c = tag.match(/content=["']([^"']*)["']/i)?.[1];
-          if (c) return c.trim();
-        }
-      }
-      return '';
-    };
-
-    let title = pick(['og:title', 'twitter:title']);
-    if (!title) title = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim() || '';
-    let image = pick(['og:image:secure_url', 'og:image', 'twitter:image', 'twitter:image:src']);
-    if (image) { try { image = new URL(image, target).href; } catch { image = ''; } }
-    const siteName = pick(['og:site_name']) || target.hostname;
-
-    res.json({
-      title: title ? title.replace(/\s+/g, ' ').slice(0, 300) : '',
-      image,
-      siteName,
-    });
-  } catch (err) {
-    res.json({ title: '', image: '', siteName: target.hostname });
+  let meta = { title: '', image: '', siteName: target.hostname };
+  for (const ua of LINK_META_UAS) {
+    const html = await fetchHtmlHead(url, ua);
+    if (!html) continue;
+    const m = parseLinkMeta(html, target);
+    if (m.title || m.image) { meta = m; break; }
+    meta = m;
   }
+  res.json(meta);
 });
 
 // ─── Live Session (works standalone — no VS Code required) ───────────────────
