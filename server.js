@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import cors from 'cors';
+import net from 'net';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { once } from 'events';
@@ -296,6 +297,7 @@ async function collectDescendants(rootId) {
 // ~/.claude/projects altındaki JSONL geçmişleri) öksüz kalıyordu. Bu fonksiyon o
 // klasörleri de siler. Hepsi best-effort: olmayan/erişilemeyen yol sessizce atlanır.
 function removeRoomDiskArtifacts(roomId) {
+  stopRoomServer(roomId);   // ProjectView dev server'ını klasör silinmeden önce öldür
   const dirs = [
     roomGraphDir(roomId),
     roomProjectDir(roomId),       // .recall checkpoint'leri de bunun altında
@@ -1051,6 +1053,13 @@ app.delete('/api/media/:id', async (req, res) => {
     if (loop) { try { loop.abort(); } catch {} loopPool.delete(key); }
     sessionPool.evict(`roomsession:${key}`);
     sessionPool.evictPrefix(`multiagent:${key}:`);
+  }
+
+  // ProjectView: dev server oda başına tek — bu odada BAŞKA projectview tile
+  // kalmadıysa server'ı durdur (öksüz dev process bırakma).
+  if (item.type === 'projectview') {
+    const others = await prisma.media.count({ where: { roomId: item.roomId, type: 'projectview', id: { not: id } } });
+    if (others === 0) stopRoomServer(item.roomId);
   }
 
   await prisma.media.delete({ where: { id } });
@@ -2294,6 +2303,188 @@ function roomProjectJsonlDir(roomId) {
   return path.join(os.homedir(), '.claude', 'projects', key)
 }
 
+// ─── ProjectView: oda projesinin canlı dev server'ı ───────────────────────────
+// Oda BAŞINA TEK dev server (roomId anahtarlı). room-projects/<roomId>/ klasöründeki
+// projeyi algılar (deterministik + Haiku fallback), gerekiyorsa npm install eder,
+// boş bir portta başlatır ve iframe'de canlı gösterilecek http://localhost:PORT
+// url'ini üretir. Aynı projeye eklenen tüm ProjectView tile'ları bu tek url'i paylaşır.
+// Backend restart'ında process'ler ölür → status 'stopped', kullanıcı restart eder.
+const roomDevServers = new Map()   // roomId -> { status, port, url, kind, proc, httpServer, log:[], error }
+
+// OS'tan boş bir TCP portu iste (listen(0) → atanan portu oku → kapat).
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.once('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const p = srv.address().port
+      srv.close(() => resolve(p))
+    })
+  })
+}
+
+// Port dinleniyor mu? — dev server hazır-olma yoklaması.
+function isPortOpen(port, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host })
+    sock.setTimeout(1000)
+    sock.once('connect', () => { sock.destroy(); resolve(true) })
+    sock.once('error',   () => { sock.destroy(); resolve(false) })
+    sock.once('timeout', () => { sock.destroy(); resolve(false) })
+  })
+}
+
+// Proje türünden başlatma reçetesi. '{PORT}' spawn anında gerçek portla değiştirilir.
+function runSpecForKind(kind) {
+  switch (kind) {
+    case 'next':   return { kind, run: ['npm', ['run', 'dev', '--', '-p', '{PORT}']] }
+    case 'vite':   return { kind, run: ['npm', ['run', 'dev', '--', '--port', '{PORT}', '--strictPort']] }
+    case 'cra':    return { kind, run: ['npm', ['start'], { PORT: '{PORT}' }] }
+    case 'static': return { kind, static: true }
+    default:       return null
+  }
+}
+
+// Belirsiz projelerde Haiku'ya klasörü inceletip tür etiketini al (verifyGoal deseni).
+async function detectKindWithHaiku(dir) {
+  const prompt = `Bir web projesi klasörünü inceleyip türünü belirle. package.json, config dosyaları ve index.html gibi dosyaları oku. node_modules'a BAKMA.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"kind":"next|vite|cra|static|unknown"}\n- next: Next.js  - vite: Vite  - cra: create-react-app (react-scripts)\n- static: derleme gerektirmeyen düz index.html sitesi  - unknown: emin değilsen`
+  const { text, failed } = await runClaudeCapture([
+    '--print', '--output-format=stream-json', '--verbose', '--max-turns', '6',
+    '--tools', 'Read,Glob,Grep',
+    '--exclude-dynamic-system-prompt-sections',
+    '--no-session-persistence',
+    '--model', cliModel(VERIFY_MODEL), ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
+  ], { cwd: dir, usageType: 'projectview-detect', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+  if (failed || !text) return 'unknown'
+  const m = text.match(/\{[\s\S]*\}/)
+  if (!m) return 'unknown'
+  try {
+    const k = String(JSON.parse(m[0]).kind || '').trim()
+    return ['next', 'vite', 'cra', 'static'].includes(k) ? k : 'unknown'
+  } catch { return 'unknown' }
+}
+
+// Deterministik ilk geçiş → belirsizse Haiku. Reçete (run/static) döndürür, yoksa null.
+async function detectProject(dir) {
+  const pkgPath = path.join(dir, 'package.json')
+  if (fs.existsSync(pkgPath)) {
+    let pkg = {}
+    try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) } catch {}
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) }
+    if (deps.next) return runSpecForKind('next')
+    if (deps.vite) return runSpecForKind('vite')
+    if (deps['react-scripts']) return runSpecForKind('cra')
+    // Tanınmayan framework → Haiku, olmadı ham dev/start script'i (PORT env ile).
+    const spec = runSpecForKind(await detectKindWithHaiku(dir))
+    if (spec) return spec
+    const scripts = pkg.scripts || {}
+    if (scripts.dev)   return { kind: 'unknown', run: ['npm', ['run', 'dev'],  { PORT: '{PORT}' }] }
+    if (scripts.start) return { kind: 'unknown', run: ['npm', ['start'],       { PORT: '{PORT}' }] }
+    return null
+  }
+  if (fs.existsSync(path.join(dir, 'index.html'))) return runSpecForKind('static')
+  return runSpecForKind(await detectKindWithHaiku(dir))
+}
+
+// Oda için dev server'ı ayağa kaldır. İdempotent: zaten çalışıyor/başlıyorsa mevcut
+// kaydı döner. Asıl iş (install → algıla → spawn → hazır-yoklaması) arka planda döner;
+// çağıran await etmez, frontend status endpoint'ini poll eder.
+async function startRoomServer(roomId) {
+  const cur = roomDevServers.get(roomId)
+  if (cur && ['installing', 'starting', 'running'].includes(cur.status)) return cur
+
+  const dir = roomProjectDir(roomId)
+  const rec = { status: 'starting', port: null, url: null, kind: null, proc: null, httpServer: null, log: [], error: null }
+  roomDevServers.set(roomId, rec)
+  const pushLog = (s) => { for (const ln of String(s).split('\n')) if (ln.trim()) rec.log.push(ln.trim()); if (rec.log.length > 200) rec.log.splice(0, rec.log.length - 200) }
+
+  if (!fs.existsSync(dir)) {
+    rec.status = 'error'; rec.error = 'Proje klasörü yok — önce RoomProject ile bir proje oluştur.'
+    return rec
+  }
+
+  ;(async () => {
+    try {
+      // 1) Bağımlılık kurulumu (node_modules yoksa)
+      if (fs.existsSync(path.join(dir, 'package.json')) && !fs.existsSync(path.join(dir, 'node_modules'))) {
+        rec.status = 'installing'; pushLog('[install] npm install başlıyor…')
+        await new Promise((resolve, reject) => {
+          const ip = spawn('npm', ['install'], { cwd: dir, env: process.env })
+          ip.stdout.on('data', (c) => pushLog(c))
+          ip.stderr.on('data', (c) => pushLog(c))
+          ip.on('close', (code) => code === 0 ? resolve() : reject(new Error(`npm install başarısız (kod ${code})`)))
+          ip.on('error', reject)
+        })
+      }
+
+      // 2) Tür algıla
+      rec.status = 'starting'
+      const spec = await detectProject(dir)
+      if (!spec) throw new Error('Proje türü algılanamadı (vite/next/react/statik bulunamadı).')
+      rec.kind = spec.kind
+
+      // 3) Boş port
+      const p = await findFreePort()
+      rec.port = p
+      const url = `http://localhost:${p}`
+
+      // 4) Başlat
+      if (spec.static) {
+        const app2 = express()
+        app2.use(express.static(dir))
+        rec.httpServer = app2.listen(p, () => pushLog(`[static] http://localhost:${p}`))
+        rec.httpServer.on('error', (e) => { rec.status = 'error'; rec.error = e.message })
+      } else {
+        const [cmd, baseArgs, extraEnv] = spec.run
+        const args = baseArgs.map((a) => a.replace('{PORT}', String(p)))
+        const env = { ...process.env, BROWSER: 'none' }
+        if (extraEnv) for (const [k, v] of Object.entries(extraEnv)) env[k] = String(v).replace('{PORT}', String(p))
+        const proc = spawn(cmd, args, { cwd: dir, env, detached: true })
+        rec.proc = proc
+        proc.stdout.on('data', (c) => pushLog(c))
+        proc.stderr.on('data', (c) => pushLog(c))
+        proc.on('close', (code) => {
+          if (rec.status === 'running' || rec.status === 'starting') {
+            rec.status = 'error'; rec.error = rec.error || `Dev server durdu (kod ${code})`
+          }
+        })
+        proc.on('error', (e) => { rec.status = 'error'; rec.error = e.message })
+      }
+
+      // 5) Hazır-olma yoklaması (~45sn)
+      const deadline = Date.now() + 45000
+      while (Date.now() < deadline) {
+        if (rec.status === 'error') return
+        if (await isPortOpen(p)) { rec.status = 'running'; rec.url = url; pushLog(`[ready] ${url}`); return }
+        await new Promise((r) => setTimeout(r, 800))
+      }
+      if (rec.status !== 'running') { rec.status = 'error'; rec.error = rec.error || 'Dev server 45sn içinde açılmadı.' }
+    } catch (e) {
+      rec.status = 'error'; rec.error = e.message; pushLog(`[error] ${e.message}`)
+    }
+  })()
+
+  return rec
+}
+
+// Oda dev server'ını durdur: child process ağacını (detached → negatif pid) veya
+// statik http.Server'ı kapat. keep:true → kullanıcının bilinçli "durdur"u; kayıt
+// 'stopped' olarak KALIR ki status poll'ünün otomatik ayağa kaldırması devreye girmesin.
+// keep'siz (temizlik yolları: tile/oda silme, restart, shutdown) kayıt tamamen silinir.
+function stopRoomServer(roomId, { keep = false } = {}) {
+  const rec = roomDevServers.get(roomId)
+  if (!rec) return
+  if (rec.proc && rec.proc.pid) {
+    try { process.kill(-rec.proc.pid, 'SIGTERM') } catch { try { rec.proc.kill('SIGTERM') } catch {} }
+  }
+  if (rec.httpServer) { try { rec.httpServer.close() } catch {} }
+  if (keep) {
+    roomDevServers.set(roomId, { status: 'stopped', port: null, url: null, kind: null, proc: null, httpServer: null, log: rec.log || [], error: null })
+  } else {
+    roomDevServers.delete(roomId)
+  }
+}
+
 // ─── AI Session ──────────────────────────────────────────────────────────────
 
 app.post('/api/session', async (req, res) => {
@@ -2773,6 +2964,88 @@ app.post('/api/roomsession', async (req, res) => {
     // Odanın izole proje klasörünü oluştur
     try { fs.mkdirSync(roomProjectDir(activeRoomId), { recursive: true }) } catch {}
     res.json(serializeMedia(media));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ProjectView tile endpoint'leri ───────────────────────────────────────────
+// Site tile (embed) + RoomProject harmanı: tile duvara eklenince odanın proje
+// klasörünün dev server'ı arka planda ayağa kalkar; frontend status'u poll eder.
+app.post('/api/projectview', async (req, res) => {
+  const { tileId, width, height, position, rotation } = req.body;
+  const id = BigInt(Date.now());
+  try {
+    const pos = JSON.parse(position);
+    const rot = JSON.parse(rotation);
+    const media = await prisma.media.create({
+      data: {
+        id,
+        roomId: activeRoomId,
+        tileId: String(tileId),
+        type: 'projectview',
+        width: parseFloat(width) || 3,
+        height: parseFloat(height) || 1,
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+        content: null,
+      },
+    });
+    // Dev server'ı arka planda başlat (await ETME) — idempotent, oda başına tek.
+    startRoomServer(activeRoomId);
+    res.json(serializeMedia(media));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// mediaId → o tile'ın odası (yalnız projectview tile'ları için).
+async function projectViewRoomId(mediaId) {
+  let id;
+  try { id = BigInt(mediaId) } catch { return null }
+  const media = await prisma.media.findUnique({ where: { id } });
+  return (media && media.type === 'projectview') ? media.roomId : null;
+}
+
+app.get('/api/projectview/:mediaId/status', async (req, res) => {
+  try {
+    const roomId = await projectViewRoomId(req.params.mediaId);
+    if (!roomId) return res.status(404).json({ error: 'ProjectView tile bulunamadı' });
+    let rec = roomDevServers.get(roomId);
+    // Kayıt hiç yoksa (backend restart'ı haritayı sıfırladı) otomatik ayağa kaldır —
+    // tile duvarda olduğu sürece server kendiliğinden geri gelir. Kullanıcının bilinçli
+    // "durdur"u ise status:'stopped' kaydı olarak durur ve otomatik başlatmayı bloklar.
+    if (!rec) rec = await startRoomServer(roomId);
+    const room = await prisma.room.findUnique({ where: { id: roomId }, select: { name: true } });
+    res.json({ status: rec.status, url: rec.url, kind: rec.kind, error: rec.error, roomName: room?.name || '', log: (rec.log || []).slice(-40) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projectview/:mediaId/restart', async (req, res) => {
+  try {
+    const roomId = await projectViewRoomId(req.params.mediaId);
+    if (!roomId) return res.status(404).json({ error: 'ProjectView tile bulunamadı' });
+    stopRoomServer(roomId);
+    const rec = await startRoomServer(roomId);
+    res.json({ status: rec.status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projectview/:mediaId/stop', async (req, res) => {
+  try {
+    const roomId = await projectViewRoomId(req.params.mediaId);
+    if (!roomId) return res.status(404).json({ error: 'ProjectView tile bulunamadı' });
+    stopRoomServer(roomId, { keep: true });   // bilinçli durdurma — status poll otomatik başlatmasın
+    res.json({ status: 'stopped' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4132,8 +4405,17 @@ app.post('/api/bluprint/message', async (req, res) => {
   })
 })
 
+// Backend kapanırken tüm ProjectView dev server'larını öldür — öksüz npm/vite süreci bırakma.
+function shutdownDevServers() {
+  for (const roomId of [...roomDevServers.keys()]) stopRoomServer(roomId);
+}
+process.on('SIGINT',  () => { shutdownDevServers(); process.exit(0); });
+process.on('SIGTERM', () => { shutdownDevServers(); process.exit(0); });
+process.on('exit', shutdownDevServers);
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 await bootMigrate();
 app.listen(port, () => {
   console.log(`Backend server running at http://localhost:${port}`);
 });
+

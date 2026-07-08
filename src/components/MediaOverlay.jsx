@@ -101,6 +101,90 @@ function EmbedMesh({ url, width, height }) {
   )
 }
 
+// ProjectView: odanın dev server'ının durumunu poll eden KOMPAKT link kartı.
+// iframe yok (3D içinde canlı site render'ı uygulamayı hantallaştırıyordu) —
+// durum + oda adı + localhost linki + butonlar (yeni sekmede aç / restart / durdur).
+function ProjectViewMesh({ id, width, height }) {
+  const w = parseFloat(width)
+  const h = parseFloat(height)
+  const pxWidth = 1200
+  const pxHeight = Math.round(pxWidth * (h / w))
+  const scaleFactor = w * 40 / pxWidth
+  const [state, setState] = useState({ status: 'starting', url: null, kind: null, error: null, roomName: '' })
+
+  useEffect(() => {
+    let alive = true
+    let timer = null
+    const poll = async () => {
+      try {
+        const r = await fetch(`/api/projectview/${id}/status`)
+        const d = await r.json()
+        if (!alive) return
+        setState(d)
+        // running/stopped'ta yavaş poll (canlı durum değişebilir), aktifken hızlı.
+        const next = (d.status === 'running' || d.status === 'stopped' || d.status === 'error') ? 5000 : 1500
+        timer = setTimeout(poll, next)
+      } catch {
+        if (alive) timer = setTimeout(poll, 3000)
+      }
+    }
+    poll()
+    return () => { alive = false; if (timer) clearTimeout(timer) }
+  }, [id])
+
+  const act = async (verb) => {
+    try {
+      await fetch(`/api/projectview/${id}/${verb}`, { method: 'POST' })
+      setState((s) => ({ ...s, status: verb === 'stop' ? 'stopped' : 'starting', url: null, error: null }))
+    } catch {}
+  }
+
+  const { status, url, kind, error, roomName } = state
+  const running = status === 'running' && url
+  const dotColor = running ? '#4ade80' : status === 'error' ? '#f87171' : status === 'stopped' ? '#64748b' : '#fbbf24'
+  const statusText = status === 'installing' ? 'Bağımlılıklar kuruluyor…'
+    : status === 'starting' ? 'Başlatılıyor…'
+    : status === 'stopped' ? 'Durduruldu'
+    : status === 'error' ? (error || 'Hata') : ''
+
+  const btn = { pointerEvents: 'auto', cursor: 'pointer', background: 'rgba(30,41,59,0.9)', color: '#e5e7eb', border: '1px solid #475569', borderRadius: 10, fontSize: 40, padding: '10px 22px', lineHeight: 1 }
+
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0.1} color="blue" depthWrite={false} side={THREE.DoubleSide} />
+      <Html key={`pv-${w}-${h}`} transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
+        <div style={{ width: `${pxWidth}px`, height: `${pxHeight}px`, background: '#0b1220', border: '1px solid #1e293b', borderRadius: 16, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 14, padding: '0 36px', boxSizing: 'border-box', overflow: 'hidden', fontFamily: 'system-ui, sans-serif' }}>
+          {/* Üst satır: durum + oda/proje adı + tür */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
+            <span style={{ width: 22, height: 22, borderRadius: '50%', background: dotColor, flex: '0 0 auto', boxShadow: running ? `0 0 14px ${dotColor}` : 'none' }} />
+            <span style={{ color: '#e2e8f0', fontSize: 42, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              🖥 {roomName || 'Proje'}
+            </span>
+            {kind && <span style={{ color: '#64748b', fontSize: 34, flex: '0 0 auto' }}>· {kind}</span>}
+          </div>
+
+          {/* Alt satır: link/durum + butonlar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 18, minWidth: 0 }}>
+            {running ? (
+              <span style={{ color: '#7dd3fc', fontSize: 36, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{url}</span>
+            ) : (
+              <span style={{ color: status === 'error' ? '#fca5a5' : '#94a3b8', fontSize: 34, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{statusText}</span>
+            )}
+            {running && (
+              <button style={{ ...btn, background: '#1d4ed8', border: '1px solid #3b82f6', fontWeight: 700 }} title="Yeni sekmede aç" onClick={() => window.open(url, '_blank')}>
+                ↗ Aç
+              </button>
+            )}
+            <button style={btn} title="Yeniden başlat" onClick={() => act('restart')}>⟳</button>
+            {status !== 'stopped' && <button style={btn} title="Durdur" onClick={() => act('stop')}>⏻</button>}
+          </div>
+        </div>
+      </Html>
+    </mesh>
+  )
+}
+
 function SlideMesh({ url, width, height }) {
   const w = parseFloat(width)
   const h = parseFloat(height)
@@ -2843,11 +2927,12 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isSession  = type === 'session'
   const isRoomChat = type === 'roomchat'
   const isRoomSession = type === 'roomsession'
+  const isProjectView = type === 'projectview'
   const isBluprint = type === 'bluprint'
   const isSlide    = type === 'slide'
   const isDefter   = type === 'defter'
   const isMultiAgent = type === 'multiagent'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isBluprint && !isSlide && !isDefter && !isMultiAgent
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isProjectView && !isBluprint && !isSlide && !isDefter && !isMultiAgent
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -2864,6 +2949,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
           <RoomChatMesh id={id} width={width} height={height} />
         ) : isRoomSession ? (
           <RoomSessionMesh id={id} width={width} height={height} />
+        ) : isProjectView ? (
+          <ProjectViewMesh id={id} width={width} height={height} />
         ) : isBluprint ? (
           <BluprintMesh id={id} width={width} height={height} />
         ) : isMultiAgent ? (
