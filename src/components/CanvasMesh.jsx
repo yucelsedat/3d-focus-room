@@ -839,6 +839,61 @@ export default function CanvasMesh({ id, content, width, height }) {
     setSelectedIds(new Set())
   }
 
+  // ── Seçili resmi indir / panoya gerçek görsel olarak kopyala ──────────────
+  // Ctrl+C davranışına dokunmaz — o hâlâ canvas item'ı olarak kopyalar.
+  const getSelImage = () => {
+    if (selectedIdsRef.current.size !== 1) return null
+    const it = itemsRef.current.find(i => selectedIdsRef.current.has(i.id))
+    return it?.type === 'image' ? it : null
+  }
+
+  const flashMsg = (msg) => { setPasteMsg(msg); setTimeout(() => setPasteMsg(''), 1500) }
+
+  const fetchImageBlob = async (url) => {
+    const r = await fetch(url, { referrerPolicy: 'no-referrer' })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return r.blob()
+  }
+
+  const downloadSelectedImage = async (e) => {
+    stop(e)
+    const item = getSelImage(); if (!item) return
+    try {
+      const blob = await fetchImageBlob(item.url)
+      const ext  = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
+      let name = 'canvas-image'
+      try { const p = new URL(item.url, location.href).pathname.split('/').pop(); if (p) name = decodeURIComponent(p) } catch {}
+      if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += `.${ext}`
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob); a.download = name
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(a.href)
+    } catch {
+      // CORS engelli harici görsel — fetch edilemiyorsa yeni sekmede aç
+      window.open(item.url, '_blank', 'noopener')
+    }
+  }
+
+  const copySelectedImage = async (e) => {
+    stop(e)
+    const item = getSelImage(); if (!item) return
+    try {
+      const blob = await fetchImageBlob(item.url)
+      // Pano API'si çoğu tarayıcıda sadece image/png kabul eder — gerekirse çevir
+      let png = blob
+      if (blob.type !== 'image/png') {
+        const bmp = await createImageBitmap(blob)
+        const c = document.createElement('canvas')
+        c.width = bmp.width; c.height = bmp.height
+        c.getContext('2d').drawImage(bmp, 0, 0)
+        bmp.close()
+        png = await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('PNG dönüşümü başarısız')), 'image/png'))
+      }
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      flashMsg('imgcopy')
+    } catch { flashMsg('err') }
+  }
+
   const zoomStep = (dir) => {
     const cz = zoomRef.current, nz = Math.min(8, Math.max(0.15, cz * (dir > 0 ? 1.25 : 0.8)))
     const rect = containerRef.current?.getBoundingClientRect()
@@ -869,6 +924,11 @@ export default function CanvasMesh({ id, content, width, height }) {
   const commonTextColor = selTextItems.length > 0 && selTextItems.every(it => it.color === selTextItems[0].color) ? (selTextItems[0].color || '#e2e8f0') : null
   const commonBgColor   = selTextItems.length > 0 && selTextItems.every(it => it.bgColor === selTextItems[0].bgColor) ? (selTextItems[0].bgColor ?? null) : null
   const markdownActive  = selTextItems.length > 0 && selTextItems.every(it => it.markdown)
+
+  // tek bir resim seçiliyken toolbar'da indir / resmi-kopyala ikonları görünür
+  const selImageItem = selectedIds.size === 1
+    ? (items.find(it => selectedIds.has(it.id) && it.type === 'image') || null)
+    : null
 
   // text item currently shown in the fullscreen reader modal
   const readerItem = readerItemId ? items.find(it => it.id === readerItemId && it.type === 'text') : null
@@ -1138,6 +1198,27 @@ export default function CanvasMesh({ id, content, width, height }) {
                     </>
                   )}
 
+                  {/* image download & copy-as-image buttons — only when a single image is selected */}
+                  {selImageItem && (
+                    <>
+                      <button onMouseDown={stop} onClick={downloadSelectedImage} title="Resmi indir"
+                        style={{ ...tbBtn, padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="7 10 12 15 17 10" />
+                          <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                      </button>
+                      <button onMouseDown={stop} onClick={copySelectedImage} title="Resmi panoya kopyala (görsel olarak)"
+                        style={{ ...tbBtn, padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
+
                   <button onMouseDown={stop} onClick={deleteSelected}
                     style={{ ...tbBtn, background: 'rgba(239,68,68,0.15)', color: '#f87171', borderColor: 'rgba(239,68,68,0.35)' }}>
                     🗑 Sil
@@ -1163,8 +1244,8 @@ export default function CanvasMesh({ id, content, width, height }) {
               )}
 
               {pasteMsg && (
-                <span style={{ fontSize: 22, flexShrink: 0, color: pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy') ? '#4ade80' : '#f87171' }}>
-                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
+                <span style={{ fontSize: 22, flexShrink: 0, color: pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'imgcopy') ? '#4ade80' : '#f87171' }}>
+                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
                 </span>
               )}
 
