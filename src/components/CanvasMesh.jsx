@@ -172,6 +172,11 @@ export default function CanvasMesh({ id, content, width, height }) {
   const [readerItemId, setReaderItemId]     = useState(null) // text item shown in fullscreen reader modal
   const [readerEditing, setReaderEditing]   = useState(false) // reader modal in edit (textarea) mode
   const readerItemIdRef                     = useRef(null)
+  // window size — fullscreen'de tile oranını (contain) ekrana sığdırmak için gerekli
+  const [winSize, setWinSize] = useState(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth  : 1920,
+    h: typeof window !== 'undefined' ? window.innerHeight : 1080,
+  }))
 
   // viewport
   const [pan, setPan]                       = useState(initial.pan  || { x: 0, y: 0 })
@@ -224,6 +229,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   const duplicateInternalRef = useRef(null)
   const ctrlRef             = useRef(false)
   const showColorPickerRef  = useRef(null)
+  const pxHRef              = useRef(1080)  // aspect'e bağlı mantıksal yükseklik (wheel closure için)
 
   // Ctrl tuşu durumunu ayrıca takip et (bazı browser/OS'larda e.ctrlKey wheel'de güvenilmez)
   useEffect(() => {
@@ -244,6 +250,14 @@ export default function CanvasMesh({ id, content, width, height }) {
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
   useEffect(() => { isEditModeRef.current = isEditMode }, [isEditMode])
   useEffect(() => { isFullscreenRef.current = isFullscreen }, [isFullscreen])
+  // Fullscreen açıkken pencere yeniden boyutlanırsa contain ölçeğini güncelle
+  useEffect(() => {
+    if (!isFullscreen) return
+    const onResize = () => setWinSize({ w: window.innerWidth, h: window.innerHeight })
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [isFullscreen])
   useEffect(() => { readerItemIdRef.current = readerItemId }, [readerItemId])
   useEffect(() => { showColorPickerRef.current = showColorPicker }, [showColorPicker])
   useEffect(() => {
@@ -291,17 +305,32 @@ export default function CanvasMesh({ id, content, width, height }) {
       e.preventDefault()
       e.stopImmediatePropagation()
       const cp = panRef.current
+      // Fullscreen'de ekran px → mantıksal pencere px için contain ölçeği (contain-fit)
+      const fs = isFullscreenRef.current
+      const _pxH = pxHRef.current
+      const fsS = fs ? Math.max(0.01, Math.min(window.innerWidth / CANVAS_PX_W, (window.innerHeight - CANVAS_TB_H) / _pxH)) : 1
+      const fsX = fs ? (window.innerWidth - CANVAS_PX_W * fsS) / 2 : 0
+      const fsY = fs ? CANVAS_TB_H + (window.innerHeight - CANVAS_TB_H - _pxH * fsS) / 2 : 0
       if (e.ctrlKey || e.metaKey || ctrlRef.current) {
         const rect = el?.getBoundingClientRect() ?? { left: 0, top: 0, width: 1, height: 1 }
-        const scaleX = el ? (el.offsetWidth / (rect.width || 1)) : 1
-        const scaleY = el ? (el.offsetHeight / (rect.height || 1)) : 1
         const cz   = zoomRef.current
         const nz   = Math.min(8, Math.max(0.15, cz * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
-        const offsetY = isEditMode ? tbH : 0
-        const mx   = (e.clientX - rect.left) * scaleX
-        const my   = (e.clientY - rect.top) * scaleY - offsetY
+        let mx, my
+        if (fs) {
+          mx = (e.clientX - rect.left - fsX) / fsS
+          my = (e.clientY - rect.top  - fsY) / fsS
+        } else {
+          const scaleX = el ? (el.offsetWidth / (rect.width || 1)) : 1
+          const scaleY = el ? (el.offsetHeight / (rect.height || 1)) : 1
+          const offsetY = isEditMode ? tbH : 0
+          mx = (e.clientX - rect.left) * scaleX
+          my = (e.clientY - rect.top) * scaleY - offsetY
+        }
         setZoom(nz)
         setPan({ x: mx - (mx - cp.x) * (nz / cz), y: my - (my - cp.y) * (nz / cz) })
+      } else if (fs) {
+        // Fullscreen pan: ekran deltasını contain ölçeğine böl (mantıksal px'e çevir)
+        setPan({ x: cp.x - e.deltaX / fsS, y: cp.y - e.deltaY / fsS })
       } else {
         const scaleX = el ? (el.offsetWidth / (el.getBoundingClientRect().width || 1)) : 1
         const scaleY = el ? (el.offsetHeight / (el.getBoundingClientRect().height || 1)) : 1
@@ -331,6 +360,24 @@ export default function CanvasMesh({ id, content, width, height }) {
           _canvasClipboardTs = Date.now()
           canvasMeshClipboard = { sourceId: id, items: itemsRef.current.filter(it => selectedIdsRef.current.has(it.id)) }
           setPasteMsg('copy')
+          setTimeout(() => setPasteMsg(''), 1000)
+        }
+        return
+      }
+      if (ctrl && e.key === 'x') {
+        if (selectedIdsRef.current.size > 0) {
+          e.preventDefault(); e.stopPropagation()
+          // Kes = seçili item'ları panoya al + canvas'tan kaldır
+          _canvasClipboardTs = Date.now()
+          canvasMeshClipboard = { sourceId: id, items: itemsRef.current.filter(it => selectedIdsRef.current.has(it.id)) }
+          const toCut = new Set(selectedIdsRef.current)
+          setItems(prev => {
+            const next = prev.filter(it => !toCut.has(it.id))
+            scheduleSaveRef.current(next, bgRef.current)
+            return next
+          })
+          setSelectedIds(new Set())
+          setPasteMsg('cut')
           setTimeout(() => setPasteMsg(''), 1000)
         }
         return
@@ -524,11 +571,19 @@ export default function CanvasMesh({ id, content, width, height }) {
     const el = containerRef.current
     if (!el) return { ix: clientX, iy: clientY }
     const rect = el.getBoundingClientRect()
+    // Fullscreen: ekran px → mantıksal pencere px (letterbox ofsetini çıkar, contain
+    // ölçeğine böl). Böylece tık/sürükle koordinatları surface ile hizalı kalır.
+    if (isFullscreen) {
+      return {
+        ix: (clientX - rect.left - fsOffX) / fsScale,
+        iy: (clientY - rect.top  - fsOffY) / fsScale,
+      }
+    }
     const scaleX = rect.width ? el.offsetWidth / rect.width : 1
     const scaleY = rect.height ? el.offsetHeight / rect.height : 1
     const offsetY = isEditMode ? tbH : 0
-    return { 
-      ix: (clientX - rect.left) * scaleX, 
+    return {
+      ix: (clientX - rect.left) * scaleX,
       iy: (clientY - rect.top) * scaleY - offsetY
     }
   }
@@ -542,10 +597,12 @@ export default function CanvasMesh({ id, content, width, height }) {
   const centerSurface = () => {
     const el = containerRef.current
     if (!el) return { x: 50, y: 50 }
+    const z = zoomRef.current, p = panRef.current
+    // Fullscreen'de görünür alan pxW×pxH mantıksal pencere → merkezi (pxW/2, pxH/2)
+    if (isFullscreen) return { x: (pxW / 2 - p.x) / z, y: (pxH / 2 - p.y) / z }
     const offsetY = isEditMode ? tbH : 0
     const ix = el.offsetWidth / 2
     const iy = (el.offsetHeight - offsetY) / 2
-    const z = zoomRef.current, p = panRef.current
     return { x: (ix - p.x) / z, y: (iy - p.y) / z }
   }
 
@@ -903,11 +960,25 @@ export default function CanvasMesh({ id, content, width, height }) {
 
   // ── Dimensions ────────────────────────────────────────────────────────────
   const w     = parseFloat(width), h = parseFloat(height)
-  const pxW   = 1920, pxH = Math.round(1920 * (h / w))
+  const pxW   = CANVAS_PX_W, pxH = Math.round(CANVAS_PX_W * (h / w))
   const scale = w * 40 / pxW
-  const tbH   = 76
+  const tbH   = CANVAS_TB_H
+  // wheel handler (mount-closure) aspect'e bağlı pxH'i ref üzerinden okur
+  pxHRef.current = pxH
   const markerId = `arr-${id}`, markerIdPre = `arr-pre-${id}`
   const surfTx = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
+
+  // ── Fullscreen contain-fit geometri ───────────────────────────────────────
+  // Duvarda tile, pxW×pxH oranlı kutuda görünür. Fullscreen'de aynı mantıksal
+  // pencereyi (pxW×pxH) toolbar altındaki ekran alanına "contain" ile sığdırıp
+  // ortalıyoruz → sol üste sıkışma yerine oranın tamamı düzgün görünür.
+  const fsScale  = isFullscreen
+    ? Math.max(0.01, Math.min(winSize.w / pxW, (winSize.h - tbH) / pxH))
+    : 1
+  const fsDispW  = pxW * fsScale
+  const fsDispH  = pxH * fsScale
+  const fsOffX   = isFullscreen ? (winSize.w - fsDispW) / 2 : 0
+  const fsOffY   = isFullscreen ? tbH + (winSize.h - tbH - fsDispH) / 2 : 0
 
   // In fullscreen the editor escapes the 3D <Html> transform and renders as a
   // fixed full-window overlay via a portal to <body>.
@@ -1117,7 +1188,7 @@ export default function CanvasMesh({ id, content, width, height }) {
         {isEditMode && renderEdit(
           <div ref={containerRef}
             style={isFullscreen
-              ? { position: 'fixed', inset: 0, width: '100vw', height: '100vh', backgroundColor: bg, overflow: 'hidden', pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', zIndex: 2147483600 }
+              ? { position: 'fixed', inset: 0, width: '100vw', height: '100vh', backgroundColor: '#07070d', overflow: 'hidden', pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', zIndex: 2147483600 }
               : { width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', boxShadow: '0 0 0 3px rgba(96,165,250,0.45)' }}
             onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onClick={stop}
           >
@@ -1244,13 +1315,13 @@ export default function CanvasMesh({ id, content, width, height }) {
               )}
 
               {pasteMsg && (
-                <span style={{ fontSize: 22, flexShrink: 0, color: pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'imgcopy') ? '#4ade80' : '#f87171' }}>
-                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
+                <span style={{ fontSize: 22, flexShrink: 0, color: pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'cut' || pasteMsg === 'imgcopy') ? '#4ade80' : '#f87171' }}>
+                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'cut' ? '✂ Kesildi' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
                 </span>
               )}
 
               <span style={{ marginLeft: 'auto', fontSize: 20, color: 'rgba(148,163,184,0.3)', flexShrink: 0 }}>
-                {hasBoxSel ? 'Ctrl+C: kopyala · Ctrl+D: çoğalt · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'} · ESC
+                {hasBoxSel ? 'Ctrl+C: kopyala · Ctrl+X: kes · Ctrl+D: çoğalt · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'} · ESC
               </span>
             </div>
 
@@ -1342,8 +1413,10 @@ export default function CanvasMesh({ id, content, width, height }) {
               </div>
             )}
 
-            {/* ── Zoomable surface ───────────────────────────────────────── */}
-            <div style={{ position: 'absolute', top: tbH, left: 0, width: 8000, height: 8000, transform: surfTx, transformOrigin: '0 0' }}
+            {/* ── Zoomable surface (fullscreen'de contain çerçeve içinde clip'lenir) ── */}
+            {(() => {
+            const surface = (
+            <div style={{ position: 'absolute', top: isFullscreen ? 0 : tbH, left: 0, width: 8000, height: 8000, transform: isFullscreen ? `scale(${fsScale}) translate(${pan.x}px, ${pan.y}px) scale(${zoom})` : surfTx, transformOrigin: '0 0' }}
               onMouseDown={onBgMouseDown}>
 
               {/* box items */}
@@ -1414,6 +1487,15 @@ export default function CanvasMesh({ id, content, width, height }) {
                 </div>
               )}
             </div>
+            )
+            // Fullscreen: mantıksal pencereyi (pxW×pxH) ekrana contain ile sığdırıp
+            // ortala; surface bu çerçeveye clip'lenir → oranın tamamı düzgün görünür.
+            return isFullscreen ? (
+              <div style={{ position: 'absolute', left: fsOffX, top: fsOffY, width: fsDispW, height: fsDispH, overflow: 'hidden', backgroundColor: bg, borderRadius: 4, boxShadow: '0 0 0 1px rgba(96,165,250,0.35), 0 12px 48px rgba(0,0,0,0.55)' }}>
+                {surface}
+              </div>
+            ) : surface
+            })()}
           </div>
         )}
 
@@ -1491,6 +1573,11 @@ export default function CanvasMesh({ id, content, width, height }) {
     </>
   )
 }
+
+// Canvas mantıksal pencere genişliği ve toolbar yüksekliği (sabit) — mount-closure
+// olan wheel handler'ın TDZ'siz erişebilmesi için modül seviyesinde.
+const CANVAS_PX_W = 1920
+const CANVAS_TB_H = 76
 
 // fullscreen toolbar zoom factor — shrinks the 1:1-rendered button row so all buttons fit
 const FS_TB_ZOOM = 0.6
