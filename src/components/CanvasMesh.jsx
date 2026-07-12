@@ -30,6 +30,8 @@ if (typeof document !== 'undefined' && !document.getElementById('cvmd-styles')) 
   const s = document.createElement('style')
   s.id = 'cvmd-styles'
   s.textContent = `
+    /* Metin kutusu: kutunun kendisi wheel/scroll alır, içerik tıklanabilir değil */
+    .cv-textbox * { pointer-events: none; }
     .cvmd { line-height: 1.5; }
     .cvmd > *:first-child { margin-top: 0 !important; }
     .cvmd > *:last-child  { margin-bottom: 0 !important; }
@@ -146,6 +148,11 @@ if (typeof document !== 'undefined') {
   }, true)
 }
 
+// Metin kutusu içeriğiyle birlikte uzar ama en fazla A4 oranına (genişlik × 297/210)
+// kadar; taşan içerik kutunun içinde scroll edilir.
+const A4_RATIO = 297 / 210
+const a4MaxH = (w) => Math.max(60, Math.round((w || 0) * A4_RATIO))
+
 // bounding box of box-type items matching id set
 function getBounds(ids, items) {
   const sel = items.filter(it => ids.has(it.id) && it.type !== 'arrow')
@@ -164,7 +171,8 @@ export default function CanvasMesh({ id, content, width, height }) {
 
   const initial = (() => { try { return JSON.parse(content) } catch { return { items: [], bg: '#1a1a2e' } } })()
 
-  const [items, setItems]                   = useState(initial.items || [])
+  const [items, setItems]                   = useState(() =>
+    (initial.items || []).map(it => it.type === 'text' && it.h ? { ...it, h: Math.min(it.h, a4MaxH(it.w)) } : it))
   const [bg]                                = useState(initial.bg || '#1a1a2e')
   const [isEditMode, setIsEditMode]         = useState(false)
   const [isFullscreen, setIsFullscreen]     = useState(false)
@@ -293,6 +301,17 @@ export default function CanvasMesh({ id, content, width, height }) {
   // → containerRef null olsa bile event yakalanır
   useEffect(() => {
     const handler = (e) => {
+      // A4 sınırına dayanmış bir metin kutusunun üzerindeysek: canvas'ı pan/zoom etme,
+      // tarayıcının kutuyu kaydırmasına izin ver (kutu sona gelince pan'a devret)
+      if (!(e.ctrlKey || e.metaKey || ctrlRef.current)) {
+        const sc = e.target instanceof Element ? e.target.closest('[data-cv-scroll="1"]') : null
+        if (sc && sc.scrollHeight > sc.clientHeight + 1) {
+          const atEdge = e.deltaY < 0
+            ? sc.scrollTop <= 0
+            : sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 1
+          if (!atEdge) { e.stopPropagation(); return }
+        }
+      }
       if (!isEditModeRef.current) return
       // reader modal open → let the wheel scroll the modal, don't pan/zoom the canvas
       if (readerItemIdRef.current) return
@@ -698,6 +717,7 @@ export default function CanvasMesh({ id, content, width, height }) {
         if (!init) return it
         const updated = { ...it, x: nx + (init.x - ib.x) * sx, y: ny + (init.y - ib.y) * sy, w: init.w * sx, h: init.h * sy }
         if (isCorner && it.type === 'text') updated.fontSize = Math.max(6, Math.round(init.fontSize * scale))
+        if (it.type === 'text') updated.h = Math.min(updated.h, a4MaxH(updated.w))
         return updated
       })); return
     }
@@ -1094,40 +1114,56 @@ export default function CanvasMesh({ id, content, width, height }) {
     if (item.type === 'youtube') return <YoutubeCard item={item} />
     if (item.type === 'image') return <ImageItem item={item} />
     if (item.type === 'text' && editingItemId === item.id) {
+      // içeriğe göre uzat, A4 yüksekliğinde durdur → fazlası textarea içinde scroll
+      const maxH = a4MaxH(item.w)
+      const fit = el => {
+        el.style.height = 'auto'
+        const full = el.scrollHeight
+        const newH = Math.min(full, maxH)
+        el.style.height = newH + 'px'
+        el.style.overflowY = full > maxH ? 'auto' : 'hidden'
+        return newH
+      }
       const autoH = el => {
         if (!el) return
-        el.style.height = 'auto'
-        el.style.height = el.scrollHeight + 'px'
-        if (item.h === 0 && el.scrollHeight > 0) setItems(prev => prev.map(it => it.id === item.id && it.h === 0 ? { ...it, h: el.scrollHeight } : it))
+        const newH = fit(el)
+        if (item.h === 0 && newH > 0) setItems(prev => prev.map(it => it.id === item.id && it.h === 0 ? { ...it, h: newH } : it))
       }
       return (
         <textarea autoFocus defaultValue={item.content}
           ref={autoH}
+          data-cv-scroll="1"
           placeholder="Metin yazın…"
-          style={{ width: '100%', height: 'auto', minHeight: 60, background: 'rgba(0,0,0,0.6)', border: '1px solid #60a5fa', borderRadius: 4, color: '#fff', fontSize: item.fontSize || 30, padding: 14, resize: 'none', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', overflow: 'hidden', display: 'block' }}
+          style={{ width: '100%', height: 'auto', minHeight: 60, maxHeight: maxH, background: 'rgba(0,0,0,0.6)', border: '1px solid #60a5fa', borderRadius: 4, color: '#fff', fontSize: item.fontSize || 30, padding: 14, resize: 'none', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', overflow: 'hidden', display: 'block' }}
           onInput={e => {
-            e.target.style.height = 'auto'
-            e.target.style.height = e.target.scrollHeight + 'px'
-            const newH = e.target.scrollHeight
+            const newH = fit(e.target)
             setItems(prev => prev.map(it => it.id === item.id ? { ...it, h: newH } : it))
           }}
           onMouseDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}
           onBlur={e => {
             const val = e.target.value
-            const newH = e.target.scrollHeight
+            const newH = fit(e.target)
             setItems(prev => { const next = prev.map(it => it.id === item.id ? { ...it, content: val, h: newH } : it); scheduleSave(next, bgRef.current); return next })
             setEditingItemId(null)
           }}
         />
       )
     }
+    const textBox = {
+      width: '100%', height: 'auto',
+      minHeight: Math.min(item.h || 60, a4MaxH(item.w)), maxHeight: a4MaxH(item.w),
+      overflowX: 'hidden', overflowY: 'auto',
+      background: item.bgColor !== undefined ? item.bgColor : 'rgba(0,0,0,0.38)',
+      borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30,
+      padding: 14, boxSizing: 'border-box', wordBreak: 'break-word', userSelect: 'none',
+    }
     if (item.markdown && item.content) {
       return (
-        <div className="cvmd" style={{ width: '100%', height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'rgba(0,0,0,0.38)', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none', wordBreak: 'break-word' }}
+        <div className="cvmd cv-textbox" data-cv-scroll="1" style={textBox}
           dangerouslySetInnerHTML={{ __html: parseMd(item.content) }} />
       )
     }
-    return <div style={{ width: '100%', height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'rgba(0,0,0,0.38)', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
+    return <div className="cv-textbox" data-cv-scroll="1" style={{ ...textBox, whiteSpace: 'pre-wrap' }}>{item.content}</div>
   }
 
   // ── Room search ───────────────────────────────────────────────────────────
@@ -1163,10 +1199,20 @@ export default function CanvasMesh({ id, content, width, height }) {
                     <LinkCard item={item} clickable />
                   </div>
                 ) : item.type === 'text' ? (
-                  item.markdown && item.content
-                    ? <div key={item.id} className="cvmd" style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'transparent', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none', wordBreak: 'break-word' }}
-                        dangerouslySetInnerHTML={{ __html: parseMd(item.content) }} />
-                    : <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto', minHeight: item.h || 60, background: item.bgColor !== undefined ? item.bgColor : 'transparent', borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30, padding: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'visible', boxSizing: 'border-box', pointerEvents: 'none' }}>{item.content}</div>
+                  (() => {
+                    const st = {
+                      position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto',
+                      minHeight: Math.min(item.h || 60, a4MaxH(item.w)), maxHeight: a4MaxH(item.w),
+                      overflowX: 'hidden', overflowY: 'auto',
+                      background: item.bgColor !== undefined ? item.bgColor : 'transparent',
+                      borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30,
+                      padding: 14, boxSizing: 'border-box', wordBreak: 'break-word', userSelect: 'none',
+                    }
+                    return item.markdown && item.content
+                      ? <div key={item.id} className="cvmd cv-textbox" data-cv-scroll="1" style={st}
+                          dangerouslySetInnerHTML={{ __html: parseMd(item.content) }} />
+                      : <div key={item.id} className="cv-textbox" data-cv-scroll="1" style={{ ...st, whiteSpace: 'pre-wrap' }}>{item.content}</div>
+                  })()
                 ) : item.type === 'room' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}
                     onMouseDown={stop} onClick={(e) => { stop(e); navigateToRoom(item) }}>
@@ -1427,7 +1473,8 @@ export default function CanvasMesh({ id, content, width, height }) {
                   <div key={item.id} style={{
                     position: 'absolute', left: item.x, top: item.y, width: item.w,
                     height: item.type === 'text' ? 'auto' : item.h,
-                    minHeight: item.type === 'text' ? (item.h || 60) : undefined,
+                    minHeight: item.type === 'text' ? Math.min(item.h || 60, a4MaxH(item.w)) : undefined,
+                    maxHeight: item.type === 'text' ? a4MaxH(item.w) : undefined,
                     cursor: drawMode ? 'crosshair' : editingItemId === item.id ? 'text' : 'move',
                     outline: isSel ? '2px solid rgba(96,165,250,0.9)' : isHov && !drawMode ? '1px solid rgba(96,165,250,0.4)' : '1px solid rgba(255,255,255,0.08)',
                     borderRadius: 4, boxSizing: 'border-box',
