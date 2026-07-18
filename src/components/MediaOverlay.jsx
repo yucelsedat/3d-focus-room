@@ -837,6 +837,8 @@ const SESSION_STATUS_BADGE = {
 
 function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '🤖', label = 'Claude' }) {
   const currentRoomId = useStore(s => s.currentRoomId)
+  const openModal = useStore(s => s.openModal)
+  const editedLoop = useStore(s => s.loopSpecEdits[String(id)])
   const w = parseFloat(width)
   const h = parseFloat(height)
   const pxWidth  = Math.round(w * SESSION_PX_PER_UNIT)
@@ -1258,6 +1260,12 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, loopable])
 
+  // EditModal'dan kaydedilen loop düzenlemesini panele yansıt (null = loop kaldırıldı).
+  useEffect(() => {
+    if (!loopable || editedLoop === undefined) return
+    setLoopSpec(editedLoop)
+  }, [editedLoop, loopable])
+
   const onKeyDown = (e) => {
     e.stopPropagation()
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
@@ -1413,12 +1421,22 @@ function SessionMesh({ id, width, height, apiBase = '/api/ai-session', icon = '�
                     </span>
                   )}
                   {!loopRunning ? (
-                    <button
-                      onClick={e => { e.stopPropagation(); startLoop() }}
-                      onPointerDown={e => e.stopPropagation()}
-                      title="Loop'u başlat (Recall varsa kaldığı yerden)"
-                      style={{ marginLeft: 'auto', padding: '3px 12px', borderRadius: '5px', fontSize: '19px', cursor: 'pointer', border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.18)', color: '#f59e0b', pointerEvents: 'auto', fontWeight: 600 }}
-                    >{rec && rec.iteration > 0 && status !== 'met' ? '▶ Devam et' : '▶ Loop başlat'}</button>
+                    <>
+                      {(!rec || (rec.iteration || 0) === 0) && (
+                        <button
+                          onClick={e => { e.stopPropagation(); openModal({ id }, { type: 'roomsession-loop', mediaId: id, loop: loopSpec, model, effort, permissionMode: permMode }) }}
+                          onPointerDown={e => e.stopPropagation()}
+                          title="Loop ayarlarını düzenle (yalnızca hiç başlatılmamışken)"
+                          style={{ marginLeft: 'auto', padding: '3px 12px', borderRadius: '5px', fontSize: '19px', cursor: 'pointer', border: '1px solid #8a6a30', background: 'rgba(138,106,48,0.15)', color: '#c89030', pointerEvents: 'auto', fontWeight: 600 }}
+                        >✎ Düzenle</button>
+                      )}
+                      <button
+                        onClick={e => { e.stopPropagation(); startLoop() }}
+                        onPointerDown={e => e.stopPropagation()}
+                        title="Loop'u başlat (Recall varsa kaldığı yerden)"
+                        style={{ marginLeft: (!rec || (rec.iteration || 0) === 0) ? '0' : 'auto', padding: '3px 12px', borderRadius: '5px', fontSize: '19px', cursor: 'pointer', border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.18)', color: '#f59e0b', pointerEvents: 'auto', fontWeight: 600 }}
+                      >{rec && rec.iteration > 0 && status !== 'met' ? '▶ Devam et' : '▶ Loop başlat'}</button>
+                    </>
                   ) : (
                     <button
                       onClick={e => { e.stopPropagation(); stopLoop() }}

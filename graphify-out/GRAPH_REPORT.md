@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-07-11)
+# Graph Report - focus-room-main  (2026-07-18)
 
 ## Corpus Check
-- 33 files · ~83,733 words
+- 33 files · ~84,272 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 314 nodes · 444 edges · 20 communities detected
+- 315 nodes · 445 edges · 20 communities detected
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 22 edges (avg confidence: 0.79)
 - Token cost: 0 input · 0 output
 
@@ -91,12 +91,12 @@ Cohesion: 0.24
 Nodes (9): buildSpawnEnv(), cliModel(), detectKindWithHaiku(), detectProject(), mcpArgs(), parseVerdict(), runClaudeCapture(), runSpecForKind() (+1 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.29
-Nodes (2): ContextCard(), hashIndex()
+Cohesion: 0.25
+Nodes (2): CanvasMesh(), getBounds()
 
 ### Community 8 - "Community 8"
 Cohesion: 0.29
-Nodes (2): CanvasMesh(), getBounds()
+Nodes (2): ContextCard(), hashIndex()
 
 ### Community 9 - "Community 9"
 Cohesion: 0.29
@@ -149,9 +149,9 @@ Nodes (1): Eşikli Regresyon-Guard Önerisi (bench --assert)
 ## Knowledge Gaps
 - **25 isolated node(s):** `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`, `Hero Image - Isometric Room Layers`, `Git Push/Merge Onay Kuralı`, `Graphify Kullanım Kuralları`, `First Person Navigation (WASD + Pointer Lock)` (+20 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Community 7`** (8 nodes): `WorldSelect.jsx`, `CardMenu()`, `ContextCard()`, `ContextModal()`, `DeleteConfirmModal()`, `hashIndex()`, `MenuItem()`, `WorldSelect()`
+- **Thin community `Community 7`** (9 nodes): `a4MaxH()`, `CanvasMesh()`, `getBounds()`, `getImageNaturalSize()`, `ImageItem()`, `LinkCard()`, `parseMd()`, `stopEvt()`, `CanvasMesh.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 8`** (8 nodes): `CanvasMesh()`, `getBounds()`, `getImageNaturalSize()`, `ImageItem()`, `LinkCard()`, `parseMd()`, `stopEvt()`, `CanvasMesh.jsx`
+- **Thin community `Community 8`** (8 nodes): `WorldSelect.jsx`, `CardMenu()`, `ContextCard()`, `ContextModal()`, `DeleteConfirmModal()`, `hashIndex()`, `MenuItem()`, `WorldSelect()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 9`** (7 nodes): `App()`, `SceneErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `App.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -174,9 +174,9 @@ _Questions this graph is uniquely positioned to answer:_
 - **What is the exact relationship between `Git Push/Merge Onay Kuralı` and `Graphify Kullanım Kuralları`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
 - **Why does `PersistentSession` connect `Community 4` to `Community 0`, `Community 3`, `Community 6`?**
-  _High betweenness centrality (0.108) - this node is a cross-community bridge._
+  _High betweenness centrality (0.107) - this node is a cross-community bridge._
 - **Why does `serializeSpecialDoor()` connect `Community 5` to `Community 0`?**
-  _High betweenness centrality (0.064) - this node is a cross-community bridge._
+  _High betweenness centrality (0.063) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `PersistentSession` (e.g. with `Senaryo: roomchat-3turn (3 turluk sohbet)` and `Kill → Resume Canlı Testi (PAPATYA-42, ilk-tur cacheWrite 554)`) actually correct?**
   _`PersistentSession` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`, `Hero Image - Isometric Room Layers`, `Git Push/Merge Onay Kuralı` to the rest of the system?**
