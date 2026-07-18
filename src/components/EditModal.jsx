@@ -34,7 +34,9 @@ function MicButton({ listening, onToggle, supported }) {
 }
 
 export function EditModal() {
-  const { activeModal, selectedTile, worldMedia, closeModal, addMedia, removeMedia } = useStore()
+  const { activeModal, selectedTile, worldMedia, closeModal, addMedia, removeMedia, modalEdit, applyLoopSpecEdit } = useStore()
+  // Düzenleme modu: başlatılmamış LoopFlow tile'ının ayarlarını PATCH ile güncelle (yeni media eklemez)
+  const loopEditMode = modalEdit?.type === 'roomsession-loop'
   const [activeTab, setActiveTab] = useState('image')
   const [url, setUrl] = useState('')
   const [file, setFile] = useState(null)
@@ -72,6 +74,20 @@ export function EditModal() {
   const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
+
+  // LoopFlow düzenleme modu: modal mevcut değerlerle önden dolu açılır
+  useEffect(() => {
+    if (!loopEditMode) return
+    setActiveTab('roomsession')
+    setLoopOn(!!modalEdit.loop)
+    setLoopGoal(modalEdit.loop?.goal || '')
+    setLoopSubagents(modalEdit.loop?.subagents || '')
+    setLoopMaxIter(modalEdit.loop?.maxIterations || 8)
+    if (modalEdit.model) setSessionModel(modalEdit.model)
+    if (modalEdit.effort) setSessionEffort(modalEdit.effort)
+    if (modalEdit.permissionMode) setSessionPermMode(modalEdit.permissionMode)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalEdit])
 
   // bluprint tab açılınca kurulu skill listesini getir
   useEffect(() => {
@@ -339,6 +355,34 @@ export function EditModal() {
         closeModal()
         setWidth(6)
         setHeight(4)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
+    if (activeTab === 'roomsession' && loopEditMode) {
+      // Düzenleme modu: yeni tile ekleme, mevcut tile'ın ayarlarını güncelle
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const loop = (loopOn && loopGoal.trim())
+          ? { goal: loopGoal.trim(), trigger: 'manual', subagents: loopSubagents.trim(), maxIterations: Math.max(1, Math.min(50, parseInt(loopMaxIter, 10) || 8)) }
+          : null
+        const r = await fetch(`/api/roomsession/${modalEdit.mediaId}/settings`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ loop, model: sessionModel, effort: sessionEffort, permissionMode: sessionPermMode }),
+        })
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}))
+          throw new Error(d.error || 'Loop ayarları güncellenemedi')
+        }
+        applyLoopSpecEdit(modalEdit.mediaId, loop)
+        closeModal()
       } catch (err) {
         alert(err.message)
       } finally {
@@ -772,14 +816,14 @@ export function EditModal() {
         {/* Header */}
         <div style={s.header}>
           <div>
-            <h2 style={s.title}>Grid Düzenle</h2>
+            <h2 style={s.title}>{loopEditMode ? '🔁 Loop Ayarlarını Düzenle' : 'Grid Düzenle'}</h2>
             <span style={s.subtitle}>ID: {String(selectedTile.id)}</span>
           </div>
           <button style={s.closeBtn} onClick={closeModal}>✕</button>
         </div>
 
         {/* Paste banner — her zaman görünür, tileMedia bağımsız */}
-        {clonedMedia && (
+        {!loopEditMode && clonedMedia && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', margin: '0 0 8px 0', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 8 }}>
             <span style={{ fontSize: 13, color: '#93c5fd', flex: 1 }}>
               <b>{clonedMedia.label}</b> kopyalandı — bu duvara yapıştır
@@ -801,7 +845,7 @@ export function EditModal() {
         )}
 
         {/* Existing media on this tile */}
-        {tileMedia.length > 0 && (
+        {!loopEditMode && tileMedia.length > 0 && (
           <div style={s.existingSection}>
             <p style={s.sectionLabel}>Bu tile'daki medyalar</p>
             {tileMedia.map((m) => (
@@ -964,8 +1008,8 @@ export function EditModal() {
           </div>
         )}
 
-        {/* Tabs */}
-        <div style={s.tabs}>
+        {/* Tabs — loop düzenleme modunda gizli (yalnızca roomsession ayarları gösterilir) */}
+        <div style={loopEditMode ? { display: 'none' } : s.tabs}>
           <button
             style={activeTab === 'image' ? s.activeTab : s.tab}
             onClick={() => setActiveTab('image')}
@@ -1564,8 +1608,8 @@ export function EditModal() {
             </div>
           )}
 
-          {/* Size inputs */}
-          <div style={s.row}>
+          {/* Size inputs — loop düzenleme modunda gizli (tile boyutu değişmez) */}
+          <div style={loopEditMode ? { display: 'none' } : s.row}>
             <div style={{ flex: 1 }}>
               <label style={s.label}>
                 Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 3' : activeTab === 'slide' ? '⚡ 8.89 (16:9)' : ''}
@@ -1602,7 +1646,7 @@ export function EditModal() {
         <div style={s.actions}>
           <button style={s.cancelBtn} onClick={closeModal}>İptal</button>
           <button style={s.applyBtn} onClick={handleApply} disabled={loading}>
-            {loading ? loadingLabel : 'Uygula'}
+            {loading ? loadingLabel : loopEditMode ? 'Kaydet' : 'Uygula'}
           </button>
         </div>
 

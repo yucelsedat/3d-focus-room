@@ -5,6 +5,8 @@ export const useStore = create((set) => ({
   canvasEditorOpen: false,
   canvasEditorMediaId: null,
   selectedTile: null, // { id, position, rotation }
+  modalEdit: null,    // { type: 'roomsession-loop', mediaId, loop, model, effort, permissionMode } — EditModal düzenleme modu
+  loopSpecEdits: {},  // mediaId → güncellenen loop spec (LoopFlow paneli kaydettikten sonra kendini tazeler)
   hoveredTile: null,  // { id, position, rotation }
   worldMedia: [],
   roomModal: false,
@@ -24,8 +26,9 @@ export const useStore = create((set) => ({
   openCanvasEditor: (id) => set({ canvasEditorOpen: true, canvasEditorMediaId: id }),
   closeCanvasEditor: () => set({ canvasEditorOpen: false, canvasEditorMediaId: null }),
 
-  openModal: (tile) => set({ activeModal: true, selectedTile: tile }),
-  closeModal: () => set({ activeModal: false, selectedTile: null }),
+  openModal: (tile, edit = null) => set({ activeModal: true, selectedTile: tile, modalEdit: edit }),
+  closeModal: () => set({ activeModal: false, selectedTile: null, modalEdit: null }),
+  applyLoopSpecEdit: (mediaId, loop) => set((state) => ({ loopSpecEdits: { ...state.loopSpecEdits, [String(mediaId)]: loop } })),
 
   openRoomModal: () => set({ roomModal: true }),
   closeRoomModal: () => set({ roomModal: false }),
