@@ -135,6 +135,93 @@ const LinkCard = ({ item, clickable = false }) => {
   )
 }
 
+// ── Instagram dikey (mobil) kart — og görsel + başlık; tıklayınca link kopyalanır ────
+const IG_GRADIENT = 'linear-gradient(45deg,#f09433 0%,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888 100%)'
+// Instagram kamera logosu (stroke SVG)
+const InstaGlyph = ({ size = 32, color = '#fff' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="2" width="20" height="20" rx="5.5" />
+    <circle cx="12" cy="12" r="4.2" />
+    <circle cx="17.5" cy="6.5" r="1.1" fill={color} stroke="none" />
+  </svg>
+)
+// og:title'dan kullanıcı adı + caption ayıkla ("<isim> on Instagram: "caption"")
+const parseInstaTitle = (raw) => {
+  const t = (raw || '').trim()
+  let m = t.match(/^(.+?)\s+on\s+Instagram\s*:?\s*(.*)$/i) || t.match(/^(.+?)\s*,\s*Instagram\s*:?\s*(.*)$/i)
+  if (m) return { user: m[1].trim(), caption: m[2].replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim() }
+  m = t.match(/^(.+?)\s*[•|]\s*Instagram/i)
+  if (m) return { user: m[1].trim(), caption: '' }
+  return { user: 'instagram', caption: t }
+}
+const InstaCard = ({ item, clickable = false }) => {
+  const [imgOk, setImgOk] = useState(true)
+  const hasImg = !!item.thumbUrl && imgOk
+  const { user, caption } = parseInstaTitle(item.title)
+  const IgIcon = ({ d, fill = 'none' }) => (
+    <svg width="32" height="32" viewBox="0 0 24 24" fill={fill} stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
+  )
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 22, overflow: 'hidden', background: '#0b0b0b', display: 'flex', flexDirection: 'column', cursor: clickable ? 'pointer' : 'inherit', boxSizing: 'border-box', boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.06)' }}
+      {...(clickable ? { onMouseDown: stopEvt, onClick: (e) => { stopEvt(e); navigator.clipboard?.writeText(item.url).catch(() => {}) } } : {})}>
+      {/* Header: gradient avatar halkası + kullanıcı adı + ⋯ */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', flexShrink: 0, pointerEvents: 'none' }}>
+        <div style={{ width: 46, height: 46, borderRadius: '50%', background: IG_GRADIENT, padding: 2.5, boxSizing: 'border-box', flexShrink: 0 }}>
+          <div style={{ width: '100%', height: '100%', borderRadius: '50%', background: '#2a2a2a', border: '2px solid #0b0b0b', boxSizing: 'border-box' }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0, color: '#fff', fontSize: 24, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user}</div>
+        <div style={{ color: '#fff', fontSize: 30, fontWeight: 800, letterSpacing: 2, lineHeight: 0.4 }}>⋯</div>
+      </div>
+      {/* Media: og:image — TAMAMI görünsün (contain), arkada bulanık dolgu (IG tarzı) */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, background: '#000', overflow: 'hidden' }}>
+        {hasImg ? (
+          <>
+            <img src={item.thumbUrl} alt="" aria-hidden="true" draggable={false} referrerPolicy="no-referrer"
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(24px) brightness(0.5)', transform: 'scale(1.15)', pointerEvents: 'none' }} />
+            <img src={item.thumbUrl} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImgOk(false)}
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
+          </>
+        ) : (
+          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: IG_GRADIENT, pointerEvents: 'none' }}>
+            <InstaGlyph size={96} />
+          </div>
+        )}
+        {/* Instagram logo filigranı (üst-sağ) */}
+        <div style={{ position: 'absolute', top: 12, right: 12, pointerEvents: 'none', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,.65))' }}>
+          <InstaGlyph size={34} />
+        </div>
+      </div>
+      {/* Aksiyon ikonları + caption */}
+      <div style={{ flexShrink: 0, padding: '10px 14px 16px', color: '#fff', pointerEvents: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 8 }}>
+          <IgIcon d={<path d="M12 21s-7.5-4.6-9.6-9C1 9.3 2.6 5.5 6.2 5.5c2 0 3.2 1.1 3.8 2.2h4c.6-1.1 1.8-2.2 3.8-2.2 3.6 0 5.2 3.8 3.8 6.5C19.5 16.4 12 21 12 21z" />} />
+          <IgIcon d={<path d="M21 11.5a8.4 8.4 0 0 1-12.5 7.3L3 21l2.2-5.4A8.4 8.4 0 1 1 21 11.5z" />} />
+          <IgIcon d={<><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4 20-7z" /></>} />
+          <span style={{ marginLeft: 'auto' }}><IgIcon d={<path d="M6 3h12v18l-6-4-6 4V3z" />} /></span>
+        </div>
+        <div style={{ fontSize: 22, lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>
+          <b style={{ fontWeight: 700 }}>{user}</b>{caption ? ' ' + caption : ''}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Instagram permalink algılama + og:image kapaklı dikey (mobil) item üretimi.
+// Hem Ctrl+V paste hem de URL-input (🖼️ Resim) yolları buradan geçer → tek kaynak.
+const isInstaUrl = (text) => {
+  try { const u = new URL(text); return /(^|\.)instagram\.com$/i.test(u.hostname) && /\/(p|reel|reels|tv)\/[A-Za-z0-9_-]+/i.test(u.pathname) } catch { return false }
+}
+const buildInstaItem = async (url, pt) => {
+  let title = '', thumbUrl = '', siteName = 'instagram'
+  try {
+    const r = await fetch(`/api/link-meta?url=${encodeURIComponent(url)}`)
+    if (r.ok) { const d = await r.json(); title = d.title || ''; thumbUrl = d.image || ''; siteName = d.siteName || siteName }
+  } catch {}
+  // dikey mobil oran (9:15.75)
+  return { id: crypto.randomUUID(), type: 'insta', x: pt.x, y: pt.y, w: 320, h: 560, url, thumbUrl, title, siteName }
+}
+
 // Module-level clipboard — persists across canvas instances / re-renders
 let canvasMeshClipboard = null
 let _canvasClipboardTs   = 0
@@ -473,6 +560,15 @@ export default function CanvasMesh({ id, content, width, height }) {
           if (r.ok) { const d = await r.json(); title = d.title || ''; if (d.thumbnail_url) thumbUrl = d.thumbnail_url }
         } catch {}
         const ni = { id: crypto.randomUUID(), type: 'youtube', x: pt.x, y: pt.y, w: 480, h: 270, url: text, videoId: ytId, thumbUrl, title }
+        setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
+        setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
+        return
+      }
+
+      // Instagram reel/gönderi linki → dikey mobil kart (og görsel + başlık)
+      if (isInstaUrl(text)) {
+        setPasteMsg('loading')
+        const ni = await buildInstaItem(text, centerSurface())
         setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
         setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
         return
@@ -866,6 +962,13 @@ export default function CanvasMesh({ id, content, width, height }) {
   const addImageFromUrl = async (e) => {
     stop(e); const url = urlValue.trim(); if (!url) return
     const pt   = centerSurface()
+    // Instagram reel/gönderi linki → dikey mobil kart (resim değil)
+    if (isInstaUrl(url)) {
+      const ni = await buildInstaItem(url, pt)
+      setItems(prev => { const next = [...prev, ni]; scheduleSave(next, bgRef.current); return next })
+      setSelectedIds(new Set([ni.id])); setShowUrlInput(false); setUrlValue('')
+      return
+    }
     const dims = await getImageNaturalSize(url)
     const iw   = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
     const ih   = dims ? Math.round(iw * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
@@ -1111,6 +1214,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   const renderBoxContent = (item) => {
     if (item.type === 'room')    return <RoomChip item={item} />
     if (item.type === 'link')    return <LinkCard item={item} />
+    if (item.type === 'insta')   return <InstaCard item={item} />
     if (item.type === 'youtube') return <YoutubeCard item={item} />
     if (item.type === 'image') return <ImageItem item={item} />
     if (item.type === 'text' && editingItemId === item.id) {
@@ -1197,6 +1301,10 @@ export default function CanvasMesh({ id, content, width, height }) {
                 ) : item.type === 'link' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
                     <LinkCard item={item} clickable />
+                  </div>
+                ) : item.type === 'insta' ? (
+                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+                    <InstaCard item={item} clickable />
                   </div>
                 ) : item.type === 'text' ? (
                   (() => {
