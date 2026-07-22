@@ -55,6 +55,7 @@ const ensureDir = (dir) => {
 ensureDir('public/uploads/images');
 ensureDir('public/uploads/videos');
 ensureDir('public/uploads/slides');
+ensureDir('public/uploads/audio');
 
 // ─── Active room ──────────────────────────────────────────────────────────────
 let activeRoomId   = 'default';
@@ -175,6 +176,14 @@ const canvasUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
     filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${safeName(file.originalname)}`),
+  }),
+});
+
+const canvasAudioUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'public/uploads/audio/'),
+    // Toplu paste'te aynı isimli dosyalar aynı ms'de gelebilir → rastgele ek ile çakışmayı önle
+    filename: (req, file, cb) => cb(null, `canvas-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName(file.originalname)}`),
   }),
 });
 
@@ -940,6 +949,33 @@ app.post('/api/canvas/:id/upload', canvasUpload.single('file'), (req, res) => {
   res.json({ url: `/uploads/images/${req.file.filename}` });
 });
 
+app.post('/api/canvas/:id/upload-audio', canvasAudioUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Dosya yok' });
+  const url = `/uploads/audio/${req.file.filename}`;
+  let title = '', artist = '', duration = 0, coverUrl = '';
+  try {
+    const { parseFile } = await import('music-metadata');
+    const meta = await parseFile(req.file.path);
+    title    = meta.common.title || '';
+    artist   = meta.common.artist || '';
+    duration = meta.format.duration || 0;
+    const pic = meta.common.picture?.[0];
+    if (pic) {
+      const ext = pic.format?.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+      const coverName = `canvas-audio-cover-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      fs.writeFileSync(path.join(__dirname, 'public/uploads/images', coverName), pic.data);
+      coverUrl = `/uploads/images/${coverName}`;
+    }
+  } catch (err) {
+    console.error('[canvas upload-audio] ID3 parse hatası:', err.message);
+  }
+  // Başlık yoksa dosya adından türet (uzantısız, tire/alt çizgi → boşluk)
+  if (!title) {
+    title = safeName(req.file.originalname).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim();
+  }
+  res.json({ url, title, artist, duration, coverUrl });
+});
+
 // Farklı canvas'a yapıştırırken resim dosyalarını kopyalar
 app.post('/api/canvas/copy-images', (req, res) => {
   const { urls } = req.body;
@@ -948,10 +984,11 @@ app.post('/api/canvas/copy-images', (req, res) => {
     if (!srcUrl?.startsWith('/uploads/')) continue;
     const srcPath = path.join(__dirname, 'public', srcUrl);
     if (!fs.existsSync(srcPath)) continue;
+    const folder = srcUrl.startsWith('/uploads/audio/') ? 'audio' : 'images';
     const ext = path.extname(srcUrl);
     const newFilename = `canvas-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
-    fs.copyFileSync(srcPath, path.join(__dirname, 'public', 'uploads', 'images', newFilename));
-    mapping[srcUrl] = `/uploads/images/${newFilename}`;
+    fs.copyFileSync(srcPath, path.join(__dirname, 'public', 'uploads', folder, newFilename));
+    mapping[srcUrl] = `/uploads/${folder}/${newFilename}`;
   }
   res.json({ mapping });
 });
