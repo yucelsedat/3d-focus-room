@@ -63,6 +63,7 @@ if (typeof document !== 'undefined' && !document.getElementById('cvmd-styles')) 
     .cvmd-code-block pre { margin: 0; padding: 0.9em 1em 0.8em; overflow-x: auto; background: transparent !important; border-radius: 0; }
     .cvmd-code-block pre code.hljs { padding: 0; font-size: 0.88em; font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Menlo, monospace; line-height: 1.55; background: transparent !important; }
     .cvmd pre code { font-family: 'Fira Code', 'Cascadia Code', monospace; }
+    @keyframes cvMusicMarquee { 0% { transform: translateX(0) } 100% { transform: translateX(-50%) } }
   `
   document.head.appendChild(s)
 }
@@ -222,6 +223,110 @@ const buildInstaItem = async (url, pt) => {
   return { id: crypto.randomUUID(), type: 'insta', x: pt.x, y: pt.y, w: 320, h: 560, url, thumbUrl, title, siteName }
 }
 
+// ── Müzik kartı — kapak + kayan başlık + play/pause ───────────────────────────
+// <audio> elementi React ağacına bağlı OLMAMALI: edit ↔ görüntüleme modu geçişinde
+// MusicCard unmount/remount olur; DOM'daki <audio> de kaldırılırsa çalan şarkı kesilir.
+// Bu yüzden ses elementleri module-level bir havuzda (item.id → HTMLAudioElement)
+// tutulur; React unmount'tan bağımsız çalmaya devam eder. Kart yalnızca UI'ı yönetir.
+const audioPool = new Map()
+let currentlyPlayingAudio = null   // aynı anda tek mp3 çalsın
+const getPoolAudio = (id, url) => {
+  let a = audioPool.get(id)
+  if (!a) { a = new Audio(url); a.preload = 'none'; audioPool.set(id, a) }
+  return a
+}
+const disposePoolAudio = (id) => {
+  const a = audioPool.get(id)
+  if (!a) return
+  try { a.pause() } catch {}
+  if (currentlyPlayingAudio === a) currentlyPlayingAudio = null
+  audioPool.delete(id)
+}
+const MusicCard = ({ item, clickable = false }) => {
+  const [coverOk, setCoverOk] = useState(true)
+  // remount'ta (mod geçişi) havuzda çalan ses varsa ikon doğru başlasın
+  const [playing, setPlaying] = useState(() => { const a = audioPool.get(item.id); return a ? !a.paused : false })
+  const [marquee, setMarquee] = useState(false)
+  const titleRef = useRef(null)
+  const hasCover = !!item.coverUrl && coverOk
+
+  useEffect(() => {
+    const el = titleRef.current
+    if (el) setMarquee(el.scrollWidth > el.clientWidth + 2)
+  }, [item.title, item.w])
+
+  // Havuzdaki ses elementine bağlan: mevcut çalma durumunu yansıt ve buton ikonunu
+  // play/pause/ended olaylarıyla senkronla. Mod değişiminde remount olsak da havuzdaki
+  // element aynı kalır → çalma kesilmez, ikon anında doğru duruma oturur.
+  useEffect(() => {
+    const a = getPoolAudio(item.id, item.url)
+    if (a.src !== new URL(item.url, location.href).href) a.src = item.url  // cross-canvas kopyada url değişebilir
+    // Başlangıç ikonu lazy useState init'inden geldi; burada yalnızca olay dinleyicileri bağla.
+    const onPlay  = () => setPlaying(true)
+    const onPause = () => setPlaying(false)
+    const onEnded = () => { setPlaying(false); if (currentlyPlayingAudio === a) currentlyPlayingAudio = null }
+    a.addEventListener('play', onPlay)
+    a.addEventListener('pause', onPause)
+    a.addEventListener('ended', onEnded)
+    return () => {
+      a.removeEventListener('play', onPlay)
+      a.removeEventListener('pause', onPause)
+      a.removeEventListener('ended', onEnded)
+    }
+  }, [item.id, item.url])
+
+  const togglePlay = () => {
+    const a = getPoolAudio(item.id, item.url)
+    if (a.paused) {
+      if (currentlyPlayingAudio && currentlyPlayingAudio !== a) { try { currentlyPlayingAudio.pause() } catch {} }
+      currentlyPlayingAudio = a
+      a.play().catch(() => {})
+    } else a.pause()
+  }
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 18, overflow: 'hidden',
+      background: 'linear-gradient(160deg,#1f2937,#0b0f16)', display: 'flex', flexDirection: 'column',
+      padding: 16, boxSizing: 'border-box', cursor: clickable ? 'default' : 'inherit',
+      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)' }}
+      {...(clickable ? { onMouseDown: stopEvt } : {})}>
+      {/* Kapak — üstte, kare */}
+      <div style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1', borderRadius: 12, overflow: 'hidden', flexShrink: 0, background: '#3a3f47' }}>
+        {hasCover ? (
+          <img src={item.coverUrl} alt="" draggable={false} onError={() => setCoverOk(false)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
+        ) : (
+          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'linear-gradient(135deg,#6d28d9,#db2777)', pointerEvents: 'none' }}>
+            <span style={{ fontSize: 72, opacity: 0.85 }}>🎵</span>
+          </div>
+        )}
+      </div>
+      {/* Şarkı adı (uzunsa kayar) */}
+      <div ref={titleRef} style={{ overflow: 'hidden', whiteSpace: 'nowrap', color: '#fff', fontSize: 26, fontWeight: 700,
+        textAlign: 'center', marginTop: 16, flexShrink: 0 }}>
+        <span style={{ display: 'inline-block', paddingRight: marquee ? 40 : 0,
+          ...(marquee ? { animation: 'cvMusicMarquee 9s linear infinite' } : {}) }}>
+          {item.title}{marquee ? '        ' + item.title : ''}
+        </span>
+      </div>
+      {/* Sanatçı adı */}
+      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 20, fontWeight: 400, textAlign: 'center',
+        marginTop: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0 }}>
+        {item.artist || '—'}
+      </div>
+      {/* Play / pause — en altta ortada */}
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
+        <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); togglePlay() }}
+          style={{ width: 60, height: 60, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.14)',
+            color: '#fff', fontSize: 26, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          {playing ? '⏸' : '▶'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // Module-level clipboard — persists across canvas instances / re-renders
 let canvasMeshClipboard = null
 let _canvasClipboardTs   = 0
@@ -342,6 +447,20 @@ export default function CanvasMesh({ id, content, width, height }) {
   }, [])
 
   useEffect(() => { itemsRef.current = items }, [items])
+
+  // Müzik ses havuzu temizliği: <audio> artık React ağacında olmadığından, silinen bir
+  // müzik kartının sesi kendiliğinden durmaz. Bu canvas'ın daha önce sahip olup artık
+  // kaldırdığı music id'lerini durdurup havuzdan sil (yalnızca kendi id'lerine dokunur →
+  // aynı anda açık başka bir canvas'ın seslerini etkilemez). Canvas unmount olunca da
+  // (oda değişimi vb.) o ana dek sahip olunan tüm sesler durur.
+  const prevMusicIdsRef = useRef(new Set())
+  useEffect(() => {
+    const cur = new Set(items.filter(it => it.type === 'music').map(it => it.id))
+    for (const oldId of prevMusicIdsRef.current) if (!cur.has(oldId)) disposePoolAudio(oldId)
+    prevMusicIdsRef.current = cur
+  }, [items])
+  useEffect(() => () => { for (const id of prevMusicIdsRef.current) disposePoolAudio(id) }, [])
+
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
   useEffect(() => { isEditModeRef.current = isEditMode }, [isEditMode])
   useEffect(() => { isFullscreenRef.current = isFullscreen }, [isFullscreen])
@@ -547,6 +666,35 @@ export default function CanvasMesh({ id, content, width, height }) {
       return
     }
 
+    // Ses dosyaları — toplu paste destekli: FileList (daha güvenilir) yoksa items'tan topla.
+    let audioFiles = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('audio/'))
+    if (!audioFiles.length) audioFiles = clipItems.filter(it => it.type.startsWith('audio/')).map(it => it.getAsFile()).filter(Boolean)
+    if (audioFiles.length) {
+      setPasteMsg('loading')
+      try {
+        // Hepsini paralel yükle, sıra korunur (Promise.all giriş sırasını korur)
+        const metas = await Promise.all(audioFiles.map(async (file) => {
+          const form = new FormData(); form.append('file', file)
+          const r = await fetch(`/api/canvas/${id}/upload-audio`, { method: 'POST', body: form })
+          return r.ok ? r.json() : null
+        }))
+        const ok = metas.filter(Boolean)
+        if (ok.length) {
+          const W = 300, H = 480, GAP = 24, step = W + GAP
+          const pt = centerSurface()
+          const startX = pt.x - ((ok.length - 1) * step) / 2   // grubu merkeze yatay ortala
+          const newItems = ok.map((d, i) => ({
+            id: crypto.randomUUID(), type: 'music', x: startX + i * step, y: pt.y, w: W, h: H,
+            url: d.url, title: d.title, artist: d.artist, coverUrl: d.coverUrl, duration: d.duration,
+          }))
+          setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
+          setPasteMsg('ok')
+        } else setPasteMsg('err')
+      } catch { setPasteMsg('err') }
+      setTimeout(() => setPasteMsg(''), 1800)
+      return
+    }
+
     const text = e.clipboardData?.getData('text/plain')?.trim()
     if (text) {
       // YouTube link
@@ -617,21 +765,31 @@ export default function CanvasMesh({ id, content, width, height }) {
     let clipItems = clip.items
 
     if (clip.sourceId !== id) {
-      const imgUrls = clipItems
-        .filter(it => it.type === 'image' && it.url?.startsWith('/uploads/'))
-        .map(it => it.url)
-      if (imgUrls.length) {
+      const copyableUrls = clipItems.flatMap(it => {
+        const urls = []
+        if ((it.type === 'image' || it.type === 'music') && it.url?.startsWith('/uploads/')) urls.push(it.url)
+        if (it.type === 'music' && it.coverUrl?.startsWith('/uploads/')) urls.push(it.coverUrl)
+        return urls
+      })
+      if (copyableUrls.length) {
         setPasteMsg('loading')
         try {
           const r = await fetch('/api/canvas/copy-images', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: imgUrls }),
+            body: JSON.stringify({ urls: copyableUrls }),
           })
           const d = await r.json()
           if (r.ok && d.mapping) {
-            clipItems = clipItems.map(it =>
-              it.type === 'image' && d.mapping[it.url] ? { ...it, url: d.mapping[it.url] } : it
-            )
+            clipItems = clipItems.map(it => {
+              if (it.type === 'image' && d.mapping[it.url]) return { ...it, url: d.mapping[it.url] }
+              if (it.type === 'music') {
+                const next = { ...it }
+                if (d.mapping[it.url]) next.url = d.mapping[it.url]
+                if (d.mapping[it.coverUrl]) next.coverUrl = d.mapping[it.coverUrl]
+                return next
+              }
+              return it
+            })
           }
         } catch {}
       }
@@ -1216,6 +1374,7 @@ export default function CanvasMesh({ id, content, width, height }) {
     if (item.type === 'link')    return <LinkCard item={item} />
     if (item.type === 'insta')   return <InstaCard item={item} />
     if (item.type === 'youtube') return <YoutubeCard item={item} />
+    if (item.type === 'music')   return <MusicCard item={item} />
     if (item.type === 'image') return <ImageItem item={item} />
     if (item.type === 'text' && editingItemId === item.id) {
       // içeriğe göre uzat, A4 yüksekliğinde durdur → fazlası textarea içinde scroll
@@ -1305,6 +1464,10 @@ export default function CanvasMesh({ id, content, width, height }) {
                 ) : item.type === 'insta' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
                     <InstaCard item={item} clickable />
+                  </div>
+                ) : item.type === 'music' ? (
+                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+                    <MusicCard item={item} clickable />
                   </div>
                 ) : item.type === 'text' ? (
                   (() => {
