@@ -22,7 +22,14 @@ Ensure you have [Node.js](https://nodejs.org/) installed on your machine.
 npm install
 ```
 
-### 2. Start Both Client and Backend Servers
+### 2. Set Up the Database
+Applies all Prisma migrations and generates the client — creates a fresh `prisma/dev.db` with the correct schema (rooms, doors, special doors with garden-wall layers, media, floor textures).
+```bash
+npx prisma migrate deploy   # or: npx prisma migrate dev
+npx prisma generate
+```
+
+### 3. Start Both Client and Backend Servers
 We use a concurrent script to watch and boot up both Vite's frontend and the Express backend simultaneously.
 ```bash
 npm run dev:full
