@@ -8,11 +8,19 @@ import * as THREE from 'three'
 const OUTDOOR_SIZE = 400
 
 export function OutdoorFloor() {
-  const texture = useTexture('/textures/grass.png', (t) => {
+  const floorTexture = useStore((state) => state.floorTexture)
+  // Oda zemini (Grid) drei'nin useTexture cache'iyle URL bazında texture paylaşır.
+  // O objenin repeat'ini mutate edersek oda zemini de bozulur; bu yüzden dış zemin
+  // KENDİ bağımsız texture'ını yükler. Oda ile aynı görsel, ama her birim = 1 tile
+  // olacak şekilde tile'lanır (oda grid'i ile hizalı).
+  const texture = useMemo(() => {
+    const t = new THREE.TextureLoader().load(`/textures/${floorTexture}`)
     t.wrapS = t.wrapT = THREE.RepeatWrapping
-    t.repeat.set(OUTDOOR_SIZE / 4, OUTDOOR_SIZE / 4)
+    t.repeat.set(OUTDOOR_SIZE, OUTDOOR_SIZE)
     t.anisotropy = 4
-  })
+    return t
+  }, [floorTexture])
+  useEffect(() => () => texture.dispose(), [texture])
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
       <planeGeometry args={[OUTDOOR_SIZE, OUTDOOR_SIZE]} />
@@ -35,6 +43,7 @@ function GridInner({ gx, gz, floorTexture }) {
 
   const texture = useTexture(`/textures/${floorTexture}`, (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.repeat.set(1, 1)   // her tile 1×1: texture'ı bir kez göster (paylaşılan obje bozulmuşsa sıfırla)
     t.anisotropy = 4
   })
 

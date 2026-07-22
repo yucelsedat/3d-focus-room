@@ -2,7 +2,8 @@ import { useStore } from '../store/useStore'
 import { ROOM_CONFIGS, decodeWallId } from '../utils/roomConfig'
 
 const TILE_SIZE = 1
-const OUTER_CONFIG = { gx: 120, gz: 120, wh: 6 }
+const OUTER_CONFIG  = { gx: 60, gz: 60, wh: 6 }
+const OUTER2_CONFIG = { gx: 80, gz: 80, wh: 6 }
 
 function doorWorldPos(anchorId, config) {
   const { gx, gz } = config
@@ -22,9 +23,10 @@ function doorWorldPos(anchorId, config) {
 }
 
 export function BlueDoors() {
-  const specialDoors      = useStore(s => s.specialDoors)
-  const outerSpecialDoors = useStore(s => s.outerSpecialDoors)
-  const currentRoomType   = useStore(s => s.currentRoomType)
+  const specialDoors       = useStore(s => s.specialDoors)
+  const outerSpecialDoors  = useStore(s => s.outerSpecialDoors)
+  const outerSpecialDoors2 = useStore(s => s.outerSpecialDoors2)
+  const currentRoomType    = useStore(s => s.currentRoomType)
   const innerConfig = ROOM_CONFIGS[currentRoomType] ?? ROOM_CONFIGS.room
 
   return (
@@ -55,6 +57,22 @@ export function BlueDoors() {
               transparent
               opacity={0.55}
               emissive="#6d28d9"
+              emissiveIntensity={0.4}
+              side={2}
+            />
+          </mesh>
+        )
+      })}
+      {outerSpecialDoors2.map(sd => {
+        const { position, rotation } = doorWorldPos(sd.anchorId, OUTER2_CONFIG)
+        return (
+          <mesh key={`outer2-${sd.id}`} position={position} rotation={rotation}>
+            <planeGeometry args={[2, 3]} />
+            <meshStandardMaterial
+              color="#ec4899"
+              transparent
+              opacity={0.55}
+              emissive="#be185d"
               emissiveIntensity={0.4}
               side={2}
             />

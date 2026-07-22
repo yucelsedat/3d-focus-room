@@ -4,46 +4,53 @@ import { useTexture } from '@react-three/drei'
 import { useStore } from '../store/useStore'
 import * as THREE from 'three'
 
-const OUTER_GRID_SIZE = 120
-const WALL_HEIGHT     = 6
-const TILE_SIZE       = 1
-const COUNT           = OUTER_GRID_SIZE * WALL_HEIGHT * 4  // 2400
-const OFFSET          = 60
-const DEFAULT_COLOR   = new THREE.Color('#aaaaaa')
-const HOVER_COLOR     = new THREE.Color('#00f2ff')
+const WALL_HEIGHT   = 6
+const TILE_SIZE     = 1
+const DEFAULT_COLOR = new THREE.Color('#aaaaaa')
+const HOVER_COLOR   = new THREE.Color('#00f2ff')
 
-function applyOuterInstanceTransform(id, tempObj, scale = 1) {
-  const h    = Math.floor(id / (OUTER_GRID_SIZE * 4))
-  const j    = Math.floor((id % (OUTER_GRID_SIZE * 4)) / 4)
+// İki bahçe duvarı halkası. layer 1 = oda duvarından 10 tile ileride (±30),
+// layer 2 = 1. duvardan 10 tile ileride (±40).
+const RINGS = [
+  { idPrefix: 'outer',  gridSize: 60, offset: 30, defer: ['wall-'] },
+  { idPrefix: 'outer2', gridSize: 80, offset: 40, defer: ['wall-', 'outer-'] },
+]
+
+function applyRingTransform(id, tempObj, gridSize, offset, scale = 1) {
+  const h    = Math.floor(id / (gridSize * 4))
+  const j    = Math.floor((id % (gridSize * 4)) / 4)
   const face = id % 4
   const y    = h * TILE_SIZE + TILE_SIZE / 2
-  const pos  = j * TILE_SIZE - OFFSET + TILE_SIZE / 2
+  const pos  = j * TILE_SIZE - offset + TILE_SIZE / 2
 
   tempObj.scale.set(scale, scale, scale)
   switch (face) {
-    case 0: tempObj.position.set(pos,    y, -OFFSET); tempObj.rotation.set(0, 0,              0); break
-    case 1: tempObj.position.set(pos,    y,  OFFSET); tempObj.rotation.set(0, Math.PI,        0); break
-    case 2: tempObj.position.set(-OFFSET, y, pos);    tempObj.rotation.set(0, Math.PI / 2,    0); break
-    case 3: tempObj.position.set( OFFSET, y, pos);    tempObj.rotation.set(0, -Math.PI / 2,   0); break
+    case 0: tempObj.position.set(pos,     y, -offset); tempObj.rotation.set(0, 0,            0); break
+    case 1: tempObj.position.set(pos,     y,  offset); tempObj.rotation.set(0, Math.PI,      0); break
+    case 2: tempObj.position.set(-offset, y,  pos);    tempObj.rotation.set(0, Math.PI / 2,  0); break
+    case 3: tempObj.position.set( offset, y,  pos);    tempObj.rotation.set(0, -Math.PI / 2, 0); break
   }
   tempObj.updateMatrix()
 }
 
-export function OuterWalls() {
-  const { setHoveredTile, hiddenOuterWalls } = useStore()
+function OuterWallRing({ idPrefix, gridSize, offset, defer, hiddenIds }) {
+  const setHoveredTile = useStore((s) => s.setHoveredTile)
   const meshRef    = useRef()
   const hoveredRef = useRef(-1)
   const readyRef   = useRef(false)
   const lastRayRef = useRef(0)
   const [ready, setReady] = useState(false)
 
+  const COUNT     = gridSize * WALL_HEIGHT * 4
+  const selfPrefix = `${idPrefix}-`
+
   const texture = useTexture('/textures/duvar.jpg', (t) => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping
     t.anisotropy = 4
   })
 
-  const tempObj = useMemo(() => new THREE.Object3D(), [])
-  const hiddenSet = useMemo(() => new Set(hiddenOuterWalls), [hiddenOuterWalls])
+  const tempObj   = useMemo(() => new THREE.Object3D(), [])
+  const hiddenSet = useMemo(() => new Set(hiddenIds), [hiddenIds])
 
   // İlk kurulum
   useEffect(() => {
@@ -51,7 +58,7 @@ export function OuterWalls() {
     if (!mesh) return
 
     for (let id = 0; id < COUNT; id++) {
-      applyOuterInstanceTransform(id, tempObj, 1)
+      applyRingTransform(id, tempObj, gridSize, offset, 1)
       mesh.setMatrixAt(id, tempObj.matrix)
       mesh.setColorAt(id, DEFAULT_COLOR)
     }
@@ -61,7 +68,7 @@ export function OuterWalls() {
     mesh.computeBoundingSphere()
     readyRef.current = true
     setReady(true)
-  }, [tempObj])
+  }, [tempObj, COUNT, gridSize, offset])
 
   // Gizli tile'ları güncelle
   useEffect(() => {
@@ -69,10 +76,10 @@ export function OuterWalls() {
     if (!mesh || !readyRef.current) return
 
     for (let id = 0; id < COUNT; id++) {
-      applyOuterInstanceTransform(id, tempObj, 1)
+      applyRingTransform(id, tempObj, gridSize, offset, 1)
       mesh.setMatrixAt(id, tempObj.matrix)
     }
-    hiddenOuterWalls.forEach(id => {
+    hiddenIds.forEach(id => {
       if (id < 0 || id >= COUNT) return
       tempObj.position.set(0, -9999, 0)
       tempObj.scale.set(0, 0, 0)
@@ -82,13 +89,13 @@ export function OuterWalls() {
     })
     mesh.instanceMatrix.needsUpdate = true
     mesh.computeBoundingSphere()
-  }, [hiddenOuterWalls, tempObj])
+  }, [hiddenIds, tempObj, COUNT, gridSize, offset])
 
   useFrame((state) => {
     const mesh = meshRef.current
     if (!mesh || !readyRef.current) return
 
-    // 2400 instance'a her karede ray atmak pahalı — ~20fps'e throttle et
+    // Instance'lara her karede ray atmak pahalı — ~20fps'e throttle et
     if (state.clock.elapsedTime - lastRayRef.current < 0.05) return
     lastRayRef.current = state.clock.elapsedTime
 
@@ -104,9 +111,9 @@ export function OuterWalls() {
     }
 
     if (hit >= 0) {
-      // İç oda duvarı aktifken dış bahçe duvarı üzerine yazmasın
+      // Daha öncelikli bir duvar (iç oda / daha yakın halka) hover'daysa yazma
       const stored = useStore.getState().hoveredTile
-      if (stored && typeof stored.id === 'string' && stored.id.startsWith('wall-')) {
+      if (stored && typeof stored.id === 'string' && defer.some(p => stored.id.startsWith(p))) {
         hoveredRef.current = -1
         return
       }
@@ -123,13 +130,13 @@ export function OuterWalls() {
       pos.add(normal.multiplyScalar(0.01))
 
       setHoveredTile({
-        id: `outer-${hit}`,
+        id: `${idPrefix}-${hit}`,
         position: pos.toArray(),
         rotation: new THREE.Euler().setFromQuaternion(quat).toArray(),
       })
     } else {
       const stored = useStore.getState().hoveredTile
-      if (stored && typeof stored.id === 'string' && stored.id.startsWith('outer-')) {
+      if (stored && typeof stored.id === 'string' && stored.id.startsWith(selfPrefix)) {
         setHoveredTile(null)
       }
     }
@@ -143,5 +150,19 @@ export function OuterWalls() {
       <planeGeometry args={[TILE_SIZE, TILE_SIZE]} />
       <meshStandardMaterial map={texture} side={THREE.DoubleSide} />
     </instancedMesh>
+  )
+}
+
+export function OuterWalls() {
+  const hiddenOuterWalls  = useStore((s) => s.hiddenOuterWalls)
+  const hiddenOuterWalls2 = useStore((s) => s.hiddenOuterWalls2)
+  const hidden = [hiddenOuterWalls, hiddenOuterWalls2]
+
+  return (
+    <>
+      {RINGS.map((ring, i) => (
+        <OuterWallRing key={ring.idPrefix} {...ring} hiddenIds={hidden[i]} />
+      ))}
+    </>
   )
 }

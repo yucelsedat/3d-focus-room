@@ -2,8 +2,8 @@ import { useStore } from '../store/useStore'
 
 export async function loadRoom(id, name) {
   const {
-    setWorldMedia, setHiddenWalls, setHiddenOuterWalls,
-    setFloorTexture, setCurrentRoom, setSpecialDoors, setOuterSpecialDoors,
+    setWorldMedia, setHiddenWalls, setHiddenOuterWalls, setHiddenOuterWalls2,
+    setFloorTexture, setCurrentRoom, setSpecialDoors, setOuterSpecialDoors, setOuterSpecialDoors2,
     addToHistory,
   } = useStore.getState()
 
@@ -18,18 +18,22 @@ export async function loadRoom(id, name) {
     fetch('/api/special-doors').then(r => r.json()),
   ])
 
-  const innerDoors = doors.filter(d => !d.isOuter).map(d => d.id)
-  const outerDoors = doors.filter(d =>  d.isOuter).map(d => d.id)
+  const innerDoors  = doors.filter(d => d.layer === 0).map(d => d.id)
+  const outerDoors  = doors.filter(d => d.layer === 1).map(d => d.id)
+  const outer2Doors = doors.filter(d => d.layer === 2).map(d => d.id)
 
-  const innerSpecial = specialDoors.filter(sd => !sd.isOuter)
-  const outerSpecial = specialDoors.filter(sd =>  sd.isOuter)
+  const innerSpecial  = specialDoors.filter(sd => sd.layer === 0)
+  const outerSpecial  = specialDoors.filter(sd => sd.layer === 1)
+  const outer2Special = specialDoors.filter(sd => sd.layer === 2)
 
   setWorldMedia(media)
   setHiddenWalls([...innerDoors, ...innerSpecial.flatMap(sd => sd.instanceIds)])
   setHiddenOuterWalls([...outerDoors, ...outerSpecial.flatMap(sd => sd.instanceIds)])
+  setHiddenOuterWalls2([...outer2Doors, ...outer2Special.flatMap(sd => sd.instanceIds)])
   setFloorTexture(floor.texture)
   setSpecialDoors(innerSpecial)
   setOuterSpecialDoors(outerSpecial)
+  setOuterSpecialDoors2(outer2Special)
   setCurrentRoom(id, name, roomType)
   addToHistory(id, name)
 
