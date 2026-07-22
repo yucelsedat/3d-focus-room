@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-07-21)
+# Graph Report - focus-room-main  (2026-07-22)
 
 ## Corpus Check
-- 33 files · ~85,125 words
+- 33 files · ~85,724 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 320 nodes · 451 edges · 20 communities detected
+- 325 nodes · 459 edges · 21 communities detected
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 22 edges (avg confidence: 0.79)
 - Token cost: 0 input · 0 output
 
@@ -24,7 +24,8 @@
 - [[_COMMUNITY_Community 11|Community 11]]
 - [[_COMMUNITY_Community 12|Community 12]]
 - [[_COMMUNITY_Community 13|Community 13]]
-- [[_COMMUNITY_Community 20|Community 20]]
+- [[_COMMUNITY_Community 16|Community 16]]
+- [[_COMMUNITY_Community 21|Community 21]]
 - [[_COMMUNITY_Community 29|Community 29]]
 - [[_COMMUNITY_Community 30|Community 30]]
 - [[_COMMUNITY_Community 34|Community 34]]
@@ -52,8 +53,8 @@
   server.js → bench/scenarios.md
 - `Genel İnceleme & Düzeltme Planı (genel-fix)` --semantically_similar_to--> `YÖNTEM — Deneme-yanılma Yerine Kanıtla İlerleme`  [INFERRED] [semantically similar]
   plan.md → bench/METHOD.md
-- `bootMigrate()` --calls--> `migrate()`  [INFERRED]
-  server.js → prisma/migrate.js
+- `serializeSpecialDoor()` --calls--> `getDoorInstanceIds()`  [INFERRED]
+  server.js → src/utils/roomConfig.js
 
 ## Hyperedges (group relationships)
 - **Token/Parite Faz Pipeline (baseline → faz2 → faz3 → parite kapanışı)** — baseline_faz1_baseline, faz2_cache_prefix_sabitleme, faz3_transport_hijyeni, parite_yetenek_tablosu, method_kanitla_ilerleme [EXTRACTED 1.00]
@@ -64,11 +65,11 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.04
-Nodes (31): assignTaskIds(), blueprintSkill(), decodeHtmlEntities(), directManifest(), _loadUsageDaily(), parseLinkMeta(), parseManifest(), permissionArgs() (+23 more)
+Nodes (31): assignTaskIds(), blueprintSkill(), configForLayer(), decodeHtmlEntities(), directManifest(), _loadUsageDaily(), parseLinkMeta(), parseManifest() (+23 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.11
-Nodes (15): Senaryo: roomsession-crud (LoopFlow), addUsage(), ensureSessionOr429(), fetchHtmlHead(), LoopRunner, makeTurnSink(), MultiAgentRunner, pidRssMb() (+7 more)
+Cohesion: 0.1
+Nodes (17): Senaryo: roomsession-crud (LoopFlow), addUsage(), ensureSessionOr429(), fetchHtmlHead(), LoopRunner, makeTurnSink(), MultiAgentRunner, pidRssMb() (+9 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.05
@@ -83,8 +84,8 @@ Cohesion: 0.2
 Nodes (4): logTurnUsage(), PersistentSession, sseLine(), userLine()
 
 ### Community 5 - "Community 5"
-Cohesion: 0.13
-Nodes (11): doorWorldPos(), canPassThrough(), canPassThroughOuter(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId(), wallTileCount() (+3 more)
+Cohesion: 0.14
+Nodes (11): doorWorldPos(), applyRingCollision(), canPassThrough(), canPassThroughRing(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId() (+3 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.16
@@ -118,7 +119,11 @@ Nodes (2): getAncestors(), RoomNavHUD()
 Cohesion: 0.67
 Nodes (3): migrate(), readJson(), bootMigrate()
 
-### Community 20 - "Community 20"
+### Community 16 - "Community 16"
+Cohesion: 0.67
+Nodes (2): parseWallId(), RoomModal()
+
+### Community 21 - "Community 21"
 Cohesion: 0.67
 Nodes (3): Smart Aspect Ratio Locking, Dynamic Grid & Raycasting System, In-Game Media Editor Modal (E tuşu)
 
@@ -155,6 +160,8 @@ Nodes (1): Eşikli Regresyon-Guard Önerisi (bench --assert)
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 12`** (5 nodes): `getAncestors()`, `HistoryLink()`, `NavLink()`, `RoomNavHUD()`, `RoomNavHUD.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 16`** (4 nodes): `configForLayer()`, `parseWallId()`, `RoomModal()`, `RoomModal.jsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 29`** (2 nodes): `Git Push/Merge Onay Kuralı`, `Graphify Kullanım Kuralları`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 30`** (2 nodes): `Native GIF Rendering via HTML Portals`, `YouTube Embed Support (iframe in 3D)`
@@ -172,8 +179,10 @@ _Questions this graph is uniquely positioned to answer:_
 - **What is the exact relationship between `Git Push/Merge Onay Kuralı` and `Graphify Kullanım Kuralları`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
 - **Why does `PersistentSession` connect `Community 4` to `Community 0`, `Community 3`, `Community 7`?**
-  _High betweenness centrality (0.104) - this node is a cross-community bridge._
-- **Why does `serializeSpecialDoor()` connect `Community 5` to `Community 0`?**
+  _High betweenness centrality (0.102) - this node is a cross-community bridge._
+- **Why does `serializeSpecialDoor()` connect `Community 0` to `Community 5`?**
+  _High betweenness centrality (0.063) - this node is a cross-community bridge._
+- **Why does `getDoorInstanceIds()` connect `Community 5` to `Community 0`?**
   _High betweenness centrality (0.061) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `PersistentSession` (e.g. with `Senaryo: roomchat-3turn (3 turluk sohbet)` and `Kill → Resume Canlı Testi (PAPATYA-42, ilk-tur cacheWrite 554)`) actually correct?**
   _`PersistentSession` has 2 INFERRED edges - model-reasoned connections that need verification._
@@ -181,5 +190,3 @@ _Questions this graph is uniquely positioned to answer:_
   _25 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.04 - nodes in this community are weakly interconnected._
-- **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.11 - nodes in this community are weakly interconnected._

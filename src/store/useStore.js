@@ -11,15 +11,17 @@ export const useStore = create((set) => ({
   worldMedia: [],
   roomModal: false,
   menuModal: true,    // uygulama açılışında menü göster
-  hiddenWalls: [],       // iç duvar gizli tile ID'leri
-  hiddenOuterWalls: [],  // dış sınır duvarı gizli tile ID'leri
+  hiddenWalls: [],        // iç duvar gizli tile ID'leri
+  hiddenOuterWalls: [],   // 1. bahçe duvarı (±30) gizli tile ID'leri
+  hiddenOuterWalls2: [],  // 2. bahçe duvarı (±40) gizli tile ID'leri
   floorTexture: 'zemin.jpg',
   currentRoomId: 'default',
   currentRoomName: 'Varsayılan Oda',
   currentRoomType: 'room',
   rooms: [],
   specialDoors: [],
-  outerSpecialDoors: [],
+  outerSpecialDoors: [],   // 1. bahçe duvarı özel kapıları
+  outerSpecialDoors2: [],  // 2. bahçe duvarı özel kapıları
   roomHistory: [],
 
   setCanvasEditorOpen: (open) => set({ canvasEditorOpen: open }),
@@ -51,6 +53,10 @@ export const useStore = create((set) => ({
   addOuterDoor: (ids) => set((state) => ({ hiddenOuterWalls: [...new Set([...state.hiddenOuterWalls, ...ids])] })),
   removeOuterDoor: (ids) => set((state) => ({ hiddenOuterWalls: state.hiddenOuterWalls.filter(id => !ids.includes(id)) })),
 
+  setHiddenOuterWalls2: (ids) => set({ hiddenOuterWalls2: ids }),
+  addOuterDoor2: (ids) => set((state) => ({ hiddenOuterWalls2: [...new Set([...state.hiddenOuterWalls2, ...ids])] })),
+  removeOuterDoor2: (ids) => set((state) => ({ hiddenOuterWalls2: state.hiddenOuterWalls2.filter(id => !ids.includes(id)) })),
+
   setCurrentRoom: (id, name, type = 'room') => set({ currentRoomId: id, currentRoomName: name, currentRoomType: type }),
   addToHistory: (id, name) => set(state => {
     const filtered = state.roomHistory.filter(r => r.id !== id)
@@ -59,4 +65,5 @@ export const useStore = create((set) => ({
   setRooms: (rooms) => set({ rooms }),
   setSpecialDoors: (specialDoors) => set({ specialDoors }),
   setOuterSpecialDoors: (outerSpecialDoors) => set({ outerSpecialDoors }),
+  setOuterSpecialDoors2: (outerSpecialDoors2) => set({ outerSpecialDoors2 }),
 }))

@@ -16,8 +16,10 @@ const FOV_NORMAL      = 75
 const FOV_ZOOM        = 20
 const FOV_SPEED       = 8
 const TILE_SIZE       = 1
-const OUTER_CONFIG    = { gx: 120, gz: 120, wh: 6 }
-const OUTER_OFFSET    = 60
+const OUTER_CONFIG    = { gx: 60, gz: 60, wh: 6 }
+const OUTER_OFFSET    = 30
+const OUTER2_CONFIG   = { gx: 80, gz: 80, wh: 6 }
+const OUTER2_OFFSET   = 40
 const FAR_LIMIT       = 200
 const GROUND_Y        = 2.5
 const MAX_FLY_Y       = 80
@@ -40,14 +42,28 @@ function canPassThrough(hiddenSet, face, posAlongWall, config) {
   return false
 }
 
-function canPassThroughOuter(hiddenOuterSet, face, posAlongWall) {
-  const j = Math.floor(posAlongWall + OUTER_OFFSET)
+function canPassThroughRing(hiddenSet, face, posAlongWall, config, offset) {
+  const j = Math.floor(posAlongWall + offset)
   for (let h = 1; h <= 2; h++) {
-    if (j >= 0 && j < 120) {
-      if (hiddenOuterSet.has(encodeWallId(h, face, j, OUTER_CONFIG))) return true
+    if (j >= 0 && j < config.gx) {
+      if (hiddenSet.has(encodeWallId(h, face, j, config))) return true
     }
   }
   return false
+}
+
+// Bir kare bahçe duvarı halkası için çarpışma; kapı (hidden tile) varsa geçirir.
+// Güncellenmiş [nx, nz] döndürür.
+function applyRingCollision(prev, nx, nz, hiddenSet, config, offset) {
+  if (prev.z > -offset && nz <= -offset && !canPassThroughRing(hiddenSet, 0, nx, config, offset)) nz = -offset + 0.01
+  if (prev.z < -offset && nz >= -offset && !canPassThroughRing(hiddenSet, 0, nx, config, offset)) nz = -offset - 0.01
+  if (prev.z <  offset && nz >=  offset && !canPassThroughRing(hiddenSet, 1, nx, config, offset)) nz =  offset - 0.01
+  if (prev.z >  offset && nz <=  offset && !canPassThroughRing(hiddenSet, 1, nx, config, offset)) nz =  offset + 0.01
+  if (prev.x > -offset && nx <= -offset && !canPassThroughRing(hiddenSet, 2, nz, config, offset)) nx = -offset + 0.01
+  if (prev.x < -offset && nx >= -offset && !canPassThroughRing(hiddenSet, 2, nz, config, offset)) nx = -offset - 0.01
+  if (prev.x <  offset && nx >=  offset && !canPassThroughRing(hiddenSet, 3, nz, config, offset)) nx =  offset - 0.01
+  if (prev.x >  offset && nx <=  offset && !canPassThroughRing(hiddenSet, 3, nz, config, offset)) nx =  offset + 0.01
+  return [nx, nz]
 }
 
 export function Player() {
@@ -55,8 +71,10 @@ export function Player() {
   const canvasEditorOpen   = useStore((state) => state.canvasEditorOpen)
   const hiddenWalls        = useStore((state) => state.hiddenWalls)
   const hiddenOuterWalls   = useStore((state) => state.hiddenOuterWalls)
+  const hiddenOuterWalls2  = useStore((state) => state.hiddenOuterWalls2)
   const specialDoors       = useStore((state) => state.specialDoors)
   const outerSpecialDoors  = useStore((state) => state.outerSpecialDoors)
+  const outerSpecialDoors2 = useStore((state) => state.outerSpecialDoors2)
   const currentRoomType    = useStore((state) => state.currentRoomType)
   const rooms              = useStore((state) => state.rooms)
 
@@ -78,11 +96,13 @@ export function Player() {
   const side       = useRef(new THREE.Vector3())
   const direction  = useRef(new THREE.Vector3())
 
-  const hiddenSetRef         = useRef(new Set())
-  const hiddenOuterSetRef    = useRef(new Set())
-  const teleporting          = useRef(false)
-  const specialDoorsRef      = useRef([])
-  const outerSpecialDoorsRef = useRef([])
+  const hiddenSetRef          = useRef(new Set())
+  const hiddenOuterSetRef     = useRef(new Set())
+  const hiddenOuter2SetRef    = useRef(new Set())
+  const teleporting           = useRef(false)
+  const specialDoorsRef       = useRef([])
+  const outerSpecialDoorsRef  = useRef([])
+  const outerSpecial2DoorsRef = useRef([])
   const currentRoomTypeRef   = useRef('room')
   const roomsRef             = useRef([])
 
@@ -95,10 +115,12 @@ export function Player() {
   useFrame((state, delta) => {
     if (teleporting.current || isTyping()) return
 
-    hiddenSetRef.current        = new Set(hiddenWalls)
-    hiddenOuterSetRef.current   = new Set(hiddenOuterWalls)
-    specialDoorsRef.current     = specialDoors
+    hiddenSetRef.current         = new Set(hiddenWalls)
+    hiddenOuterSetRef.current    = new Set(hiddenOuterWalls)
+    hiddenOuter2SetRef.current   = new Set(hiddenOuterWalls2)
+    specialDoorsRef.current      = specialDoors
     outerSpecialDoorsRef.current = outerSpecialDoors
+    outerSpecial2DoorsRef.current = outerSpecialDoors2
     currentRoomTypeRef.current  = currentRoomType
     roomsRef.current            = rooms
 
@@ -291,111 +313,81 @@ export function Player() {
       }
     }
 
-    // --- Dış duvar collision ---
-    const outerHs        = hiddenOuterSetRef.current
-    const aboveOuterWall = flyY.current > OUTER_CONFIG.wh + GROUND_Y
-
-    if (!aboveOuterWall) {
-      if (prev.z > -OUTER_OFFSET && nz <= -OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 0, nx)) nz = -OUTER_OFFSET + 0.01
-      }
-      if (prev.z < -OUTER_OFFSET && nz >= -OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 0, nx)) nz = -OUTER_OFFSET - 0.01
-      }
-      if (prev.z < OUTER_OFFSET && nz >= OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 1, nx)) nz = OUTER_OFFSET - 0.01
-      }
-      if (prev.z > OUTER_OFFSET && nz <= OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 1, nx)) nz = OUTER_OFFSET + 0.01
-      }
-      if (prev.x > -OUTER_OFFSET && nx <= -OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 2, nz)) nx = -OUTER_OFFSET + 0.01
-      }
-      if (prev.x < -OUTER_OFFSET && nx >= -OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 2, nz)) nx = -OUTER_OFFSET - 0.01
-      }
-      if (prev.x < OUTER_OFFSET && nx >= OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 3, nz)) nx = OUTER_OFFSET - 0.01
-      }
-      if (prev.x > OUTER_OFFSET && nx <= OUTER_OFFSET) {
-        if (!canPassThroughOuter(outerHs, 3, nz)) nx = OUTER_OFFSET + 0.01
-      }
+    // --- 1. bahçe duvarı (±30) collision ---
+    if (flyY.current <= OUTER_CONFIG.wh + GROUND_Y) {
+      [nx, nz] = applyRingCollision(prev, nx, nz, hiddenOuterSetRef.current, OUTER_CONFIG, OUTER_OFFSET)
+    }
+    // --- 2. bahçe duvarı (±40) collision ---
+    if (flyY.current <= OUTER2_CONFIG.wh + GROUND_Y) {
+      [nx, nz] = applyRingCollision(prev, nx, nz, hiddenOuter2SetRef.current, OUTER2_CONFIG, OUTER2_OFFSET)
     }
 
-    // --- Dış özel kapı geçişi ---
-    for (const sd of outerSpecialDoorsRef.current) {
-      const { face, j } = decodeWallId(sd.anchorId, OUTER_CONFIG)
+    // --- Bahçe duvarı özel kapı geçişi (her iki halka) ---
+    // Verilen halkanın özel kapılarından biri geçildiyse teleport başlatır; true dönerse çık.
+    const tryOuterTeleport = (doors, config, offset) => {
+      for (const sd of doors) {
+        const { face, j } = decodeWallId(sd.anchorId, config)
 
-      const targetRoom   = roomsRef.current.find(r => r.id === sd.targetRoomId)
-      const targetConfig = ROOM_CONFIGS[targetRoom?.roomType] ?? ROOM_CONFIGS.room
-      const tOffX = targetConfig.gx / 2
-      const tOffZ = targetConfig.gz / 2
+        const targetRoom   = roomsRef.current.find(r => r.id === sd.targetRoomId)
+        const targetConfig = ROOM_CONFIGS[targetRoom?.roomType] ?? ROOM_CONFIGS.room
+        const tOffX = targetConfig.gx / 2
+        const tOffZ = targetConfig.gz / 2
 
-      let crossed = false
-      let spawnX = 0, spawnZ = 0
+        let crossed = false
+        let spawnX = 0, spawnZ = 0
 
-      if (face === 0 && prev.z > -OUTER_OFFSET && nz <= -OUTER_OFFSET) {
-        const pj = Math.floor(nx + OUTER_OFFSET)
-        if (pj === j || pj === j + 1) {
-          crossed = true
-          spawnX = Math.max(-tOffX + 1, Math.min(tOffX - 1, nx))
-          spawnZ = tOffZ - 2
+        if (face === 0 && prev.z > -offset && nz <= -offset) {
+          const pj = Math.floor(nx + offset)
+          if (pj === j || pj === j + 1) { crossed = true; spawnX = Math.max(-tOffX + 1, Math.min(tOffX - 1, nx)); spawnZ = tOffZ - 2 }
+        }
+        if (face === 1 && prev.z < offset && nz >= offset) {
+          const pj = Math.floor(nx + offset)
+          if (pj === j || pj === j + 1) { crossed = true; spawnX = Math.max(-tOffX + 1, Math.min(tOffX - 1, nx)); spawnZ = -(tOffZ - 2) }
+        }
+        if (face === 2 && prev.x > -offset && nx <= -offset) {
+          const pj = Math.floor(nz + offset)
+          if (pj === j || pj === j + 1) { crossed = true; spawnX = tOffX - 2; spawnZ = Math.max(-tOffZ + 1, Math.min(tOffZ - 1, nz)) }
+        }
+        if (face === 3 && prev.x < offset && nx >= offset) {
+          const pj = Math.floor(nz + offset)
+          if (pj === j || pj === j + 1) { crossed = true; spawnX = -(tOffX - 2); spawnZ = Math.max(-tOffZ + 1, Math.min(tOffZ - 1, nz)) }
+        }
+
+        if (crossed) {
+          teleporting.current = true
+          const fromRoomId = useStore.getState().currentRoomId
+          loadRoom(sd.targetRoomId, sd.targetRoomName).then(() => {
+            const st = useStore.getState()
+            const returnDoor = [...st.specialDoors, ...st.outerSpecialDoors, ...st.outerSpecialDoors2]
+              .find(d => d.targetRoomId === fromRoomId)
+            if (returnDoor) {
+              const { face: rf, j: rj } = decodeWallId(returnDoor.anchorId, targetConfig)
+              const rx = targetConfig.gx / 2
+              const rz = targetConfig.gz / 2
+              let sx, sz
+              if      (rf === 0) { sx = rj - rx + 1; sz = -rz + 2 }
+              else if (rf === 1) { sx = rj - rx + 1; sz =  rz - 2 }
+              else if (rf === 2) { sx = -rx + 2;     sz = rj - rz + 1 }
+              else               { sx =  rx - 2;     sz = rj - rz + 1 }
+              flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
+              state.camera.position.set(sx, GROUND_Y, sz)
+            } else {
+              flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
+              state.camera.position.set(spawnX, GROUND_Y, spawnZ)
+            }
+            teleporting.current = false
+          }).catch(err => {
+            console.error('Outer teleport failed:', err)
+            teleporting.current = false
+          })
+          return true
         }
       }
-      if (face === 1 && prev.z < OUTER_OFFSET && nz >= OUTER_OFFSET) {
-        const pj = Math.floor(nx + OUTER_OFFSET)
-        if (pj === j || pj === j + 1) {
-          crossed = true
-          spawnX = Math.max(-tOffX + 1, Math.min(tOffX - 1, nx))
-          spawnZ = -(tOffZ - 2)
-        }
-      }
-      if (face === 2 && prev.x > -OUTER_OFFSET && nx <= -OUTER_OFFSET) {
-        const pj = Math.floor(nz + OUTER_OFFSET)
-        if (pj === j || pj === j + 1) {
-          crossed = true
-          spawnX = tOffX - 2
-          spawnZ = Math.max(-tOffZ + 1, Math.min(tOffZ - 1, nz))
-        }
-      }
-      if (face === 3 && prev.x < OUTER_OFFSET && nx >= OUTER_OFFSET) {
-        const pj = Math.floor(nz + OUTER_OFFSET)
-        if (pj === j || pj === j + 1) {
-          crossed = true
-          spawnX = -(tOffX - 2)
-          spawnZ = Math.max(-tOffZ + 1, Math.min(tOffZ - 1, nz))
-        }
-      }
-
-      if (crossed) {
-        teleporting.current = true
-        const fromRoomId = useStore.getState().currentRoomId
-        loadRoom(sd.targetRoomId, sd.targetRoomName).then(() => {
-          const { specialDoors: tDoors, outerSpecialDoors: tOuterDoors } = useStore.getState()
-          const returnDoor = [...tDoors, ...tOuterDoors].find(d => d.targetRoomId === fromRoomId)
-          if (returnDoor) {
-            const { face: rf, j: rj } = decodeWallId(returnDoor.anchorId, targetConfig)
-            const rx = targetConfig.gx / 2
-            const rz = targetConfig.gz / 2
-            let sx, sz
-            if      (rf === 0) { sx = rj - rx + 1; sz = -rz + 2 }
-            else if (rf === 1) { sx = rj - rx + 1; sz =  rz - 2 }
-            else if (rf === 2) { sx = -rx + 2;     sz = rj - rz + 1 }
-            else               { sx =  rx - 2;     sz = rj - rz + 1 }
-            flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
-            state.camera.position.set(sx, GROUND_Y, sz)
-          } else {
-            flyY.current = GROUND_Y; flyVelocityY.current = 0; isFalling.current = false
-            state.camera.position.set(spawnX, GROUND_Y, spawnZ)
-          }
-          teleporting.current = false
-        }).catch(err => {
-          console.error('Outer teleport failed:', err)
-          teleporting.current = false
-        })
-        return
-      }
+      return false
     }
+
+    if (tryOuterTeleport(outerSpecialDoorsRef.current,  OUTER_CONFIG,  OUTER_OFFSET))  return
+    if (tryOuterTeleport(outerSpecial2DoorsRef.current, OUTER2_CONFIG, OUTER2_OFFSET)) return
 
     nx = Math.max(-FAR_LIMIT, Math.min(FAR_LIMIT, nx))
     nz = Math.max(-FAR_LIMIT, Math.min(FAR_LIMIT, nz))

@@ -481,7 +481,7 @@ export function MainMenu() {
                             {door.targetRoomName || door.targetRoomId}
                           </span>
                           <span style={{ fontSize: '11px', color: '#555' }}>
-                            {door.isOuter ? 'Dış kapı' : 'İç kapı'}
+                            {door.layer === 2 ? '2. bahçe kapısı' : door.layer === 1 ? 'Bahçe kapısı' : 'İç kapı'}
                           </span>
                         </div>
                         <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>

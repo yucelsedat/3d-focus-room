@@ -46,13 +46,13 @@ model Media {
 }
 
 model Door {
-  id      Int     @id @default(autoincrement())
-  roomId  String
-  doorId  Int
-  isOuter Boolean @default(false)
-  room    Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  id     Int    @id @default(autoincrement())
+  roomId String
+  doorId Int
+  layer  Int    @default(0) // 0=iç duvar, 1=1. bahçe duvarı (±30), 2=2. bahçe duvarı (±40)
+  room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
-  @@unique([roomId, doorId, isOuter])
+  @@unique([roomId, doorId, layer])
 }
 
 model Floor {
@@ -77,13 +77,13 @@ model RoomCategory {
 }
 
 model SpecialDoor {
-  id           Int     @id @default(autoincrement())
+  id           Int    @id @default(autoincrement())
   roomId       String
   anchorId     Int
   targetRoomId String
-  isOuter      Boolean @default(false)
-  room         Room    @relation("SpecialDoorSource", fields: [roomId], references: [id], onDelete: Cascade)
-  target       Room    @relation("SpecialDoorTarget", fields: [targetRoomId], references: [id], onDelete: Cascade)
+  layer        Int    @default(0) // 0=iç duvar, 1=1. bahçe duvarı (±30), 2=2. bahçe duvarı (±40)
+  room         Room   @relation("SpecialDoorSource", fields: [roomId], references: [id], onDelete: Cascade)
+  target       Room   @relation("SpecialDoorTarget", fields: [targetRoomId], references: [id], onDelete: Cascade)
 
-  @@unique([roomId, anchorId, isOuter])
+  @@unique([roomId, anchorId, layer])
 }

@@ -193,8 +193,18 @@ app.post('/api/upload-cover', uploadCover.single('file'), (req, res) => {
 
 // ─── Special door helpers ─────────────────────────────────────────────────────
 
-const OUTER_GRID_SIZE_SRV = 120;
-const OUTER_CONFIG = { gx: OUTER_GRID_SIZE_SRV, gz: OUTER_GRID_SIZE_SRV, wh: 5 };
+// İstemci (OuterWalls.jsx / Player.jsx) ile senkron olmalı.
+// layer 1 = 1. bahçe duvarı: oda duvarından 10 tile ileride (±30) → 60 tile grid.
+// layer 2 = 2. bahçe duvarı: 1. duvardan 10 tile ileride (±40) → 80 tile grid.
+const OUTER_CONFIG  = { gx: 60, gz: 60, wh: 6 };
+const OUTER2_CONFIG = { gx: 80, gz: 80, wh: 6 };
+
+// Duvar katmanına göre grid config'i döndürür (0=iç oda, 1=bahçe1, 2=bahçe2)
+function configForLayer(layer, roomType) {
+  if (layer === 2) return OUTER2_CONFIG;
+  if (layer === 1) return OUTER_CONFIG;
+  return ROOM_CONFIGS[roomType] ?? ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room;
+}
 
 // ─── Rooms API ────────────────────────────────────────────────────────────────
 
@@ -492,41 +502,43 @@ app.get('/api/floor-textures', (req, res) => {
 
 app.get('/api/doors', async (req, res) => {
   const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
-  res.json(doors.map(d => ({ id: d.doorId, isOuter: d.isOuter })));
+  res.json(doors.map(d => ({ id: d.doorId, layer: d.layer })));
 });
 
 app.post('/api/doors', async (req, res) => {
-  const { ids, isOuter = false } = req.body;
+  const { ids, layer = 0 } = req.body;
   for (const doorId of ids) {
     await prisma.door.upsert({
-      where: { roomId_doorId_isOuter: { roomId: activeRoomId, doorId: parseInt(doorId), isOuter } },
+      where: { roomId_doorId_layer: { roomId: activeRoomId, doorId: parseInt(doorId), layer } },
       update: {},
-      create: { roomId: activeRoomId, doorId: parseInt(doorId), isOuter },
+      create: { roomId: activeRoomId, doorId: parseInt(doorId), layer },
     });
   }
   const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
-  res.json(doors.map(d => ({ id: d.doorId, isOuter: d.isOuter })));
+  res.json(doors.map(d => ({ id: d.doorId, layer: d.layer })));
 });
 
 app.delete('/api/doors', async (req, res) => {
-  const { ids, isOuter = false } = req.body;
+  const { ids, layer = 0 } = req.body;
   await prisma.door.deleteMany({
-    where: { roomId: activeRoomId, doorId: { in: ids.map(Number) }, isOuter },
+    where: { roomId: activeRoomId, doorId: { in: ids.map(Number) }, layer },
   });
   const doors = await prisma.door.findMany({ where: { roomId: activeRoomId } });
-  res.json(doors.map(d => ({ id: d.doorId, isOuter: d.isOuter })));
+  res.json(doors.map(d => ({ id: d.doorId, layer: d.layer })));
 });
 
 // ─── Special Doors API ───────────────────────────────────────────────────────
 
 function serializeSpecialDoor(sd, roomConfig) {
-  const config = sd.isOuter ? OUTER_CONFIG : (roomConfig ?? ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
+  const config = sd.layer > 0
+    ? configForLayer(sd.layer)
+    : (roomConfig ?? ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
   return {
     id: sd.id,
     anchorId: sd.anchorId,
     targetRoomId: sd.targetRoomId,
     targetRoomName: sd.target.name,
-    isOuter: sd.isOuter,
+    layer: sd.layer,
     instanceIds: getDoorInstanceIds(sd.anchorId, config),
   };
 }
@@ -540,12 +552,12 @@ app.get('/api/special-doors', async (req, res) => {
 });
 
 app.post('/api/special-doors', async (req, res) => {
-  const { anchorId, childRoomName, isOuter = false, roomType = 'room' } = req.body;
+  const { anchorId, childRoomName, layer = 0, roomType = 'room' } = req.body;
   if (!childRoomName?.trim()) return res.status(400).json({ error: 'Oda adı gerekli' });
 
   const childId = `room-${Date.now()}`;
   const childType = ROOM_CONFIGS[roomType] ? roomType : 'room';
-  const parentConfig = isOuter ? OUTER_CONFIG : (ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
+  const parentConfig = configForLayer(layer);
   const childConfig  = ROOM_CONFIGS[childType];
 
   // Back door: opposite face in child's coordinate system, j clamped to child face width
@@ -558,8 +570,8 @@ app.post('/api/special-doors', async (req, res) => {
   await prisma.$transaction([
     prisma.room.create({ data: { id: childId, name: childRoomName.trim(), parentId: activeRoomId, roomType: childType } }),
     prisma.floor.create({ data: { roomId: childId, texture: defaultFloorTexture(childType) } }),
-    prisma.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId: childId, isOuter } }),
-    prisma.specialDoor.create({ data: { roomId: childId, anchorId: childReturnAnchorId, targetRoomId: activeRoomId, isOuter: false } }),
+    prisma.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId: childId, layer } }),
+    prisma.specialDoor.create({ data: { roomId: childId, anchorId: childReturnAnchorId, targetRoomId: activeRoomId, layer: 0 } }),
   ]);
 
   const child = await prisma.room.findUnique({ where: { id: childId }, include: roomInclude });
@@ -584,7 +596,7 @@ app.delete('/api/special-doors/:id', async (req, res) => {
   });
   if (!door) return res.status(404).json({ error: 'Bulunamadı' });
   const sourceType = door.room?.roomType ?? 'room';
-  const config = door.isOuter ? OUTER_CONFIG : (ROOM_CONFIGS[sourceType] ?? ROOM_CONFIGS.room);
+  const config = configForLayer(door.layer, sourceType);
   const targetType = door.target?.roomType ?? 'room';
   const targetConfig = ROOM_CONFIGS[targetType] ?? ROOM_CONFIGS.room;
   const { face: pFace, j: pJ } = decodeWallId(door.anchorId, config);
@@ -596,7 +608,7 @@ app.delete('/api/special-doors/:id', async (req, res) => {
     where: {
       OR: [
         { id },
-        { roomId: door.targetRoomId, anchorId: returnAnchorId, isOuter: false },
+        { roomId: door.targetRoomId, anchorId: returnAnchorId, layer: 0 },
         { roomId: door.targetRoomId, targetRoomId: door.roomId },
       ],
     },
@@ -615,14 +627,14 @@ app.delete('/api/special-doors/:id', async (req, res) => {
 });
 
 app.post('/api/special-doors/link', async (req, res) => {
-  const { anchorId, targetRoomId, linkType, isOuter = false } = req.body;
+  const { anchorId, targetRoomId, linkType, layer = 0 } = req.body;
   if (!targetRoomId) return res.status(400).json({ error: 'Oda seçilmedi' });
 
   await prisma.$transaction(async (tx) => {
     if (linkType === 'child') {
       await tx.room.update({ where: { id: targetRoomId }, data: { parentId: activeRoomId } });
     }
-    await tx.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId, isOuter } });
+    await tx.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId, layer } });
   });
 
   const updatedDoors = await prisma.specialDoor.findMany({
