@@ -53,7 +53,7 @@ export function EditModal() {
   const [editingContent, setEditingContent] = useState('')
   const [copiedId, setCopiedId] = useState(null)
   const [pastePreview, setPastePreview] = useState(null)
-  const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label }
+  const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label, mode: 'copy' | 'cut' }
   const [sessionModel, setSessionModel]   = useState('claude-fable-5')
   const [sessionEffort, setSessionEffort] = useState('normal')
   const [sessionPermMode, setSessionPermMode] = useState('bypassPermissions')
@@ -204,6 +204,9 @@ export function EditModal() {
     }
   }
 
+  // Kopyala/Kes butonları için medya tip etiketleri
+  const mediaTypeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', projectview: 'ProjectView', bluprint: 'Blueprint', defter: 'Defter' }
+
   const handlePaste = async () => {
     if (!clonedMedia || !selectedTile) return
     setLoading(true)
@@ -222,6 +225,11 @@ export function EditModal() {
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Yapıştırılamadı')
       addMedia(d)
+      // Kes modunda: klon başarılı olunca kaynağı sil (taşıma)
+      if (clonedMedia.mode === 'cut') {
+        await fetch(`/api/media/${clonedMedia.id}`, { method: 'DELETE' })
+        removeMedia(clonedMedia.id)
+      }
       setClonedMedia(null)
       closeModal()
     } catch (err) {
@@ -826,14 +834,14 @@ export function EditModal() {
         {!loopEditMode && clonedMedia && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', margin: '0 0 8px 0', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 8 }}>
             <span style={{ fontSize: 13, color: '#93c5fd', flex: 1 }}>
-              <b>{clonedMedia.label}</b> kopyalandı — bu duvara yapıştır
+              <b>{clonedMedia.label}</b> {clonedMedia.mode === 'cut' ? 'kesildi — bu duvara taşı' : 'kopyalandı — bu duvara yapıştır'}
             </span>
             <button
               style={{ padding: '5px 12px', background: '#2563eb', border: 'none', borderRadius: 6, color: '#fff', fontSize: 13, cursor: 'pointer', fontWeight: 600 }}
               onClick={handlePaste}
               disabled={loading}
             >
-              Yapıştır
+              {clonedMedia.mode === 'cut' ? 'Taşı' : 'Yapıştır'}
             </button>
             <button
               style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: 16, cursor: 'pointer', padding: '0 4px' }}
@@ -960,16 +968,32 @@ export function EditModal() {
                         </button>
                       </>
                     )}
-                    <button
-                      style={{ ...s.deleteBtn, background: clonedMedia?.id === m.id ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${clonedMedia?.id === m.id ? '#60a5fa' : '#333'}`, color: clonedMedia?.id === m.id ? '#60a5fa' : '#888' }}
-                      title="Bu medyayı başka bir duvara kopyala"
-                      onClick={() => {
-                        const typeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', projectview: 'ProjectView', bluprint: 'Blueprint', defter: 'Defter' }
-                        setClonedMedia(clonedMedia?.id === m.id ? null : { id: m.id, type: m.type, label: typeLabel[m.type] || m.type })
-                      }}
-                    >
-                      {clonedMedia?.id === m.id ? '✓ Kopyalandı' : '⧉ Kopyala'}
-                    </button>
+                    {(() => {
+                      const isActiveCopy = clonedMedia?.id === m.id && (clonedMedia?.mode ?? 'copy') === 'copy'
+                      const isActiveCut = clonedMedia?.id === m.id && clonedMedia?.mode === 'cut'
+                      return (
+                        <>
+                          <button
+                            style={{ ...s.deleteBtn, background: isActiveCopy ? 'rgba(96,165,250,0.15)' : 'none', border: `1px solid ${isActiveCopy ? '#60a5fa' : '#333'}`, color: isActiveCopy ? '#60a5fa' : '#888' }}
+                            title="Bu medyayı başka bir duvara kopyala"
+                            onClick={() => {
+                              setClonedMedia(isActiveCopy ? null : { id: m.id, type: m.type, label: mediaTypeLabel[m.type] || m.type, mode: 'copy' })
+                            }}
+                          >
+                            {isActiveCopy ? '✓ Kopyalandı' : '⧉ Kopyala'}
+                          </button>
+                          <button
+                            style={{ ...s.deleteBtn, background: isActiveCut ? 'rgba(245,158,11,0.15)' : 'none', border: `1px solid ${isActiveCut ? '#f59e0b' : '#333'}`, color: isActiveCut ? '#f59e0b' : '#888' }}
+                            title="Bu medyayı başka bir duvara taşı"
+                            onClick={() => {
+                              setClonedMedia(isActiveCut ? null : { id: m.id, type: m.type, label: mediaTypeLabel[m.type] || m.type, mode: 'cut' })
+                            }}
+                          >
+                            {isActiveCut ? '✓ Kesildi' : '✂ Kes'}
+                          </button>
+                        </>
+                      )
+                    })()}
                     <button style={s.deleteBtn} onClick={() => handleDelete(m.id)}>
                       Sil
                     </button>
