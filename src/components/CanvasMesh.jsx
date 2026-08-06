@@ -1379,12 +1379,17 @@ export default function CanvasMesh({ id, content, width, height }) {
     if (item.type === 'text' && editingItemId === item.id) {
       // içeriğe göre uzat, A4 yüksekliğinde durdur → fazlası textarea içinde scroll
       const maxH = a4MaxH(item.w)
+      // height:auto ile ölçüm yaparken textarea bir an çöküyor → tarayıcı scrollTop'u
+      // 0'a kırpıyordu (yazarken imleç birinci satıra atlıyordu). Ölçüm öncesi scroll
+      // konumunu alıp hemen geri koyuyoruz; senkron olduğu için ekrana yansımıyor.
       const fit = el => {
+        const prevTop = el.scrollTop
         el.style.height = 'auto'
         const full = el.scrollHeight
         const newH = Math.min(full, maxH)
         el.style.height = newH + 'px'
         el.style.overflowY = full > maxH ? 'auto' : 'hidden'
+        if (el.scrollTop !== prevTop) el.scrollTop = prevTop
         return newH
       }
       const autoH = el => {
@@ -1849,10 +1854,14 @@ export default function CanvasMesh({ id, content, width, height }) {
             ✕
           </button>
 
-          {/* scrollable column — 50% viewport width, centered */}
+          {/* scrollable column — 50% viewport width, centered.
+              Düzenleme modunda scroll'u textarea'nın kendisi yapar (aşağıdaki sabit
+              yükseklik); dıştaki kolon scroll'u kapalı olmalı, yoksa iki ayrı
+              scrollport çakışıyor. */}
           <div
             style={{
-              width: '50%', minWidth: 320, maxHeight: '100vh', overflowY: 'auto',
+              width: '50%', minWidth: 320, height: '100vh', maxHeight: '100vh',
+              overflowY: readerEditing ? 'hidden' : 'auto',
               boxSizing: 'border-box', padding: '64px 8px 96px',
               color: readerItem.color || '#e2e8f0',
               fontSize: readerFs,
@@ -1860,21 +1869,21 @@ export default function CanvasMesh({ id, content, width, height }) {
             }}
           >
             {readerEditing ? (
+              // Sabit yükseklik + kendi scroll'u: her tuş vuruşunda height'ı yeniden
+              // ölçüp ayarlamak (height:auto → scrollHeight) dıştaki kolonun
+              // scrollTop'unu sıfırlıyor ve imleç birinci satıra atlıyordu.
               <textarea autoFocus defaultValue={readerItem.content}
-                ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }}
                 placeholder="Metin yazın…"
                 onMouseDown={(e) => e.stopPropagation()}
                 onInput={(e) => {
-                  e.target.style.height = 'auto'
-                  e.target.style.height = e.target.scrollHeight + 'px'
                   const val = e.target.value
                   setItems(prev => { const next = prev.map(it => it.id === readerItem.id ? { ...it, content: val } : it); scheduleSave(next, bgRef.current); return next })
                 }}
                 style={{
-                  width: '100%', minHeight: '60vh', boxSizing: 'border-box',
+                  width: '100%', height: '100%', boxSizing: 'border-box',
                   background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(96,165,250,0.4)', borderRadius: 8,
                   color: readerItem.color || '#e2e8f0', fontSize: readerFs, lineHeight: 1.6,
-                  padding: 18, resize: 'none', outline: 'none', overflow: 'hidden', display: 'block',
+                  padding: 18, resize: 'none', outline: 'none', overflowY: 'auto', display: 'block',
                   fontFamily: 'inherit',
                 }}
               />
