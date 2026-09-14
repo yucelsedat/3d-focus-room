@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-08-06)
+# Graph Report - focus-room-main  (2026-09-14)
 
 ## Corpus Check
-- 33 files · ~87,171 words
+- 33 files · ~87,956 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 328 nodes · 464 edges · 21 communities detected
+- 331 nodes · 468 edges · 21 communities detected
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 24 edges (avg confidence: 0.79)
 - Token cost: 0 input · 0 output
 
@@ -88,12 +88,12 @@ Cohesion: 0.16
 Nodes (8): Senaryo: roomsession-crud (LoopFlow), ensureSessionOr429(), fetchHtmlHead(), LoopRunner, makeTurnSink(), pidRssMb(), SessionPool, stopRoomBackgroundWork()
 
 ### Community 6 - "Community 6"
-Cohesion: 0.14
-Nodes (11): doorWorldPos(), applyRingCollision(), canPassThrough(), canPassThroughRing(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId() (+3 more)
+Cohesion: 0.12
+Nodes (8): CanvasMesh(), disposePoolAudio(), formatBytes(), getBounds(), getPoolAudio(), InstaCard(), parseInstaTitle(), PdfCard()
 
 ### Community 7 - "Community 7"
-Cohesion: 0.13
-Nodes (6): CanvasMesh(), disposePoolAudio(), getBounds(), getPoolAudio(), InstaCard(), parseInstaTitle()
+Cohesion: 0.14
+Nodes (11): doorWorldPos(), applyRingCollision(), canPassThrough(), canPassThroughRing(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId() (+3 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.29
@@ -179,11 +179,11 @@ _Questions this graph is uniquely positioned to answer:_
 - **What is the exact relationship between `Git Push/Merge Onay Kuralı` and `Graphify Kullanım Kuralları`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
 - **Why does `PersistentSession` connect `Community 4` to `Community 0`, `Community 2`, `Community 3`?**
-  _High betweenness centrality (0.109) - this node is a cross-community bridge._
-- **Why does `serializeSpecialDoor()` connect `Community 0` to `Community 6`?**
+  _High betweenness centrality (0.108) - this node is a cross-community bridge._
+- **Why does `serializeSpecialDoor()` connect `Community 0` to `Community 7`?**
   _High betweenness centrality (0.068) - this node is a cross-community bridge._
-- **Why does `getDoorInstanceIds()` connect `Community 6` to `Community 0`?**
-  _High betweenness centrality (0.066) - this node is a cross-community bridge._
+- **Why does `getDoorInstanceIds()` connect `Community 7` to `Community 0`?**
+  _High betweenness centrality (0.065) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `PersistentSession` (e.g. with `Senaryo: roomchat-3turn (3 turluk sohbet)` and `Kill → Resume Canlı Testi (PAPATYA-42, ilk-tur cacheWrite 554)`) actually correct?**
   _`PersistentSession` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`, `Hero Image - Isometric Room Layers`, `Git Push/Merge Onay Kuralı` to the rest of the system?**
