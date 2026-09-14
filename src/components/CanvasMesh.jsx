@@ -8,6 +8,7 @@ import 'highlight.js/styles/github-dark-dimmed.css'
 import DOMPurify from 'dompurify'
 import { useStore } from '../store/useStore'
 import { loadRoom } from '../utils/loadRoom'
+import { clipboardToMarkdown, pasteRichTextAsMarkdown, missingLinksMessage } from '../utils/richTextToMarkdown'
 
 // Canvas-only marked instance — does NOT affect the global marked used in MarkdownMesh
 const canvasMarked = new Marked({
@@ -92,6 +93,24 @@ const getImageNaturalSize = (url) => new Promise((resolve) => {
 })
 
 const stopEvt = (e) => { e.stopPropagation(); e.nativeEvent?.stopImmediatePropagation() }
+
+// Metin kutusunun render yüksekliğini ölç (A4 sınırında durur). Yapıştırılan uzun
+// markdown için h doğru olsun ki seçim çerçevesi / bounds içerikle örtüşsün.
+const measureTextItemH = (content, w, fontSize, markdown) => {
+  const el = document.createElement('div')
+  if (markdown) el.className = 'cvmd'
+  Object.assign(el.style, {
+    position: 'absolute', left: '-100000px', top: '0', visibility: 'hidden', width: `${w}px`,
+    fontSize: `${fontSize}px`, padding: '14px', boxSizing: 'border-box', wordBreak: 'break-word',
+    whiteSpace: markdown ? 'normal' : 'pre-wrap',
+  })
+  if (markdown) el.innerHTML = parseMd(content)
+  else el.textContent = content
+  document.body.appendChild(el)
+  const h = Math.ceil(el.scrollHeight)
+  el.remove()
+  return Math.min(Math.max(60, h), Math.max(60, Math.round(w * A4_RATIO)))
+}
 
 // ── Image item — yüklenemeyen görsel şeffaf blok yerine gri placeholder gösterir ──
 // Modül seviyesinde: inline tanım her parent render'da yeni komponent tipi üretip
@@ -883,6 +902,24 @@ export default function CanvasMesh({ id, content, width, height }) {
     if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') return
     e.preventDefault(); e.stopPropagation()
     const clipItems = [...(e.clipboardData?.items || [])]
+
+    // Biçimli metin (web sayfası, Google Docs, Word…) → Markdown modunda metin kutusu.
+    // Resim kontrolünden önce: Word/LibreOffice seçimi text/html'in yanında image/png de koyar.
+    // Yalnızca text/plain de varsa — "Resmi kopyala" (sadece <img> + image/png) resim olarak kalsın.
+    const hasFiles = (e.clipboardData?.files?.length || 0) > 0 && !clipItems.some(it => it.type === 'text/html')
+    const richPaste = hasFiles ? null : clipboardToMarkdown(e.clipboardData)
+    if (richPaste?.rich && e.clipboardData.getData('text/plain').trim()) {
+      const pt = centerSurface()
+      const w = 800, fontSize = 30
+      const h = measureTextItemH(richPaste.text, w, fontSize, true)
+      const ni = { id: crypto.randomUUID(), type: 'text', x: pt.x, y: pt.y, w, h, content: richPaste.text, fontSize, markdown: true }
+      setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
+      setSelectedIds(new Set([ni.id]))
+      // adresi kaynakta olmayan link varsa uyarı daha uzun kalsın
+      const missing = richPaste.missingLinks
+      setPasteMsg(missing ? `md-nolink:${missing}` : 'md'); setTimeout(() => setPasteMsg(''), missing ? 5000 : 1600)
+      return
+    }
 
     const imgClip = clipItems.find(it => it.type.startsWith('image/'))
     if (imgClip) {
@@ -1741,6 +1778,8 @@ export default function CanvasMesh({ id, content, width, height }) {
             setItems(prev => prev.map(it => it.id === item.id ? { ...it, h: newH } : it))
           }}
           onMouseDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}
+          // biçimli metin → Markdown olarak imlece eklenir; kutu markdown moduna geçer (yoksa sözdizimi ham görünür)
+          onPaste={e => { if (pasteRichTextAsMarkdown(e) && !item.markdown) setItems(prev => prev.map(it => it.id === item.id ? { ...it, markdown: true } : it)) }}
           onBlur={e => {
             const val = e.target.value
             const newH = fit(e.target)
@@ -2001,8 +2040,9 @@ export default function CanvasMesh({ id, content, width, height }) {
               )}
 
               {pasteMsg && (
-                <span style={{ fontSize: 22, flexShrink: 0, color: pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'cut' || pasteMsg === 'imgcopy') ? '#4ade80' : '#f87171' }}>
-                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'cut' ? '✂ Kesildi' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
+                <span title={pasteMsg.startsWith('md-nolink:') ? 'ChatGPT gibi uygulamalarda metni seçmek yerine mesajın kopyala butonunu kullanınca linkler adresleriyle gelir' : undefined}
+                  style={{ fontSize: 22, flexShrink: 0, color: pasteMsg.startsWith('md-nolink:') ? '#fbbf24' : pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'cut' || pasteMsg === 'imgcopy' || pasteMsg === 'md') ? '#4ade80' : '#f87171' }}>
+                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'cut' ? '✂ Kesildi' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'md' ? '✓ Markdown olarak yapıştırıldı' : pasteMsg.startsWith('md-nolink:') ? `✓ Markdown olarak yapıştırıldı · ${missingLinksMessage(Number(pasteMsg.split(':')[1]))}` : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
                 </span>
               )}
 
@@ -2245,6 +2285,11 @@ export default function CanvasMesh({ id, content, width, height }) {
               <textarea autoFocus defaultValue={readerItem.content}
                 placeholder="Metin yazın…"
                 onMouseDown={(e) => e.stopPropagation()}
+                onPaste={(e) => {
+                  if (pasteRichTextAsMarkdown(e) && !readerItem.markdown) {
+                    setItems(prev => { const next = prev.map(it => it.id === readerItem.id ? { ...it, markdown: true } : it); scheduleSave(next, bgRef.current); return next })
+                  }
+                }}
                 onInput={(e) => {
                   const val = e.target.value
                   setItems(prev => { const next = prev.map(it => it.id === readerItem.id ? { ...it, content: val } : it); scheduleSave(next, bgRef.current); return next })
