@@ -8,6 +8,7 @@ import * as THREE from 'three'
 import { marked } from 'marked'
 import { useStore } from '../store/useStore'
 import { useSpeechToText } from '../hooks/useSpeechToText'
+import { clipboardToMarkdown, padForInsertion, pasteRichTextAsMarkdown, showPasteNotice, missingLinksMessage } from '../utils/richTextToMarkdown'
 
 // Kısa "x önce" göreli zaman (recall göstergesi için)
 function relTime(iso) {
@@ -454,7 +455,13 @@ function MarkdownMesh({ id, content, width, height }) {
             onPaste={(e) => {
               e.preventDefault()
               e.stopPropagation()
-              insertAtCursor(e.clipboardData.getData('text/plain'))
+              // Biçimli metin (web, Docs, Word…) → Markdown; biçimsizse eskisi gibi düz metin
+              const { text, rich, missingLinks } = clipboardToMarkdown(e.clipboardData)
+              if (!rich) { insertAtCursor(text); return }
+              const full  = editRef.current?.textContent ?? ''
+              const caret = editRef.current ? getCaretOffset(editRef.current) : full.length
+              insertAtCursor(padForInsertion(text, full.slice(0, caret), full.slice(caret)))
+              if (missingLinks) showPasteNotice(missingLinksMessage(missingLinks), editRef.current)
             }}
             style={{
               ...baseStyle,
@@ -1891,6 +1898,7 @@ function DefterBlock({ text, saved, onSave, onDelete, onChange }) {
                 ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }}
                 placeholder="Metin yazın…"
                 onMouseDown={(e) => e.stopPropagation()}
+                onPaste={pasteRichTextAsMarkdown}
                 onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; onChange(e.target.value) }}
                 style={{ width: '100%', minHeight: '60vh', boxSizing: 'border-box', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(224,176,80,0.4)', borderRadius: 8, color: '#ece6da', fontSize: 22, lineHeight: 1.6, padding: 18, resize: 'none', outline: 'none', overflow: 'hidden', display: 'block', fontFamily: 'inherit' }}
               />
@@ -2163,6 +2171,7 @@ function DefterMesh({ id, content, width, height }) {
               onKeyDown={onKeyDown}
               onClick={e => e.stopPropagation()}
               onPointerDown={e => e.stopPropagation()}
+              onPaste={pasteRichTextAsMarkdown}
               value={draft}
               onChange={e => setDraft(e.target.value)}
               placeholder="Yazı bloğu yaz... (Enter: ekle, Shift+Enter: satır)"
