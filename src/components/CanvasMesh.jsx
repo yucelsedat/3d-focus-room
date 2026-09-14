@@ -327,6 +327,59 @@ const MusicCard = ({ item, clickable = false }) => {
   )
 }
 
+// ── PDF kartı — belge ikonu + dosya adı + sayfa/boyut + "Aç" ─────────────────
+const formatBytes = (n) => {
+  if (!n) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`
+}
+// Katlanmış köşeli sayfa + kırmızı "PDF" etiketi
+const PdfGlyph = ({ size = 150 }) => (
+  <svg width={size} height={size * 1.22} viewBox="0 0 100 122" fill="none" style={{ display: 'block', filter: 'drop-shadow(0 10px 18px rgba(0,0,0,0.45))' }}>
+    <path d="M8 4h60l28 28v82a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4z" fill="#f8fafc" />
+    <path d="M68 4v24a4 4 0 0 0 4 4h24z" fill="#cbd5e1" />
+    <rect x="18" y="46" width="52" height="4" rx="2" fill="#e2e8f0" />
+    <rect x="18" y="56" width="64" height="4" rx="2" fill="#e2e8f0" />
+    <rect x="18" y="104" width="40" height="4" rx="2" fill="#e2e8f0" />
+    <rect x="-6" y="70" width="80" height="28" rx="5" fill="#dc2626" />
+    <text x="34" y="90.5" textAnchor="middle" fill="#fff" fontSize="19" fontWeight="800" fontFamily="system-ui, sans-serif" letterSpacing="1.5">PDF</text>
+  </svg>
+)
+const PdfCard = ({ item, clickable = false }) => {
+  const open = () => window.open(item.url, '_blank', 'noopener')
+  const meta = [item.pages > 0 ? `${item.pages} sayfa` : '', formatBytes(item.size)].filter(Boolean).join(' · ')
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 18, overflow: 'hidden',
+      background: 'linear-gradient(160deg,#2a1215,#0b0f16 70%)', display: 'flex', flexDirection: 'column',
+      padding: 16, boxSizing: 'border-box', cursor: clickable ? 'default' : 'inherit',
+      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)' }}
+      {...(clickable ? { onMouseDown: stopEvt } : {})}>
+      {/* İkon alanı */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 12,
+        background: 'radial-gradient(circle at 50% 40%, rgba(220,38,38,0.28), rgba(255,255,255,0.03) 70%)', pointerEvents: 'none' }}>
+        <PdfGlyph />
+      </div>
+      {/* Dosya adı (en fazla 2 satır) */}
+      <div title={item.title} style={{ color: '#fff', fontSize: 24, fontWeight: 800, lineHeight: 1.3, textAlign: 'center', marginTop: 14,
+        overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word', flexShrink: 0 }}>
+        {item.title}
+      </div>
+      {/* Sayfa sayısı · boyut */}
+      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: 18, fontWeight: 400, textAlign: 'center', marginTop: 6,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0, minHeight: 22 }}>
+        {meta || 'PDF belgesi'}
+      </div>
+      {/* Aç — yeni sekmede tarayıcının PDF görüntüleyicisi */}
+      <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); open() }} title="PDF'i yeni sekmede aç"
+        style={{ marginTop: 14, height: 52, borderRadius: 12, border: 'none', background: '#dc2626', color: '#fff',
+          fontSize: 20, fontWeight: 800, cursor: 'pointer', flexShrink: 0, letterSpacing: 0.3 }}>
+        Aç ↗
+      </button>
+    </div>
+  )
+}
+
 // Module-level clipboard — persists across canvas instances / re-renders
 let canvasMeshClipboard = null
 let _canvasClipboardTs   = 0
@@ -695,6 +748,35 @@ export default function CanvasMesh({ id, content, width, height }) {
       return
     }
 
+    // PDF dosyaları — ses ile aynı toplu paste akışı
+    const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '')
+    let pdfFiles = [...(e.clipboardData?.files || [])].filter(isPdf)
+    if (!pdfFiles.length) pdfFiles = clipItems.filter(it => it.kind === 'file' && it.type === 'application/pdf').map(it => it.getAsFile()).filter(Boolean)
+    if (pdfFiles.length) {
+      setPasteMsg('loading')
+      try {
+        const metas = await Promise.all(pdfFiles.map(async (file) => {
+          const form = new FormData(); form.append('file', file)
+          const r = await fetch(`/api/canvas/${id}/upload-pdf`, { method: 'POST', body: form })
+          return r.ok ? r.json() : null
+        }))
+        const ok = metas.filter(Boolean)
+        if (ok.length) {
+          const W = 300, H = 424, GAP = 24, step = W + GAP   // A4 oranı (1:√2)
+          const pt = centerSurface()
+          const startX = pt.x - ((ok.length - 1) * step) / 2
+          const newItems = ok.map((d, i) => ({
+            id: crypto.randomUUID(), type: 'pdf', x: startX + i * step, y: pt.y, w: W, h: H,
+            url: d.url, title: d.title, size: d.size, pages: d.pages,
+          }))
+          setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
+          setPasteMsg('ok')
+        } else setPasteMsg('err')
+      } catch { setPasteMsg('err') }
+      setTimeout(() => setPasteMsg(''), 1800)
+      return
+    }
+
     const text = e.clipboardData?.getData('text/plain')?.trim()
     if (text) {
       // YouTube link
@@ -767,7 +849,7 @@ export default function CanvasMesh({ id, content, width, height }) {
     if (clip.sourceId !== id) {
       const copyableUrls = clipItems.flatMap(it => {
         const urls = []
-        if ((it.type === 'image' || it.type === 'music') && it.url?.startsWith('/uploads/')) urls.push(it.url)
+        if ((it.type === 'image' || it.type === 'music' || it.type === 'pdf') && it.url?.startsWith('/uploads/')) urls.push(it.url)
         if (it.type === 'music' && it.coverUrl?.startsWith('/uploads/')) urls.push(it.coverUrl)
         return urls
       })
@@ -781,7 +863,7 @@ export default function CanvasMesh({ id, content, width, height }) {
           const d = await r.json()
           if (r.ok && d.mapping) {
             clipItems = clipItems.map(it => {
-              if (it.type === 'image' && d.mapping[it.url]) return { ...it, url: d.mapping[it.url] }
+              if ((it.type === 'image' || it.type === 'pdf') && d.mapping[it.url]) return { ...it, url: d.mapping[it.url] }
               if (it.type === 'music') {
                 const next = { ...it }
                 if (d.mapping[it.url]) next.url = d.mapping[it.url]
@@ -1375,6 +1457,7 @@ export default function CanvasMesh({ id, content, width, height }) {
     if (item.type === 'insta')   return <InstaCard item={item} />
     if (item.type === 'youtube') return <YoutubeCard item={item} />
     if (item.type === 'music')   return <MusicCard item={item} />
+    if (item.type === 'pdf')     return <PdfCard item={item} />
     if (item.type === 'image') return <ImageItem item={item} />
     if (item.type === 'text' && editingItemId === item.id) {
       // içeriğe göre uzat, A4 yüksekliğinde durdur → fazlası textarea içinde scroll
@@ -1473,6 +1556,10 @@ export default function CanvasMesh({ id, content, width, height }) {
                 ) : item.type === 'music' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
                     <MusicCard item={item} clickable />
+                  </div>
+                ) : item.type === 'pdf' ? (
+                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+                    <PdfCard item={item} clickable />
                   </div>
                 ) : item.type === 'text' ? (
                   (() => {
