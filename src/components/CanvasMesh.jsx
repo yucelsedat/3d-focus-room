@@ -463,6 +463,7 @@ export default function CanvasMesh({ id, content, width, height }) {
 
   // paste feedback
   const [pasteMsg, setPasteMsg]             = useState('')
+  const [dlAll, setDlAll]                   = useState(null) // toplu resim indirme ilerlemesi: { done, total, failed }
 
   // text color picker
   const [showColorPicker, setShowColorPicker] = useState(null) // null | 'text' | 'bg'
@@ -1270,28 +1271,62 @@ export default function CanvasMesh({ id, content, width, height }) {
   const flashMsg = (msg) => { setPasteMsg(msg); setTimeout(() => setPasteMsg(''), 1500) }
 
   const fetchImageBlob = async (url) => {
-    const r = await fetch(url, { referrerPolicy: 'no-referrer' })
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
-    return r.blob()
+    try {
+      const r = await fetch(url, { referrerPolicy: 'no-referrer' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return await r.blob()
+    } catch (err) {
+      // CORS engelli harici görsel → sunucu proxy'si üzerinden dene
+      const abs = new URL(url, location.href)
+      if (abs.origin === location.origin) throw err
+      const r = await fetch(`/api/image-proxy?url=${encodeURIComponent(abs.href)}`)
+      if (!r.ok) throw new Error(`proxy HTTP ${r.status}`)
+      return r.blob()
+    }
+  }
+
+  // Görseli blob olarak indirir; başarısızsa hata fırlatır (çağıran karar verir)
+  const saveImageItem = async (item) => {
+    const blob = await fetchImageBlob(item.url)
+    const ext  = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/\+.*$/, '')
+    let name = 'canvas-image'
+    try { const p = new URL(item.url, location.href).pathname.split('/').pop(); if (p) name = decodeURIComponent(p) } catch {}
+    if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += `.${ext}`
+    const a = document.createElement('a')
+    const href = URL.createObjectURL(blob)
+    a.href = href; a.download = name
+    document.body.appendChild(a); a.click(); a.remove()
+    // hemen revoke edilirse ardışık indirmelerde tarayıcı dosyayı almadan blob düşebilir
+    setTimeout(() => URL.revokeObjectURL(href), 10000)
   }
 
   const downloadSelectedImage = async (e) => {
     stop(e)
     const item = getSelImage(); if (!item) return
-    try {
-      const blob = await fetchImageBlob(item.url)
-      const ext  = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
-      let name = 'canvas-image'
-      try { const p = new URL(item.url, location.href).pathname.split('/').pop(); if (p) name = decodeURIComponent(p) } catch {}
-      if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += `.${ext}`
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob); a.download = name
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(a.href)
-    } catch {
-      // CORS engelli harici görsel — fetch edilemiyorsa yeni sekmede aç
+    try { await saveImageItem(item) } catch {
+      // proxy de getiremediyse yeni sekmede aç
       window.open(item.url, '_blank', 'noopener')
     }
+  }
+
+  // Resimleri tek tek indirir (yukarıdan aşağı, soldan sağa sırayla).
+  // Seçimde resim varsa (Ctrl+tık ile çoklu seçim) yalnızca seçili resimler, yoksa tümü.
+  const downloadImages = async (e) => {
+    stop(e)
+    if (dlAll) return
+    const all  = itemsRef.current.filter(it => it.type === 'image' && it.url)
+    const sel  = all.filter(it => selectedIdsRef.current.has(it.id))
+    const imgs = (sel.length ? sel : all).sort((a, b) => (a.y - b.y) || (a.x - b.x))
+    if (!imgs.length) return
+    let failed = 0
+    setDlAll({ done: 0, total: imgs.length, failed: 0 })
+    for (let i = 0; i < imgs.length; i++) {
+      try { await saveImageItem(imgs[i]) } catch { failed++ }
+      setDlAll({ done: i + 1, total: imgs.length, failed })
+      // ardışık indirmeler arasında kısa boşluk — tarayıcı bazılarını yutmasın
+      if (i < imgs.length - 1) await new Promise(r => setTimeout(r, 350))
+    }
+    setTimeout(() => setDlAll(null), failed ? 4000 : 2200)
   }
 
   const copySelectedImage = async (e) => {
@@ -1358,6 +1393,10 @@ export default function CanvasMesh({ id, content, width, height }) {
   const commonTextColor = selTextItems.length > 0 && selTextItems.every(it => it.color === selTextItems[0].color) ? (selTextItems[0].color || '#e2e8f0') : null
   const commonBgColor   = selTextItems.length > 0 && selTextItems.every(it => it.bgColor === selTextItems[0].bgColor) ? (selTextItems[0].bgColor ?? null) : null
   const markdownActive  = selTextItems.length > 0 && selTextItems.every(it => it.markdown)
+
+  // canvas'ta resim varsa toolbar'da toplu indirme butonu görünür (seçili resim varsa onları indirir)
+  const imageCount    = items.reduce((n, it) => n + (it.type === 'image' && it.url ? 1 : 0), 0)
+  const selImageCount = items.reduce((n, it) => n + (it.type === 'image' && it.url && selectedIds.has(it.id) ? 1 : 0), 0)
 
   // tek bir resim seçiliyken toolbar'da indir / resmi-kopyala ikonları görünür
   const selImageItem = selectedIds.size === 1
@@ -1633,6 +1672,29 @@ export default function CanvasMesh({ id, content, width, height }) {
                 style={{ ...tbBtn, padding: '0 16px', ...(isFullscreen ? act : {}) }}>
                 {isFullscreen ? '🗗 Çık' : '⛶ Tam ekran'}
               </button>
+
+              {(imageCount > 0 || dlAll) && (
+                <>
+                  <div style={div} />
+                  <button onMouseDown={stop} onClick={downloadImages} disabled={!!dlAll}
+                    title={selImageCount ? 'Seçili resimleri tek tek indir' : "Canvas'taki tüm resimleri tek tek indir"}
+                    style={{ ...tbBtn, padding: '0 16px', display: 'flex', alignItems: 'center', gap: 10, ...(dlAll ? { ...act, cursor: 'progress' } : {}) }}>
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    {dlAll && dlAll.done < dlAll.total ? `${dlAll.done}/${dlAll.total}` : selImageCount ? `Seçili resimler (${selImageCount})` : `Tüm resimler (${imageCount})`}
+                  </button>
+                  {dlAll && dlAll.done === dlAll.total && (
+                    <span style={{ fontSize: 22, flexShrink: 0, color: dlAll.failed ? '#f87171' : '#4ade80' }}>
+                      {dlAll.failed
+                        ? `✕ ${dlAll.total - dlAll.failed}/${dlAll.total} indirildi · ${dlAll.failed} resim alınamadı`
+                        : `✓ ${dlAll.total} resim indirildi`}
+                    </span>
+                  )}
+                </>
+              )}
 
               {/* selected items actions */}
               {hasBoxSel && !drawMode && !showUrlInput && !showRoomSearch && (
