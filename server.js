@@ -1156,6 +1156,40 @@ app.get('/api/youtube-meta', async (req, res) => {
   }
 });
 
+// Harici görsel proxy — CORS'suz görselleri canvas'ta indirme / panoya kopyalama için
+// sunucu üzerinden getirir. Yalnızca http(s) ve image/* yanıtlar, en fazla 25MB.
+const IMAGE_PROXY_MAX = 25 * 1024 * 1024;
+app.get('/api/image-proxy', async (req, res) => {
+  let target;
+  try { target = new URL(String(req.query.url || '')); } catch { return res.status(400).json({ error: 'Geçersiz url' }); }
+  if (!/^https?:$/.test(target.protocol)) return res.status(400).json({ error: 'Yalnızca http(s)' });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const r = await fetch(target, {
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: { 'User-Agent': LINK_META_UAS[1], 'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8' },
+    });
+    const contentType = r.headers.get('content-type') || '';
+    if (!r.ok || !/^image\//i.test(contentType)) {
+      r.body?.cancel?.().catch?.(() => {});
+      return res.status(502).json({ error: r.ok ? 'Görsel değil' : `HTTP ${r.status}` });
+    }
+    if (Number(r.headers.get('content-length')) > IMAGE_PROXY_MAX) {
+      r.body?.cancel?.().catch?.(() => {});
+      return res.status(413).json({ error: 'Görsel çok büyük' });
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > IMAGE_PROXY_MAX) return res.status(413).json({ error: 'Görsel çok büyük' });
+    res.set('Content-Type', contentType).send(buf);
+  } catch (err) {
+    res.status(502).json({ error: err.name === 'AbortError' ? 'Zaman aşımı' : err.message });
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 // Generic link meta proxy — Open Graph title + image for any URL (avoids CORS)
 // Bazı siteler bot UA'yı engeller (Medium), bazıları tarayıcı UA'yı (Cloudflare
 // fingerprint uyuşmazlığı) — biri boş dönerse diğeriyle tekrar denenir.
