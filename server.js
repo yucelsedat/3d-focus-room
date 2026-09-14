@@ -56,6 +56,7 @@ ensureDir('public/uploads/images');
 ensureDir('public/uploads/videos');
 ensureDir('public/uploads/slides');
 ensureDir('public/uploads/audio');
+ensureDir('public/uploads/pdf');
 
 // ─── Active room ──────────────────────────────────────────────────────────────
 let activeRoomId   = 'default';
@@ -185,6 +186,15 @@ const canvasAudioUpload = multer({
     // Toplu paste'te aynı isimli dosyalar aynı ms'de gelebilir → rastgele ek ile çakışmayı önle
     filename: (req, file, cb) => cb(null, `canvas-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName(file.originalname)}`),
   }),
+});
+
+const canvasPdfUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'public/uploads/pdf/'),
+    // Toplu paste'te aynı isimli dosyalar aynı ms'de gelebilir → rastgele ek ile çakışmayı önle
+    filename: (req, file, cb) => cb(null, `canvas-pdf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName(file.originalname)}`),
+  }),
+  fileFilter: (req, file, cb) => cb(null, file.mimetype === 'application/pdf' || /\.pdf$/i.test(file.originalname || '')),
 });
 
 // roomsession tile'ın dosya/klasör yükleyicisi: dosyalar belleğe alınır, sonra
@@ -976,6 +986,23 @@ app.post('/api/canvas/:id/upload-audio', canvasAudioUpload.single('file'), async
   res.json({ url, title, artist, duration, coverUrl });
 });
 
+app.post('/api/canvas/:id/upload-pdf', canvasPdfUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'PDF dosyası yok' });
+  const url = `/uploads/pdf/${req.file.filename}`;
+  const size = req.file.size || 0;
+  // Sayfa sayısı: sıkıştırılmamış sayfa sözlüklerini say (/Type /Page, /Pages hariç).
+  // Object stream'li PDF'lerde sayfalar sıkıştırılmış olabilir → 0 döner, kart sayfa sayısını gizler.
+  let pages = 0;
+  try {
+    const raw = fs.readFileSync(req.file.path, 'latin1');
+    pages = (raw.match(/\/Type\s*\/Page(?![a-zA-Z])/g) || []).length;
+  } catch (err) {
+    console.error('[canvas upload-pdf] sayfa sayımı hatası:', err.message);
+  }
+  const title = safeName(req.file.originalname).replace(/\.pdf$/i, '').trim() || 'Belge';
+  res.json({ url, title, size, pages });
+});
+
 // Farklı canvas'a yapıştırırken resim dosyalarını kopyalar
 app.post('/api/canvas/copy-images', (req, res) => {
   const { urls } = req.body;
@@ -984,7 +1011,7 @@ app.post('/api/canvas/copy-images', (req, res) => {
     if (!srcUrl?.startsWith('/uploads/')) continue;
     const srcPath = path.join(__dirname, 'public', srcUrl);
     if (!fs.existsSync(srcPath)) continue;
-    const folder = srcUrl.startsWith('/uploads/audio/') ? 'audio' : 'images';
+    const folder = srcUrl.startsWith('/uploads/audio/') ? 'audio' : srcUrl.startsWith('/uploads/pdf/') ? 'pdf' : 'images';
     const ext = path.extname(srcUrl);
     const newFilename = `canvas-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
     fs.copyFileSync(srcPath, path.join(__dirname, 'public', 'uploads', folder, newFilename));
