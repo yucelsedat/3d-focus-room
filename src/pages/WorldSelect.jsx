@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 // Boş = relative istekler. Dev'de Vite /api'yi backend'e proxy'ler ve /uploads'ı
 // public/ üzerinden sunar; production'da backend aynı origin'den her ikisini sunar.
@@ -21,6 +21,111 @@ function hashIndex(str, len) {
   let h = 0
   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0
   return h % len
+}
+
+// Daraltılmış filtre çubuğunda gösterilecek etiket sayısı (seçili olanlar her zaman görünür).
+const TAG_PREVIEW_LIMIT = 12
+
+function roomTagNames(ctx) {
+  return (ctx.categories ?? []).map(c => c.name)
+}
+
+// ─── Tag Filter Bar ───────────────────────────────────────────────────────────
+function TagFilterBar({
+  tags, activeTags, matchAll, totalCount, visibleCount, allCount,
+  onToggle, onClear, onMatchAllChange,
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  const shownTags = expanded
+    ? tags
+    : tags.filter((t, i) => i < TAG_PREVIEW_LIMIT || activeTags.includes(t.name))
+  const hiddenCount = tags.length - shownTags.length
+  const hasSelection = activeTags.length > 0
+
+  return (
+    <div className="tag-filter">
+      <div className="tag-filter__inner">
+        <div className="tag-filter__chips" role="group" aria-label="Etikete göre filtrele">
+          <button
+            type="button"
+            className="tag-chip tag-chip--all"
+            aria-pressed={!hasSelection}
+            onClick={onClear}
+          >
+            Tümü
+            <span className="tag-chip__count">{allCount}</span>
+          </button>
+
+          <span className="tag-filter__divider" aria-hidden="true" />
+
+          {shownTags.map(tag => {
+            const selected = activeTags.includes(tag.name)
+            return (
+              <button
+                key={tag.name}
+                type="button"
+                className="tag-chip"
+                aria-pressed={selected}
+                data-empty={!selected && tag.count === 0}
+                onClick={() => onToggle(tag.name)}
+              >
+                {selected && <span className="tag-chip__check" aria-hidden="true">✓</span>}
+                {tag.name}
+                <span className="tag-chip__count">{tag.count}</span>
+              </button>
+            )
+          })}
+
+          {(hiddenCount > 0 || expanded) && tags.length > TAG_PREVIEW_LIMIT && (
+            <button
+              type="button"
+              className="tag-filter__more"
+              onClick={() => setExpanded(e => !e)}
+            >
+              {expanded ? 'Daha az göster' : `+${hiddenCount} etiket daha`}
+            </button>
+          )}
+        </div>
+
+        <div className="tag-filter__meta">
+          <span className="tag-filter__result">
+            <strong>{visibleCount}</strong>
+            {visibleCount === totalCount ? ' oda' : ` / ${totalCount} oda`}
+          </span>
+
+          {activeTags.length >= 2 && (
+            <div className="tag-filter__mode" role="radiogroup" aria-label="Etiket eşleşme modu">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!matchAll}
+                title="Seçili etiketlerden en az birine sahip odalar"
+                onClick={() => onMatchAllChange(false)}
+              >
+                Herhangi biri
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={matchAll}
+                title="Seçili etiketlerin hepsine sahip odalar"
+                onClick={() => onMatchAllChange(true)}
+              >
+                Hepsi
+              </button>
+            </div>
+          )}
+
+          {hasSelection && (
+            <button type="button" className="tag-filter__clear" onClick={onClear}>
+              Temizle
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ─── Card Menu (3 nokta) ──────────────────────────────────────────────────────
@@ -116,9 +221,13 @@ function MenuItem({ icon, label, danger, onClick }) {
 }
 
 // ─── Context Card ─────────────────────────────────────────────────────────────
-function ContextCard({ ctx, onPlay, onEdit, onDelete }) {
+function ContextCard({ ctx, activeTags, onTagClick, onPlay, onEdit, onDelete }) {
   const [hovered, setHovered] = useState(false)
   const gradient = GRADIENTS[hashIndex(ctx.id, GRADIENTS.length)]
+  // Filtreyle eşleşen etiketler önde: kartın neden listelendiği ilk bakışta görünsün.
+  const cardTags = [...(ctx.categories ?? [])].sort(
+    (a, b) => activeTags.includes(b.name) - activeTags.includes(a.name)
+  )
 
   return (
     <div
@@ -166,14 +275,25 @@ function ContextCard({ ctx, onPlay, onEdit, onDelete }) {
         <h3 style={{ margin: 0, color: '#fff', fontSize: 17, fontWeight: 700, lineHeight: 1.3 }}>
           {ctx.name}
         </h3>
-        {ctx.categories && ctx.categories.length > 0 && (
+        {cardTags.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {ctx.categories.slice(0, 3).map(cat => (
-              <span key={cat.id} style={{
-                background: '#0a0a0a', color: '#00f2ff', fontSize: 11,
-                padding: '2px 8px', borderRadius: 20, border: '1px solid #1a3a3a',
-              }}>{cat.name}</span>
+            {cardTags.slice(0, 3).map(cat => (
+              <button
+                key={cat.id}
+                type="button"
+                className="card-tag"
+                aria-pressed={activeTags.includes(cat.name)}
+                title={activeTags.includes(cat.name) ? 'Filtreden çıkar' : 'Bu etikete göre filtrele'}
+                onClick={() => onTagClick(cat.name)}
+              >
+                {cat.name}
+              </button>
             ))}
+            {cardTags.length > 3 && (
+              <span style={{ color: '#555', fontSize: 11, padding: '2px 2px', alignSelf: 'center' }}>
+                +{cardTags.length - 3}
+              </span>
+            )}
           </div>
         )}
         <div style={{ color: '#555', fontSize: 12, marginTop: 'auto' }}>
@@ -623,7 +743,80 @@ export default function WorldSelect() {
   const [error, setError] = useState(null)
   const [modal, setModal] = useState(null) // null | 'create' | { mode:'edit', ctx } | { mode:'delete', ctx }
   const [searchQuery, setSearchQuery] = useState('')
+  // Etiket filtresi URL'de tutulur (?tag=a&tag=b&match=all): oyundan geri dönünce
+  // korunur ve filtrelenmiş görünüm link olarak paylaşılabilir.
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
+
+  const matchAll = searchParams.get('match') === 'all'
+
+  // Tüm etiketler, kullanım sıklığına göre (eşitlikte alfabetik) — sıra filtreyle değişmez.
+  const allTags = useMemo(() => {
+    const totals = new Map()
+    for (const ctx of contexts) {
+      for (const name of new Set(roomTagNames(ctx))) totals.set(name, (totals.get(name) ?? 0) + 1)
+    }
+    return [...totals]
+      .map(([name, total]) => ({ name, total }))
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, 'tr'))
+  }, [contexts])
+
+  // Artık hiçbir odada bulunmayan etiketler (ör. düzenlemede silinmiş) seçimden düşer.
+  const activeTags = useMemo(() => {
+    const existing = new Set(allTags.map(t => t.name))
+    return [...new Set(searchParams.getAll('tag'))].filter(t => existing.has(t))
+  }, [searchParams, allTags])
+
+  const searchedRooms = useMemo(() => {
+    const q = searchQuery.trim().toLocaleLowerCase('tr')
+    if (!q) return contexts
+    return contexts.filter(ctx =>
+      ctx.name.toLocaleLowerCase('tr').includes(q) ||
+      roomTagNames(ctx).some(name => name.toLocaleLowerCase('tr').includes(q))
+    )
+  }, [contexts, searchQuery])
+
+  const visibleRooms = useMemo(() => {
+    if (activeTags.length === 0) return searchedRooms
+    return searchedRooms.filter(ctx => {
+      const names = new Set(roomTagNames(ctx))
+      return matchAll ? activeTags.every(t => names.has(t)) : activeTags.some(t => names.has(t))
+    })
+  }, [searchedRooms, activeTags, matchAll])
+
+  // Her etiketin sayısı = o etiket seçilirse listede kaç oda olacağı.
+  // "Hepsi" modunda mevcut sonuç daraltılır; "Herhangi biri" modunda aramaya uyan
+  // odalardan o etikete sahip olanlar eklenir.
+  const tagFacets = useMemo(() => {
+    const pool = matchAll && activeTags.length > 0 ? visibleRooms : searchedRooms
+    const counts = new Map()
+    for (const ctx of pool) {
+      for (const name of new Set(roomTagNames(ctx))) counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+    return allTags.map(t => ({ name: t.name, count: counts.get(t.name) ?? 0 }))
+  }, [allTags, activeTags, matchAll, searchedRooms, visibleRooms])
+
+  function writeFilter(tags, nextMatchAll) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.delete('tag')
+      next.delete('match')
+      tags.forEach(t => next.append('tag', t))
+      if (tags.length > 0 && nextMatchAll) next.set('match', 'all')
+      return next
+    }, { replace: true })
+  }
+
+  function toggleTag(name) {
+    writeFilter(
+      activeTags.includes(name) ? activeTags.filter(t => t !== name) : [...activeTags, name],
+      matchAll
+    )
+  }
+
+  function clearTags() {
+    writeFilter([], false)
+  }
 
   useEffect(() => {
     fetch(`${API}/api/rooms`)
@@ -738,6 +931,21 @@ export default function WorldSelect() {
         </p>
       </div>
 
+      {/* Etiket filtresi */}
+      {!loading && !error && allTags.length > 0 && (
+        <TagFilterBar
+          tags={tagFacets}
+          activeTags={activeTags}
+          matchAll={matchAll}
+          allCount={searchedRooms.length}
+          totalCount={contexts.length}
+          visibleCount={visibleRooms.length}
+          onToggle={toggleTag}
+          onClear={clearTags}
+          onMatchAllChange={value => writeFilter(activeTags, value)}
+        />
+      )}
+
       {/* Grid */}
       <div style={{ padding: '0 40px 80px' }}>
         {loading && (
@@ -761,22 +969,33 @@ export default function WorldSelect() {
             }}>+ İlk Odayı Oluştur</button>
           </div>
         )}
-        {!loading && !error && contexts.length > 0 && (
+        {!loading && !error && contexts.length > 0 && visibleRooms.length === 0 && (
+          <div style={{ textAlign: 'center', color: '#555', padding: '80px 0' }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: '#888', marginBottom: 8 }}>
+              Eşleşen oda bulunamadı
+            </div>
+            <div style={{ fontSize: 13, marginBottom: 20 }}>
+              {activeTags.length > 0
+                ? 'Seçili etiketleri azaltmayı ya da eşleşme modunu değiştirmeyi dene.'
+                : 'Farklı bir arama terimi dene.'}
+            </div>
+            {activeTags.length > 0 && (
+              <button type="button" className="tag-filter__clear" onClick={clearTags}>
+                Etiket filtresini temizle
+              </button>
+            )}
+          </div>
+        )}
+        {!loading && !error && visibleRooms.length > 0 && (
           <div className="context-grid">
             {/* API odaları lastActiveAt desc döndürür (en son aktif olan başta),
                 bu yüzden burada ekstra sıralama/ters çevirme yok. */}
-            {[...contexts]
-              .filter(ctx => {
-                const q = searchQuery.toLowerCase();
-                if (!q) return true;
-                if (ctx.name.toLowerCase().includes(q)) return true;
-                if (ctx.categories?.some(c => c.name.toLowerCase().includes(q))) return true;
-                return false;
-              })
-              .map(ctx => (
+            {visibleRooms.map(ctx => (
               <ContextCard
                 key={ctx.id}
                 ctx={ctx}
+                activeTags={activeTags}
+                onTagClick={toggleTag}
                 onPlay={handlePlay}
                 onEdit={() => setModal({ mode: 'edit', ctx })}
                 onDelete={() => setModal({ mode: 'delete', ctx })}
@@ -818,6 +1037,92 @@ export default function WorldSelect() {
         @media (max-width: 950px)  { .context-grid { grid-template-columns: repeat(3, 1fr); } }
         @media (max-width: 700px)  { .context-grid { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 480px)  { .context-grid { grid-template-columns: 1fr; } }
+
+        .tag-filter {
+          position: sticky; top: 64px; z-index: 90;
+          padding: 14px 40px; margin-bottom: 28px;
+          background: rgba(5,5,5,0.86);
+          backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+          border-bottom: 1px solid #161616;
+        }
+        .tag-filter__inner {
+          max-width: 1800px; margin: 0 auto;
+          display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
+        }
+        .tag-filter__chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+        .tag-filter__divider { width: 1px; height: 20px; background: #262626; margin: 0 4px; }
+
+        .tag-chip {
+          display: inline-flex; align-items: center; gap: 7px;
+          height: 32px; padding: 0 8px 0 13px;
+          background: #0e0e0e; color: #aaa;
+          border: 1px solid #242424; border-radius: 999px;
+          font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap;
+          cursor: pointer;
+          transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+        }
+        .tag-chip:hover { border-color: #3a3a3a; color: #eee; background: #141414; }
+        .tag-chip[aria-pressed="true"] {
+          background: rgba(255,149,0,0.12); border-color: rgba(255,149,0,0.55); color: #ffb54d;
+        }
+        .tag-chip--all[aria-pressed="true"] { background: #f2f2f2; border-color: #f2f2f2; color: #0a0a0a; }
+        .tag-chip[data-empty="true"] { opacity: 0.38; }
+        .tag-chip[data-empty="true"]:hover { opacity: 0.7; }
+        .tag-chip__check { font-size: 11px; font-weight: 800; }
+        .tag-chip__count {
+          min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box;
+          display: inline-flex; align-items: center; justify-content: center;
+          border-radius: 999px; background: rgba(255,255,255,0.06);
+          font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; color: #777;
+        }
+        .tag-chip[aria-pressed="true"] .tag-chip__count { background: rgba(255,149,0,0.18); color: #ffb54d; }
+        .tag-chip--all[aria-pressed="true"] .tag-chip__count { background: rgba(0,0,0,0.1); color: #333; }
+
+        .tag-filter__more {
+          height: 32px; padding: 0 10px; background: none; border: none;
+          color: #777; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        .tag-filter__more:hover { color: #ff9500; }
+
+        .tag-filter__meta { display: flex; align-items: center; gap: 12px; flex-shrink: 0; min-height: 32px; }
+        .tag-filter__result { color: #666; font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .tag-filter__result strong { color: #ddd; font-weight: 800; }
+
+        .tag-filter__mode { display: inline-flex; padding: 3px; background: #0e0e0e; border: 1px solid #242424; border-radius: 999px; }
+        .tag-filter__mode button {
+          height: 24px; padding: 0 11px; border: none; border-radius: 999px;
+          background: none; color: #777; font: inherit; font-size: 12px; font-weight: 600;
+          cursor: pointer; white-space: nowrap;
+        }
+        .tag-filter__mode button:hover { color: #ddd; }
+        .tag-filter__mode button[aria-checked="true"] { background: #262626; color: #fff; }
+
+        .tag-filter__clear {
+          height: 30px; padding: 0 14px; background: none;
+          border: 1px solid #2a2a2a; border-radius: 999px;
+          color: #aaa; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+        }
+        .tag-filter__clear:hover { border-color: #ff9500; color: #ff9500; }
+
+        .card-tag {
+          background: #0a0a0a; color: #00f2ff; font: inherit; font-size: 11px;
+          padding: 2px 8px; border-radius: 20px; border: 1px solid #1a3a3a; cursor: pointer;
+          transition: border-color 0.15s, background 0.15s, color 0.15s;
+        }
+        .card-tag:hover { border-color: #00f2ff; }
+        .card-tag[aria-pressed="true"] {
+          background: rgba(255,149,0,0.12); border-color: rgba(255,149,0,0.55); color: #ffb54d;
+        }
+
+        .tag-chip:focus-visible, .tag-filter__more:focus-visible, .tag-filter__mode button:focus-visible,
+        .tag-filter__clear:focus-visible, .card-tag:focus-visible {
+          outline: 2px solid #ff9500; outline-offset: 2px;
+        }
+
+        @media (max-width: 950px) {
+          .tag-filter { padding: 12px 20px; }
+          .tag-filter__inner { flex-direction: column; gap: 10px; }
+        }
       `}</style>
     </div>
   )
