@@ -78,7 +78,7 @@ export function Player() {
   const currentRoomType    = useStore((state) => state.currentRoomType)
   const rooms              = useStore((state) => state.rooms)
 
-  const [, getKeys] = useKeyboardControls()
+  const [subscribeKeys, getKeys] = useKeyboardControls()
   const zoomActive  = useRef(false)
 
   useEffect(() => {
@@ -100,6 +100,7 @@ export function Player() {
   const hiddenOuterSetRef     = useRef(new Set())
   const hiddenOuter2SetRef    = useRef(new Set())
   const teleporting           = useRef(false)
+  const pendingTeleport       = useRef(null)   // F ile seçilen [x, z] hedefi; ilk karede uygulanır
   const specialDoorsRef       = useRef([])
   const outerSpecialDoorsRef  = useRef([])
   const outerSpecial2DoorsRef = useRef([])
@@ -112,8 +113,43 @@ export function Player() {
   const lastSpaceTime    = useRef(0)
   const prevSpacePressed = useRef(false)
 
+  // F — crosshair'in üzerindeki zemin tile'ına ışınlan.
+  // Kamera pozisyonu doğrudan burada değiştirilmez: hedef ref'e yazılır ve
+  // useFrame içinde uygulanır — böylece aynı karede hareket/collision mantığıyla
+  // yarışmaz ve demand-loop hedefi çizilmiş halde gösterir.
+  useEffect(() => {
+    return subscribeKeys(
+      (state) => state.teleport,
+      (pressed) => {
+        if (!pressed || isTyping() || teleporting.current) return
+        const st = useStore.getState()
+        if (st.activeModal || st.roomModal || st.menuModal || st.canvasEditorOpen) return
+        // hoveredTile'ı duvarlar da yazıyor (id: 'wall-*' / 'outer-*').
+        // Sadece zemin tile'ları sayısal id taşır — yalnızca onlara ışınlanılır.
+        const tile = st.hoveredTile
+        if (!tile || typeof tile.id !== 'number') return
+        pendingTeleport.current = [tile.position[0], tile.position[2]]
+      }
+    )
+  }, [subscribeKeys])
+
   useFrame((state, delta) => {
-    if (teleporting.current || isTyping()) return
+    if (teleporting.current || isTyping()) {
+      // Oda geçişi sırasında bekleyen hedef artık geçersiz (başka odanın tile'ı)
+      if (teleporting.current) pendingTeleport.current = null
+      return
+    }
+
+    // --- F ile zemin tile'ına ışınlanma ---
+    if (pendingTeleport.current) {
+      const [tx, tz] = pendingTeleport.current
+      pendingTeleport.current = null
+      flyY.current         = GROUND_Y
+      flyVelocityY.current = 0
+      isFalling.current    = false
+      state.camera.position.set(tx, GROUND_Y, tz)
+      return
+    }
 
     hiddenSetRef.current         = new Set(hiddenWalls)
     hiddenOuterSetRef.current    = new Set(hiddenOuterWalls)
