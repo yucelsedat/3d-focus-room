@@ -62,6 +62,7 @@ function App() {
         { name: 'edit',     keys: ['e', 'E'] },
         { name: 'room',     keys: ['r', 'R'] },
         { name: 'menu',     keys: ['q', 'Q'] },
+        { name: 'teleport', keys: ['f', 'F'] },
         { name: 'jump',     keys: ['Space'] },
         { name: 'crouch',   keys: ['ShiftLeft', 'ShiftRight'] },
       ]}
