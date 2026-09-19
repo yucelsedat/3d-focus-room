@@ -152,6 +152,24 @@ async function bootMigrate() {
 // at, yalnızca temel adı kullan. Normal dosya adları değişmeden korunur.
 const safeName = (originalname) => path.basename(originalname || 'file');
 
+// Dosya adı diskte/URL'de ASCII'ye indirgenir: Türkçe harfler karşılıklarına (ş→s,
+// ı→i …), kalan aksanlar sadeleşir, ASCII dışı ve URL'i bozan karakterler _ olur.
+// Kullanıcıya gösterilen başlık bundan değil, orijinal UTF-8 addan (safeName) türetilir.
+const TR_ASCII = { 'ı': 'i', 'İ': 'I', 'ğ': 'g', 'Ğ': 'G', 'ş': 's', 'Ş': 'S', 'ç': 'c', 'Ç': 'C', 'ö': 'o', 'Ö': 'O', 'ü': 'u', 'Ü': 'U' };
+const diskName = (originalname) => {
+  const base = safeName(originalname)
+    .replace(/[ıİğĞşŞçÇöÖüÜ]/g, (ch) => TR_ASCII[ch])
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // é→e, â→a
+    .replace(/[^\x20-\x7E]/g, '_')                      // kalan ASCII dışı
+    .replace(/[#?%&]/g, '_')                             // URL'i bozan karakterler
+    .trim();
+  return base || 'file';
+};
+
+// multer 2.x dosya adını varsayılan olarak latin1 çözer; tarayıcı UTF-8 gönderdiği için
+// Türkçe adlar bozulur ("şarkı" → "ÅŸarkÄ±"). Tüm yükleyiciler bu ayarı paylaşır.
+const MULTER_UTF8 = { defParamCharset: 'utf8' };
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     let type = 'images';
@@ -161,38 +179,42 @@ const storage = multer.diskStorage({
     cb(null, `public/uploads/${type}/`);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${safeName(file.originalname)}`);
+    cb(null, `${Date.now()}-${diskName(file.originalname)}`);
   }
 });
-const upload = multer({ storage });
+const upload = multer({ storage, ...MULTER_UTF8 });
 
 const uploadCover = multer({
+  ...MULTER_UTF8,
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
-    filename: (req, file, cb) => cb(null, `cover-${Date.now()}-${safeName(file.originalname)}`),
+    filename: (req, file, cb) => cb(null, `cover-${Date.now()}-${diskName(file.originalname)}`),
   }),
 });
 
 const canvasUpload = multer({
+  ...MULTER_UTF8,
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
-    filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${safeName(file.originalname)}`),
+    filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${diskName(file.originalname)}`),
   }),
 });
 
 const canvasAudioUpload = multer({
+  ...MULTER_UTF8,
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/audio/'),
     // Toplu paste'te aynı isimli dosyalar aynı ms'de gelebilir → rastgele ek ile çakışmayı önle
-    filename: (req, file, cb) => cb(null, `canvas-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName(file.originalname)}`),
+    filename: (req, file, cb) => cb(null, `canvas-audio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${diskName(file.originalname)}`),
   }),
 });
 
 const canvasPdfUpload = multer({
+  ...MULTER_UTF8,
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/pdf/'),
     // Toplu paste'te aynı isimli dosyalar aynı ms'de gelebilir → rastgele ek ile çakışmayı önle
-    filename: (req, file, cb) => cb(null, `canvas-pdf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName(file.originalname)}`),
+    filename: (req, file, cb) => cb(null, `canvas-pdf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${diskName(file.originalname)}`),
   }),
   fileFilter: (req, file, cb) => cb(null, file.mimetype === 'application/pdf' || /\.pdf$/i.test(file.originalname || '')),
 });
@@ -200,6 +222,7 @@ const canvasPdfUpload = multer({
 // roomsession tile'ın dosya/klasör yükleyicisi: dosyalar belleğe alınır, sonra
 // odanın proje klasörüne (room-projects/<roomId>/) klasör yapısı korunarak yazılır.
 const roomFileUpload = multer({
+  ...MULTER_UTF8,
   storage: multer.memoryStorage(),
   limits: { fileSize: 200 * 1024 * 1024 }, // dosya başına 200MB
 });

@@ -1,11 +1,11 @@
-# Graph Report - focus-room-main  (2026-09-18)
+# Graph Report - focus-room-main  (2026-09-20)
 
 ## Corpus Check
-- 34 files · ~94,202 words
+- 35 files · ~94,661 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 364 nodes · 525 edges · 22 communities detected
+- 368 nodes · 529 edges · 21 communities detected
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 26 edges (avg confidence: 0.79)
 - Token cost: 0 input · 0 output
 
@@ -24,8 +24,7 @@
 - [[_COMMUNITY_Community 11|Community 11]]
 - [[_COMMUNITY_Community 12|Community 12]]
 - [[_COMMUNITY_Community 13|Community 13]]
-- [[_COMMUNITY_Community 14|Community 14]]
-- [[_COMMUNITY_Community 17|Community 17]]
+- [[_COMMUNITY_Community 16|Community 16]]
 - [[_COMMUNITY_Community 22|Community 22]]
 - [[_COMMUNITY_Community 30|Community 30]]
 - [[_COMMUNITY_Community 31|Community 31]]
@@ -66,15 +65,15 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.04
-Nodes (33): assignTaskIds(), blueprintSkill(), configForLayer(), decodeHtmlEntities(), detectProject(), directManifest(), _loadUsageDaily(), parseLinkMeta() (+25 more)
+Nodes (42): assignTaskIds(), blueprintSkill(), buildSpawnEnv(), cliModel(), configForLayer(), decodeHtmlEntities(), detectKindWithHaiku(), detectProject() (+34 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.05
-Nodes (6): EditModal(), MarkdownMesh(), relTime(), SessionMesh(), TextureErrorBoundary, useSpeechToText()
+Cohesion: 0.1
+Nodes (17): Senaryo: roomsession-crud (LoopFlow), addUsage(), ensureSessionOr429(), fetchHtmlHead(), LoopRunner, makeTurnSink(), MultiAgentRunner, pidRssMb() (+9 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.13
-Nodes (16): addUsage(), buildSpawnEnv(), cliModel(), detectKindWithHaiku(), mcpArgs(), MultiAgentRunner, parseVerdict(), readAgentProfile() (+8 more)
+Cohesion: 0.05
+Nodes (6): EditModal(), MarkdownMesh(), relTime(), SessionMesh(), TextureErrorBoundary, useSpeechToText()
 
 ### Community 3 - "Community 3"
 Cohesion: 0.09
@@ -93,38 +92,34 @@ Cohesion: 0.2
 Nodes (4): logTurnUsage(), PersistentSession, sseLine(), userLine()
 
 ### Community 7 - "Community 7"
-Cohesion: 0.16
-Nodes (8): Senaryo: roomsession-crud (LoopFlow), ensureSessionOr429(), fetchHtmlHead(), LoopRunner, makeTurnSink(), pidRssMb(), SessionPool, stopRoomBackgroundWork()
-
-### Community 8 - "Community 8"
 Cohesion: 0.14
 Nodes (11): doorWorldPos(), applyRingCollision(), canPassThrough(), canPassThroughRing(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId() (+3 more)
 
-### Community 9 - "Community 9"
+### Community 8 - "Community 8"
 Cohesion: 0.22
 Nodes (3): ContextCard(), hashIndex(), WorldSelect()
 
-### Community 10 - "Community 10"
+### Community 9 - "Community 9"
 Cohesion: 0.29
 Nodes (1): SceneErrorBoundary
 
-### Community 11 - "Community 11"
+### Community 10 - "Community 10"
 Cohesion: 0.29
 Nodes (7): Bilinçli Erteleme Gerekçesi: keyfi dosya/URL okuma yerel uygulamanın amaçlanan özelliği, /api/fetch-url SSRF Açığı, /api/slide-from-path Keyfi Dosya Okuma Açığı, 3D Interactive Media Gallery Experience, First Person Navigation (WASD + Pointer Lock), Markdown Text Panels (çok kolonlu akış), Express Proxy Backend (/api/fetch-url, CORS bypass)
 
-### Community 12 - "Community 12"
+### Community 11 - "Community 11"
 Cohesion: 0.53
 Nodes (6): Focus Room Application, Hero Image - Isometric Room Layers, React JavaScript Library, React Logo SVG, Vite Logo SVG, Vite Build Tool
 
-### Community 13 - "Community 13"
+### Community 12 - "Community 12"
 Cohesion: 0.5
 Nodes (2): getAncestors(), RoomNavHUD()
 
-### Community 14 - "Community 14"
+### Community 13 - "Community 13"
 Cohesion: 0.67
 Nodes (3): migrate(), readJson(), bootMigrate()
 
-### Community 17 - "Community 17"
+### Community 16 - "Community 16"
 Cohesion: 0.67
 Nodes (2): parseWallId(), RoomModal()
 
@@ -159,11 +154,11 @@ Nodes (1): Eşikli Regresyon-Guard Önerisi (bench --assert)
 ## Knowledge Gaps
 - **25 isolated node(s):** `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`, `Hero Image - Isometric Room Layers`, `Git Push/Merge Onay Kuralı`, `Graphify Kullanım Kuralları`, `First Person Navigation (WASD + Pointer Lock)` (+20 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Community 10`** (7 nodes): `App()`, `SceneErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `App.jsx`
+- **Thin community `Community 9`** (7 nodes): `App()`, `SceneErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `App.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 13`** (5 nodes): `getAncestors()`, `HistoryLink()`, `NavLink()`, `RoomNavHUD()`, `RoomNavHUD.jsx`
+- **Thin community `Community 12`** (5 nodes): `getAncestors()`, `HistoryLink()`, `NavLink()`, `RoomNavHUD()`, `RoomNavHUD.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 17`** (4 nodes): `configForLayer()`, `parseWallId()`, `RoomModal()`, `RoomModal.jsx`
+- **Thin community `Community 16`** (4 nodes): `configForLayer()`, `parseWallId()`, `RoomModal()`, `RoomModal.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 30`** (2 nodes): `Git Push/Merge Onay Kuralı`, `Graphify Kullanım Kuralları`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -181,10 +176,10 @@ _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `Git Push/Merge Onay Kuralı` and `Graphify Kullanım Kuralları`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `PersistentSession` connect `Community 6` to `Community 0`, `Community 2`, `Community 4`?**
-  _High betweenness centrality (0.106) - this node is a cross-community bridge._
+- **Why does `PersistentSession` connect `Community 6` to `Community 0`, `Community 4`?**
+  _High betweenness centrality (0.105) - this node is a cross-community bridge._
 - **Why does `missingLinksMessage()` connect `Community 3` to `Community 5`?**
-  _High betweenness centrality (0.081) - this node is a cross-community bridge._
+  _High betweenness centrality (0.080) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `PersistentSession` (e.g. with `Senaryo: roomchat-3turn (3 turluk sohbet)` and `Kill → Resume Canlı Testi (PAPATYA-42, ilk-tur cacheWrite 554)`) actually correct?**
   _`PersistentSession` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`, `Hero Image - Isometric Room Layers`, `Git Push/Merge Onay Kuralı` to the rest of the system?**
@@ -192,4 +187,4 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.04 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.05 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.1 - nodes in this community are weakly interconnected._
