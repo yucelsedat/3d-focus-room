@@ -1,5 +1,7 @@
 git push, merge olaylarını bana sormadan sakın yapma bypass permission da bile bana sor
 
+yeni branch oluşturken adını yapacağım şeye göre sen belirle 
+
 ## graphify
 
 This project has a graphify knowledge graph at graphify-out/.
