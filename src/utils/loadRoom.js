@@ -4,6 +4,7 @@ export async function loadRoom(id, name) {
   const {
     setWorldMedia, setHiddenWalls, setHiddenOuterWalls, setHiddenOuterWalls2,
     setFloorTexture, setCurrentRoom, setSpecialDoors, setOuterSpecialDoors, setOuterSpecialDoors2,
+    setRoomLinks, setOuterRoomLinks, setOuterRoomLinks2,
     addToHistory,
   } = useStore.getState()
 
@@ -11,11 +12,12 @@ export async function loadRoom(id, name) {
   const { room: activatedRoom } = await activateRes.json()
   const roomType = activatedRoom?.roomType ?? 'room'
 
-  const [media, doors, floor, specialDoors] = await Promise.all([
+  const [media, doors, floor, specialDoors, roomLinks] = await Promise.all([
     fetch('/api/media').then(r => r.json()),
     fetch('/api/doors').then(r => r.json()),
     fetch('/api/floor').then(r => r.json()),
     fetch('/api/special-doors').then(r => r.json()),
+    fetch('/api/room-links').then(r => r.json()),
   ])
 
   const innerDoors  = doors.filter(d => d.layer === 0).map(d => d.id)
@@ -26,14 +28,21 @@ export async function loadRoom(id, name) {
   const outerSpecial  = specialDoors.filter(sd => sd.layer === 1)
   const outer2Special = specialDoors.filter(sd => sd.layer === 2)
 
+  const innerLinks  = roomLinks.filter(l => l.layer === 0)
+  const outerLinks  = roomLinks.filter(l => l.layer === 1)
+  const outer2Links = roomLinks.filter(l => l.layer === 2)
+
   setWorldMedia(media)
-  setHiddenWalls([...innerDoors, ...innerSpecial.flatMap(sd => sd.instanceIds)])
-  setHiddenOuterWalls([...outerDoors, ...outerSpecial.flatMap(sd => sd.instanceIds)])
-  setHiddenOuterWalls2([...outer2Doors, ...outer2Special.flatMap(sd => sd.instanceIds)])
+  setHiddenWalls([...innerDoors, ...innerSpecial.flatMap(sd => sd.instanceIds), ...innerLinks.flatMap(l => l.instanceIds)])
+  setHiddenOuterWalls([...outerDoors, ...outerSpecial.flatMap(sd => sd.instanceIds), ...outerLinks.flatMap(l => l.instanceIds)])
+  setHiddenOuterWalls2([...outer2Doors, ...outer2Special.flatMap(sd => sd.instanceIds), ...outer2Links.flatMap(l => l.instanceIds)])
   setFloorTexture(floor.texture)
   setSpecialDoors(innerSpecial)
   setOuterSpecialDoors(outerSpecial)
   setOuterSpecialDoors2(outer2Special)
+  setRoomLinks(innerLinks)
+  setOuterRoomLinks(outerLinks)
+  setOuterRoomLinks2(outer2Links)
   setCurrentRoom(id, name, roomType)
   addToHistory(id, name)
 

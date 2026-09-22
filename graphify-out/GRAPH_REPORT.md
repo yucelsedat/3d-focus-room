@@ -1,12 +1,12 @@
-# Graph Report - focus-room-main  (2026-09-20)
+# Graph Report - focus-room-main  (2026-09-23)
 
 ## Corpus Check
-- 35 files · ~94,661 words
+- 35 files · ~96,628 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 368 nodes · 529 edges · 21 communities detected
-- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 26 edges (avg confidence: 0.79)
+- 372 nodes · 536 edges · 21 communities detected
+- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 27 edges (avg confidence: 0.79)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
@@ -53,8 +53,8 @@
   server.js → bench/scenarios.md
 - `Genel İnceleme & Düzeltme Planı (genel-fix)` --semantically_similar_to--> `YÖNTEM — Deneme-yanılma Yerine Kanıtla İlerleme`  [INFERRED] [semantically similar]
   plan.md → bench/METHOD.md
-- `serializeSpecialDoor()` --calls--> `getDoorInstanceIds()`  [INFERRED]
-  server.js → src/utils/roomConfig.js
+- `bootMigrate()` --calls--> `migrate()`  [INFERRED]
+  server.js → prisma/migrate.js
 
 ## Hyperedges (group relationships)
 - **Token/Parite Faz Pipeline (baseline → faz2 → faz3 → parite kapanışı)** — baseline_faz1_baseline, faz2_cache_prefix_sabitleme, faz3_transport_hijyeni, parite_yetenek_tablosu, method_kanitla_ilerleme [EXTRACTED 1.00]
@@ -65,10 +65,10 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.04
-Nodes (42): assignTaskIds(), blueprintSkill(), buildSpawnEnv(), cliModel(), configForLayer(), decodeHtmlEntities(), detectKindWithHaiku(), detectProject() (+34 more)
+Nodes (40): assignTaskIds(), blueprintSkill(), buildSpawnEnv(), cliModel(), decodeHtmlEntities(), detectKindWithHaiku(), detectProject(), directManifest() (+32 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.1
+Cohesion: 0.09
 Nodes (17): Senaryo: roomsession-crud (LoopFlow), addUsage(), ensureSessionOr429(), fetchHtmlHead(), LoopRunner, makeTurnSink(), MultiAgentRunner, pidRssMb() (+9 more)
 
 ### Community 2 - "Community 2"
@@ -84,16 +84,16 @@ Cohesion: 0.1
 Nodes (25): BASELINE — Faz 1 Ground Truth (optimizasyon öncesi), processedTotal Metriği (input+cacheWrite+cacheRead+output), --bare Erteleme Gerekçesi: OAuth kurulumu keychain okuyamaz, FAZ 2 — Cache-Prefix Sabitleme, Cache TTL Env (FORCE_PROMPT_CACHING_5M / ENABLE_PROMPT_CACHING_1H), --exclude-dynamic-system-prompt-sections (6 spawn noktası), Rol Bazlı Tool Kısma (roomchat/review tool setleri), Idle ↔ TTL Hizalama (1H → 30 dk idle, 5M → 15 dk) (+17 more)
 
 ### Community 5 - "Community 5"
+Cohesion: 0.12
+Nodes (15): DoorPlane(), doorWorldPos(), applyRingCollision(), canPassThrough(), canPassThroughRing(), decodeWallId(), encodeWallId(), getDoorInstanceIds() (+7 more)
+
+### Community 6 - "Community 6"
 Cohesion: 0.15
 Nodes (20): clipboardToMarkdown(), convertHtml(), countLinksWithoutUrl(), fenceFor(), getService(), hasFormatting(), htmlBodyToMarkdown(), htmlToMarkdown() (+12 more)
 
-### Community 6 - "Community 6"
-Cohesion: 0.2
-Nodes (4): logTurnUsage(), PersistentSession, sseLine(), userLine()
-
 ### Community 7 - "Community 7"
-Cohesion: 0.14
-Nodes (11): doorWorldPos(), applyRingCollision(), canPassThrough(), canPassThroughRing(), decodeWallId(), encodeWallId(), getDoorInstanceIds(), getReturnAnchorId() (+3 more)
+Cohesion: 0.22
+Nodes (4): logTurnUsage(), PersistentSession, sseLine(), userLine()
 
 ### Community 8 - "Community 8"
 Cohesion: 0.22
@@ -176,10 +176,10 @@ _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `Git Push/Merge Onay Kuralı` and `Graphify Kullanım Kuralları`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `PersistentSession` connect `Community 6` to `Community 0`, `Community 4`?**
-  _High betweenness centrality (0.105) - this node is a cross-community bridge._
-- **Why does `missingLinksMessage()` connect `Community 3` to `Community 5`?**
-  _High betweenness centrality (0.080) - this node is a cross-community bridge._
+- **Why does `PersistentSession` connect `Community 7` to `Community 0`, `Community 1`, `Community 4`?**
+  _High betweenness centrality (0.104) - this node is a cross-community bridge._
+- **Why does `missingLinksMessage()` connect `Community 3` to `Community 6`?**
+  _High betweenness centrality (0.079) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `PersistentSession` (e.g. with `Senaryo: roomchat-3turn (3 turluk sohbet)` and `Kill → Resume Canlı Testi (PAPATYA-42, ilk-tur cacheWrite 554)`) actually correct?**
   _`PersistentSession` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`, `Hero Image - Isometric Room Layers`, `Git Push/Merge Onay Kuralı` to the rest of the system?**
@@ -187,4 +187,4 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.04 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.1 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.09 - nodes in this community are weakly interconnected._

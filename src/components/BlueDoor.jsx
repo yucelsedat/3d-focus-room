@@ -22,12 +22,46 @@ function doorWorldPos(anchorId, config) {
   }
 }
 
+// Bağlantı kapıları özel kapılardan renkle ayrılır: özel kapı mavi/mor/pembe
+// tonlarındayken bağlantı kapısı yeşil ailesindedir (iç → zümrüt, bahçe halkaları açılır).
+const LINK_COLORS = [
+  { color: '#10b981', emissive: '#047857' },  // iç duvar
+  { color: '#22d3ee', emissive: '#0e7490' },  // 1. bahçe duvarı
+  { color: '#a3e635', emissive: '#4d7c0f' },  // 2. bahçe duvarı
+]
+
+// Kapı yüzeyi: özel kapı ve bağlantı kapısı aynı geometriyi paylaşır, yalnızca renk değişir.
+function DoorPlane({ anchorId, config, color, emissive }) {
+  const { position, rotation } = doorWorldPos(anchorId, config)
+  return (
+    <mesh position={position} rotation={rotation}>
+      <planeGeometry args={[2, 3]} />
+      <meshStandardMaterial
+        color={color}
+        transparent
+        opacity={0.55}
+        emissive={emissive}
+        emissiveIntensity={0.4}
+        side={2}
+      />
+    </mesh>
+  )
+}
+
 export function BlueDoors() {
   const specialDoors       = useStore(s => s.specialDoors)
   const outerSpecialDoors  = useStore(s => s.outerSpecialDoors)
   const outerSpecialDoors2 = useStore(s => s.outerSpecialDoors2)
+  const roomLinks          = useStore(s => s.roomLinks)
+  const outerRoomLinks     = useStore(s => s.outerRoomLinks)
+  const outerRoomLinks2    = useStore(s => s.outerRoomLinks2)
   const currentRoomType    = useStore(s => s.currentRoomType)
   const innerConfig = ROOM_CONFIGS[currentRoomType] ?? ROOM_CONFIGS.room
+  const linkLayers = [
+    [roomLinks,       innerConfig],
+    [outerRoomLinks,  OUTER_CONFIG],
+    [outerRoomLinks2, OUTER2_CONFIG],
+  ]
 
   return (
     <>
@@ -79,6 +113,16 @@ export function BlueDoors() {
           </mesh>
         )
       })}
+      {linkLayers.map(([links, config], layer) =>
+        links.map(link => (
+          <DoorPlane
+            key={`link-${layer}-${link.id}`}
+            anchorId={link.anchorId}
+            config={config}
+            {...LINK_COLORS[layer]}
+          />
+        ))
+      )}
     </>
   )
 }

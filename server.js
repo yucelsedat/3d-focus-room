@@ -690,6 +690,134 @@ app.post('/api/special-doors/link', async (req, res) => {
   });
 });
 
+// ─── Room Links API (bağlantı kapıları) ──────────────────────────────────────
+// Özel kapıdan farkı: parent/child hiyerarşisi kurmaz. İki odayı eşit düzeyde bağlar,
+// bir oda birden çok odaya bağlanabilir ve kapı yalnızca bağlantıyı kuran odada görünür.
+// Karşı oda da kapı açarsa ters yönde ikinci bir RoomLink satırı oluşur; oyuncu o zaman
+// karşı kapının önüne çıkar (spawn mantığı Player.jsx'te özel kapıyla ortak).
+
+function serializeRoomLink(link, roomConfig) {
+  const config = link.layer > 0
+    ? configForLayer(link.layer)
+    : (roomConfig ?? ROOM_CONFIGS[activeRoomType] ?? ROOM_CONFIGS.room);
+  return {
+    id: link.id,
+    anchorId: link.anchorId,
+    targetRoomId: link.targetRoomId,
+    targetRoomName: link.target.name,
+    layer: link.layer,
+    instanceIds: getDoorInstanceIds(link.anchorId, config),
+  };
+}
+
+const linkInclude = { target: { select: { id: true, name: true } } };
+
+const roomLinksOf = (roomId) =>
+  prisma.roomLink.findMany({ where: { roomId }, include: linkInclude });
+
+// Aynı duvar noktasında hem özel kapı hem bağlantı kapısı olmasın
+async function anchorOccupied(roomId, anchorId, layer) {
+  const [sd, link] = await Promise.all([
+    prisma.specialDoor.findFirst({ where: { roomId, anchorId, layer } }),
+    prisma.roomLink.findFirst({ where: { roomId, anchorId, layer } }),
+  ]);
+  return Boolean(sd || link);
+}
+
+app.get('/api/room-links', async (req, res) => {
+  const links = await roomLinksOf(activeRoomId);
+  res.json(links.map(link => serializeRoomLink(link)));
+});
+
+// Bağlantılı odalar: bir odanın hangi odalarla bağlantısı olduğu (iki yön birleşik)
+app.get('/api/rooms/:id/links', async (req, res) => {
+  const { id } = req.params;
+  const links = await prisma.roomLink.findMany({
+    where: { OR: [{ roomId: id }, { targetRoomId: id }] },
+    include: { room: { select: { id: true, name: true } }, target: { select: { id: true, name: true } } },
+  });
+  const linked = new Map();
+  for (const l of links) {
+    const other = l.roomId === id ? l.target : l.room;
+    if (!other || other.id === id) continue;
+    const entry = linked.get(other.id) ?? { id: other.id, name: other.name, outgoing: false, incoming: false };
+    if (l.roomId === id) entry.outgoing = true; else entry.incoming = true;
+    linked.set(other.id, entry);
+  }
+  res.json([...linked.values()]);
+});
+
+// Yeni oda + bağlantı kapısı. Yeni odada karşı duvara geri bağlantı kapısı da açılır
+// (çift yönlü), ama parentId kurulmaz: oda ağacında bağımsız kalır.
+app.post('/api/room-links', async (req, res) => {
+  const { anchorId, roomName, layer = 0, roomType = 'room' } = req.body;
+  if (!roomName?.trim()) return res.status(400).json({ error: 'Oda adı gerekli' });
+  if (await anchorOccupied(activeRoomId, anchorId, layer)) {
+    return res.status(400).json({ error: 'Bu duvarda zaten bir kapı var' });
+  }
+
+  const newId = `room-${Date.now()}`;
+  const newType = ROOM_CONFIGS[roomType] ? roomType : 'room';
+  const sourceConfig = configForLayer(layer);
+  const newConfig    = ROOM_CONFIGS[newType];
+
+  // Geri kapı: yeni odanın karşı duvarında, j yeni odanın duvar genişliğine sığdırılır
+  const { face: sFace, j: sJ } = decodeWallId(anchorId, sourceConfig);
+  const oppFace = [1, 0, 3, 2][sFace];
+  const newFaceWidth = oppFace < 2 ? newConfig.gx : newConfig.gz;
+  const newJ = Math.min(sJ, newFaceWidth - 2);
+  const returnAnchorId = encodeWallId(0, oppFace, newJ, newConfig);
+
+  await prisma.$transaction([
+    prisma.room.create({ data: { id: newId, name: roomName.trim(), roomType: newType } }),
+    prisma.floor.create({ data: { roomId: newId, texture: defaultFloorTexture(newType) } }),
+    prisma.roomLink.create({ data: { roomId: activeRoomId, anchorId, targetRoomId: newId, layer } }),
+    prisma.roomLink.create({ data: { roomId: newId, anchorId: returnAnchorId, targetRoomId: activeRoomId, layer: 0 } }),
+  ]);
+
+  const created = await prisma.room.findUnique({ where: { id: newId }, include: roomInclude });
+  const links = await roomLinksOf(activeRoomId);
+  res.json({
+    linkedRoom: serializeRoom(created),
+    roomLinks: links.map(link => serializeRoomLink(link)),
+  });
+});
+
+// Mevcut odaya bağla — tek yönlü: kapı yalnızca bu odada açılır.
+app.post('/api/room-links/link', async (req, res) => {
+  const { anchorId, targetRoomId, layer = 0 } = req.body;
+  if (!targetRoomId) return res.status(400).json({ error: 'Oda seçilmedi' });
+  if (targetRoomId === activeRoomId) return res.status(400).json({ error: 'Oda kendine bağlanamaz' });
+  const target = await prisma.room.findUnique({ where: { id: targetRoomId }, select: { id: true } });
+  if (!target) return res.status(404).json({ error: 'Oda bulunamadı' });
+  if (await anchorOccupied(activeRoomId, anchorId, layer)) {
+    return res.status(400).json({ error: 'Bu duvarda zaten bir kapı var' });
+  }
+
+  await prisma.roomLink.create({ data: { roomId: activeRoomId, anchorId, targetRoomId, layer } });
+  const links = await roomLinksOf(activeRoomId);
+  res.json({ roomLinks: links.map(link => serializeRoomLink(link)) });
+});
+
+// Bağlantıyı kaldır: iki oda arasındaki bağlantı her iki yönde de silinir,
+// karşı odadaki kapı da kapanır (tercih: "bağlantı tamamen silinsin").
+app.delete('/api/room-links/:id', async (req, res) => {
+  const id = parseInt(req.params.id);
+  const link = await prisma.roomLink.findUnique({ where: { id } });
+  if (!link) return res.status(404).json({ error: 'Bulunamadı' });
+
+  await prisma.roomLink.deleteMany({
+    where: {
+      OR: [
+        { roomId: link.roomId, targetRoomId: link.targetRoomId },
+        { roomId: link.targetRoomId, targetRoomId: link.roomId },
+      ],
+    },
+  });
+  const links = await roomLinksOf(activeRoomId);
+  res.json({ success: true, roomLinks: links.map(l => serializeRoomLink(l)) });
+});
+
 // ─── Media API ────────────────────────────────────────────────────────────────
 
 app.get('/api/media', async (req, res) => {

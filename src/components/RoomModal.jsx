@@ -31,6 +31,9 @@ export function RoomModal() {
     specialDoors, setSpecialDoors,
     outerSpecialDoors, setOuterSpecialDoors,
     outerSpecialDoors2, setOuterSpecialDoors2,
+    roomLinks, setRoomLinks,
+    outerRoomLinks, setOuterRoomLinks,
+    outerRoomLinks2, setOuterRoomLinks2,
     rooms, setRooms, currentRoomId, currentRoomType,
   } = useStore()
   const [activeTab, setActiveTab]   = useState('special-door')
@@ -44,6 +47,13 @@ export function RoomModal() {
   const [linkType, setLinkType]     = useState('child')
   const [linkSearch, setLinkSearch] = useState('')
   const [linkTargetId, setLinkTargetId] = useState(null)
+  // Bağlantı kapısı sekmesi (özel kapıdan bağımsız kendi state'i)
+  const [rlMode, setRlMode]         = useState('new')
+  const [rlName, setRlName]         = useState('')
+  const [rlType, setRlType]         = useState('room')
+  const [rlSearch, setRlSearch]     = useState('')
+  const [rlTargetId, setRlTargetId] = useState(null)
+  const [rlBusy, setRlBusy]         = useState(false)
 
   // Aktif sekmeyi hover tipine göre belirle
   useEffect(() => {
@@ -55,6 +65,11 @@ export function RoomModal() {
     setCreateMode('new')
     setLinkSearch('')
     setLinkTargetId(null)
+    setRlMode('new')
+    setRlName('')
+    setRlType('room')
+    setRlSearch('')
+    setRlTargetId(null)
   }, [roomModal])
 
   // Zemin tab açılınca texture listesini çek
@@ -84,13 +99,20 @@ export function RoomModal() {
   const addDoorByLayer    = [addDoor, addOuterDoor, addOuterDoor2]
   const removeDoorByLayer = [removeDoor, removeOuterDoor, removeOuterDoor2]
 
+  const roomLinksByLayer  = [roomLinks, outerRoomLinks, outerRoomLinks2]
+
   const activeHiddenWalls  = hiddenByLayer[layer]
   const activeSpecialDoors = specialByLayer[layer]
+  const activeRoomLinks    = roomLinksByLayer[layer]
 
   const isDoorOpen = preview.length > 0 && preview.every(id => activeHiddenWalls.includes(id))
 
   const existingSpecialDoor = anchorId !== null
     ? activeSpecialDoors.find(sd => sd.instanceIds.includes(anchorId))
+    : null
+
+  const existingRoomLink = anchorId !== null
+    ? activeRoomLinks.find(l => l.instanceIds.includes(anchorId))
     : null
 
   // Sunucudan dönen tüm özel kapıları katmana göre store'a dağıtır
@@ -211,12 +233,97 @@ export function RoomModal() {
     }
   }
 
+  // Sunucudan dönen bağlantı kapılarını katmana göre store'a dağıtır
+  const distributeRoomLinks = (updated) => {
+    const byLayer = [[], [], []]
+    for (const l of updated) (byLayer[l.layer] ?? byLayer[0]).push(l)
+    setRoomLinks(byLayer[0])
+    setOuterRoomLinks(byLayer[1])
+    setOuterRoomLinks2(byLayer[2])
+    return byLayer
+  }
+
+  // Yeni oda + bağlantı kapısı. Parent/child kurulmaz; yeni odada karşı duvara
+  // geri bağlantı kapısı sunucu tarafında açılır (çift yönlü).
+  const handleCreateLinkRoom = async () => {
+    setRlBusy(true)
+    try {
+      const r = await fetch('/api/room-links', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ anchorId, roomName: rlName, layer, roomType: rlType }),
+      })
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Sunucu hatası') }
+      const { linkedRoom, roomLinks: updated } = await r.json()
+      setRooms([...rooms, linkedRoom])
+      const byLayer = distributeRoomLinks(updated)
+      const newIds = byLayer[layer].find(l => l.anchorId === anchorId)?.instanceIds ?? []
+      addDoorByLayer[layer](newIds)
+      setRlName('')
+      closeRoomModal()
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setRlBusy(false)
+    }
+  }
+
+  // Mevcut odaya bağla — tek yönlü: kapı yalnızca bu odada açılır, hedef oda
+  // kendi bağlantı kapısını açana kadar orada kapı görünmez.
+  const handleLinkExistingRoom = async () => {
+    if (!rlTargetId) return
+    setRlBusy(true)
+    try {
+      const r = await fetch('/api/room-links/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ anchorId, targetRoomId: rlTargetId, layer }),
+      })
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Sunucu hatası') }
+      const { roomLinks: updated } = await r.json()
+      const byLayer = distributeRoomLinks(updated)
+      const newIds = byLayer[layer].find(l => l.anchorId === anchorId)?.instanceIds ?? []
+      addDoorByLayer[layer](newIds)
+      setRlSearch('')
+      setRlTargetId(null)
+      closeRoomModal()
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setRlBusy(false)
+    }
+  }
+
+  // Bağlantıyı kaldır: sunucu iki odadaki kapıları da siler. Burada yalnızca aktif
+  // odadan kaybolan kapıların duvar tile'ları geri kapatılır.
+  const handleRemoveRoomLink = async (id) => {
+    try {
+      const r = await fetch(`/api/room-links/${id}`, { method: 'DELETE' })
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Sunucu hatası') }
+      const { roomLinks: updated } = await r.json()
+      const keptIds = new Set(updated.map(l => l.id))
+      const removedByLayer = [[], [], []]
+      for (const l of [...roomLinks, ...outerRoomLinks, ...outerRoomLinks2]) {
+        if (!keptIds.has(l.id)) (removedByLayer[l.layer] ?? removedByLayer[0]).push(...l.instanceIds)
+      }
+      removedByLayer.forEach((ids, i) => { if (ids.length) removeDoorByLayer[i](ids) })
+      distributeRoomLinks(updated)
+      closeRoomModal()
+    } catch (err) {
+      alert(err.message)
+    }
+  }
+
   const currentRoom = rooms.find(r => r.id === currentRoomId)
   const linkableRooms = linkType === 'parent'
     ? rooms.filter(r => r.id === currentRoom?.parent?.id)
     : rooms.filter(r => r.id !== currentRoomId)
   const filteredLinkRooms = linkableRooms.filter(r =>
     r.name.toLowerCase().includes(linkSearch.toLowerCase())
+  )
+  // Bağlantı kapısında hiyerarşi yok: kendisi dışındaki tüm odalar aday, yalnızca isimle aranır
+  const filteredRlRooms = rooms.filter(r =>
+    r.id !== currentRoomId && r.name.toLowerCase().includes(rlSearch.toLowerCase())
   )
 
   if (!roomModal) return null
@@ -234,6 +341,9 @@ export function RoomModal() {
         <div style={s.tabs}>
           <button style={activeTab === 'special-door' ? s.activeTab : s.tab} onClick={() => setActiveTab('special-door')}>
             🔵 Özel Kapı
+          </button>
+          <button style={activeTab === 'room-link' ? s.activeTab : s.tab} onClick={() => setActiveTab('room-link')}>
+            🔗 Bağlantı Kapısı
           </button>
           <button style={activeTab === 'door'  ? s.activeTab : s.tab} onClick={() => setActiveTab('door')}>
             🚪 Kapı
@@ -426,6 +536,143 @@ export function RoomModal() {
                   onClick={() => handleRemoveSpecialDoor(existingSpecialDoor.id)}
                 >
                   🗑 Özel Kapıyı Kapat
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Bağlantı Kapısı sekmesi — özel kapıdan farkı: parent/child kurmaz,
+            kapı yalnızca bağlantıyı kuran odada görünür. */}
+        {activeTab === 'room-link' && (
+          <div style={s.section}>
+            {!isWall && (
+              <p style={s.hint}>Bağlantı kapısı açmak için bir duvar tile'ının üzerine gelin.</p>
+            )}
+
+            {isWall && existingSpecialDoor && !existingRoomLink && (
+              <p style={s.hint}>Bu duvarda zaten bir özel kapı var. Önce "Özel Kapı" sekmesinden kaldırın.</p>
+            )}
+
+            {isWall && !existingSpecialDoor && !existingRoomLink && (
+              <>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    style={rlMode === 'new' ? s.activeTab : s.tab}
+                    onClick={() => setRlMode('new')}
+                  >
+                    ✨ Yeni Oda
+                  </button>
+                  <button
+                    style={rlMode === 'existing' ? s.activeTab : s.tab}
+                    onClick={() => { setRlMode('existing'); setRlSearch(''); setRlTargetId(null) }}
+                  >
+                    🔗 Mevcut Odaya Bağla
+                  </button>
+                </div>
+
+                {rlMode === 'new' && (
+                  <>
+                    <div style={s.typeRow}>
+                      <label style={{ ...s.typeOption, ...(rlType === 'room' ? s.typeActive : {}) }}>
+                        <input type="radio" checked={rlType === 'room'} onChange={() => setRlType('room')} style={{ display: 'none' }} />
+                        🏠 Oda
+                      </label>
+                      <label style={{ ...s.typeOption, ...(rlType === 'cadde' ? s.typeActive : {}) }}>
+                        <input type="radio" checked={rlType === 'cadde'} onChange={() => setRlType('cadde')} style={{ display: 'none' }} />
+                        🛣️ Cadde
+                      </label>
+                    </div>
+                    <input
+                      style={s.input}
+                      placeholder="Yeni oda adı..."
+                      value={rlName}
+                      onChange={e => setRlName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && rlName.trim() && !rlBusy) handleCreateLinkRoom() }}
+                      autoFocus
+                    />
+                    <p style={s.hint}>Yeni oda bağımsız kalır (parent/child kurulmaz), karşı duvarında geri bağlantı kapısı açılır.</p>
+                    <button
+                      style={{
+                        ...s.applyBtn,
+                        background: 'linear-gradient(135deg, #10b981, #047857)',
+                        opacity: rlName.trim() ? 1 : 0.4,
+                      }}
+                      disabled={!rlName.trim() || rlBusy}
+                      onClick={handleCreateLinkRoom}
+                    >
+                      🔗 {rlBusy ? '...' : 'Bağlantı Kapısı Aç'}
+                    </button>
+                  </>
+                )}
+
+                {rlMode === 'existing' && (
+                  <>
+                    <input
+                      style={s.input}
+                      placeholder="Oda ara..."
+                      value={rlSearch}
+                      onChange={e => { setRlSearch(e.target.value); setRlTargetId(null) }}
+                      autoFocus
+                    />
+
+                    {rlSearch.length > 0 && filteredRlRooms.length > 0 && (
+                      <div style={{ background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', overflow: 'hidden' }}>
+                        {filteredRlRooms.slice(0, 6).map(r => (
+                          <div
+                            key={r.id}
+                            onClick={() => { setRlTargetId(r.id); setRlSearch(r.name) }}
+                            style={{
+                              padding: '8px 12px', cursor: 'pointer', fontSize: '13px',
+                              color: rlTargetId === r.id ? '#fff' : '#aaa',
+                              background: rlTargetId === r.id ? '#1a1a1a' : 'transparent',
+                            }}
+                          >
+                            {r.name}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {rlSearch.length > 0 && filteredRlRooms.length === 0 && (
+                      <p style={s.hint}>Bu isimde oda bulunamadı.</p>
+                    )}
+
+                    <p style={s.hint}>Kapı yalnızca bu odada açılır; karşı odada kapı çıkmaz. Oradan da bağlantı kapısı açılırsa iki kapı birbirinin önüne düşer.</p>
+                    <button
+                      style={{
+                        ...s.applyBtn,
+                        background: 'linear-gradient(135deg, #10b981, #047857)',
+                        opacity: rlTargetId ? 1 : 0.4,
+                      }}
+                      disabled={!rlTargetId || rlBusy}
+                      onClick={handleLinkExistingRoom}
+                    >
+                      🔗 {rlBusy ? '...' : 'Bağla'}
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+
+            {isWall && existingRoomLink && (
+              <>
+                <div style={s.infoBox}>
+                  <div style={s.infoRow}>
+                    <span style={s.infoLabel}>Bağlı oda</span>
+                    <span style={{ ...s.infoValue, color: '#34d399' }}>{existingRoomLink.targetRoomName}</span>
+                  </div>
+                  <div style={s.infoRow}>
+                    <span style={s.infoLabel}>Durum</span>
+                    <span style={{ ...s.infoValue, color: '#4ade80' }}>Bağlantı kapısı açık</span>
+                  </div>
+                </div>
+                <p style={s.hint}>Kaldırınca iki odadaki bağlantı kapıları da kapanır.</p>
+                <button
+                  style={{ ...s.applyBtn, background: '#7f1d1d' }}
+                  onClick={() => handleRemoveRoomLink(existingRoomLink.id)}
+                >
+                  🗑 Bağlantıyı Kaldır
                 </button>
               </>
             )}
