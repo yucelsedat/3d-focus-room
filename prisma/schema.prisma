@@ -24,6 +24,8 @@ model Room {
   categories   RoomCategory[]
   specialDoors SpecialDoor[]  @relation("SpecialDoorSource")
   targetedBy   SpecialDoor[]  @relation("SpecialDoorTarget")
+  roomLinks    RoomLink[]     @relation("RoomLinkSource")
+  linkedBy     RoomLink[]     @relation("RoomLinkTarget")
 }
 
 model Media {
@@ -84,6 +86,22 @@ model SpecialDoor {
   layer        Int    @default(0) // 0=iç duvar, 1=1. bahçe duvarı (±30), 2=2. bahçe duvarı (±40)
   room         Room   @relation("SpecialDoorSource", fields: [roomId], references: [id], onDelete: Cascade)
   target       Room   @relation("SpecialDoorTarget", fields: [targetRoomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, anchorId, layer])
+}
+
+// Bağlantılı odalar: özel kapının aksine parent/child hiyerarşisi kurmaz, iki odayı
+// eşit düzeyde birbirine bağlar. Bir oda birden çok odaya bağlanabilir. Her satır bir
+// odadaki bağlantı kapısını (anchorId + layer) ve bağlı olduğu odayı tutar; karşı oda
+// da kapı açarsa ters yönde ikinci bir satır oluşur.
+model RoomLink {
+  id           Int    @id @default(autoincrement())
+  roomId       String
+  anchorId     Int
+  targetRoomId String
+  layer        Int    @default(0) // 0=iç duvar, 1=1. bahçe duvarı (±30), 2=2. bahçe duvarı (±40)
+  room         Room   @relation("RoomLinkSource", fields: [roomId], references: [id], onDelete: Cascade)
+  target       Room   @relation("RoomLinkTarget", fields: [targetRoomId], references: [id], onDelete: Cascade)
 
   @@unique([roomId, anchorId, layer])
 }

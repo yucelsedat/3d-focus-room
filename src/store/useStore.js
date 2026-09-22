@@ -22,6 +22,9 @@ export const useStore = create((set) => ({
   specialDoors: [],
   outerSpecialDoors: [],   // 1. bahçe duvarı özel kapıları
   outerSpecialDoors2: [],  // 2. bahçe duvarı özel kapıları
+  roomLinks: [],           // bağlantı kapıları (iç duvar) — parent/child kurmaz
+  outerRoomLinks: [],      // 1. bahçe duvarı bağlantı kapıları
+  outerRoomLinks2: [],     // 2. bahçe duvarı bağlantı kapıları
   roomHistory: [],
 
   setCanvasEditorOpen: (open) => set({ canvasEditorOpen: open }),
@@ -66,4 +69,7 @@ export const useStore = create((set) => ({
   setSpecialDoors: (specialDoors) => set({ specialDoors }),
   setOuterSpecialDoors: (outerSpecialDoors) => set({ outerSpecialDoors }),
   setOuterSpecialDoors2: (outerSpecialDoors2) => set({ outerSpecialDoors2 }),
+  setRoomLinks: (roomLinks) => set({ roomLinks }),
+  setOuterRoomLinks: (outerRoomLinks) => set({ outerRoomLinks }),
+  setOuterRoomLinks2: (outerRoomLinks2) => set({ outerRoomLinks2 }),
 }))

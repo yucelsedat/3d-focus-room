@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useMemo } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { PointerLockControls, useKeyboardControls } from '@react-three/drei'
 import { useStore } from '../store/useStore'
@@ -75,8 +75,17 @@ export function Player() {
   const specialDoors       = useStore((state) => state.specialDoors)
   const outerSpecialDoors  = useStore((state) => state.outerSpecialDoors)
   const outerSpecialDoors2 = useStore((state) => state.outerSpecialDoors2)
+  const roomLinks          = useStore((state) => state.roomLinks)
+  const outerRoomLinks     = useStore((state) => state.outerRoomLinks)
+  const outerRoomLinks2    = useStore((state) => state.outerRoomLinks2)
   const currentRoomType    = useStore((state) => state.currentRoomType)
   const rooms              = useStore((state) => state.rooms)
+
+  // Geçiş mantığı açısından özel kapı ile bağlantı kapısı aynıdır (anchorId + targetRoomId);
+  // fark yalnızca DB ilişkisinde ve renkte. Katman başına tek listede birleştirilirler.
+  const innerPortals  = useMemo(() => [...specialDoors,       ...roomLinks],       [specialDoors, roomLinks])
+  const outerPortals  = useMemo(() => [...outerSpecialDoors,  ...outerRoomLinks],  [outerSpecialDoors, outerRoomLinks])
+  const outer2Portals = useMemo(() => [...outerSpecialDoors2, ...outerRoomLinks2], [outerSpecialDoors2, outerRoomLinks2])
 
   const [subscribeKeys, getKeys] = useKeyboardControls()
   const zoomActive  = useRef(false)
@@ -101,9 +110,9 @@ export function Player() {
   const hiddenOuter2SetRef    = useRef(new Set())
   const teleporting           = useRef(false)
   const pendingTeleport       = useRef(null)   // F ile seçilen [x, z] hedefi; ilk karede uygulanır
-  const specialDoorsRef       = useRef([])
-  const outerSpecialDoorsRef  = useRef([])
-  const outerSpecial2DoorsRef = useRef([])
+  const innerPortalsRef       = useRef([])   // iç duvar: özel kapılar + bağlantı kapıları
+  const outerPortalsRef       = useRef([])
+  const outer2PortalsRef      = useRef([])
   const currentRoomTypeRef   = useRef('room')
   const roomsRef             = useRef([])
 
@@ -154,9 +163,9 @@ export function Player() {
     hiddenSetRef.current         = new Set(hiddenWalls)
     hiddenOuterSetRef.current    = new Set(hiddenOuterWalls)
     hiddenOuter2SetRef.current   = new Set(hiddenOuterWalls2)
-    specialDoorsRef.current      = specialDoors
-    outerSpecialDoorsRef.current = outerSpecialDoors
-    outerSpecial2DoorsRef.current = outerSpecialDoors2
+    innerPortalsRef.current  = innerPortals
+    outerPortalsRef.current  = outerPortals
+    outer2PortalsRef.current = outer2Portals
     currentRoomTypeRef.current  = currentRoomType
     roomsRef.current            = rooms
 
@@ -273,8 +282,8 @@ export function Player() {
       }
     }
 
-    // --- İç özel kapı geçişi ---
-    for (const sd of specialDoorsRef.current) {
+    // --- İç özel kapı / bağlantı kapısı geçişi ---
+    for (const sd of innerPortalsRef.current) {
       const { face, j } = decodeWallId(sd.anchorId, config)
 
       // Hedef odanın boyutlarını bul (spawn pozisyonu için)
@@ -323,8 +332,11 @@ export function Player() {
         teleporting.current = true
         const fromRoomId = useStore.getState().currentRoomId
         loadRoom(sd.targetRoomId, sd.targetRoomName).then(() => {
-          const { specialDoors: tDoors, outerSpecialDoors: tOuterDoors } = useStore.getState()
-          const returnDoor = [...tDoors, ...tOuterDoors].find(d => d.targetRoomId === fromRoomId)
+          const st = useStore.getState()
+          const returnDoor = [
+            ...st.specialDoors, ...st.outerSpecialDoors, ...st.outerSpecialDoors2,
+            ...st.roomLinks, ...st.outerRoomLinks, ...st.outerRoomLinks2,
+          ].find(d => d.targetRoomId === fromRoomId)
           if (returnDoor) {
             const { face: rf, j: rj } = decodeWallId(returnDoor.anchorId, targetConfig)
             const rx = targetConfig.gx / 2
@@ -358,7 +370,7 @@ export function Player() {
       [nx, nz] = applyRingCollision(prev, nx, nz, hiddenOuter2SetRef.current, OUTER2_CONFIG, OUTER2_OFFSET)
     }
 
-    // --- Bahçe duvarı özel kapı geçişi (her iki halka) ---
+    // --- Bahçe duvarı özel kapı / bağlantı kapısı geçişi (her iki halka) ---
     // Verilen halkanın özel kapılarından biri geçildiyse teleport başlatır; true dönerse çık.
     const tryOuterTeleport = (doors, config, offset) => {
       for (const sd of doors) {
@@ -394,8 +406,10 @@ export function Player() {
           const fromRoomId = useStore.getState().currentRoomId
           loadRoom(sd.targetRoomId, sd.targetRoomName).then(() => {
             const st = useStore.getState()
-            const returnDoor = [...st.specialDoors, ...st.outerSpecialDoors, ...st.outerSpecialDoors2]
-              .find(d => d.targetRoomId === fromRoomId)
+            const returnDoor = [
+              ...st.specialDoors, ...st.outerSpecialDoors, ...st.outerSpecialDoors2,
+              ...st.roomLinks, ...st.outerRoomLinks, ...st.outerRoomLinks2,
+            ].find(d => d.targetRoomId === fromRoomId)
             if (returnDoor) {
               const { face: rf, j: rj } = decodeWallId(returnDoor.anchorId, targetConfig)
               const rx = targetConfig.gx / 2
@@ -422,8 +436,8 @@ export function Player() {
       return false
     }
 
-    if (tryOuterTeleport(outerSpecialDoorsRef.current,  OUTER_CONFIG,  OUTER_OFFSET))  return
-    if (tryOuterTeleport(outerSpecial2DoorsRef.current, OUTER2_CONFIG, OUTER2_OFFSET)) return
+    if (tryOuterTeleport(outerPortalsRef.current,  OUTER_CONFIG,  OUTER_OFFSET))  return
+    if (tryOuterTeleport(outer2PortalsRef.current, OUTER2_CONFIG, OUTER2_OFFSET)) return
 
     nx = Math.max(-FAR_LIMIT, Math.min(FAR_LIMIT, nx))
     nz = Math.max(-FAR_LIMIT, Math.min(FAR_LIMIT, nz))
