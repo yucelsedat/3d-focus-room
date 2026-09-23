@@ -2944,7 +2944,7 @@ function LoadingMesh({ width, height }) {
   )
 }
 
-export function MediaOverlay({ id, type, url, width, height, position, rotation, content }) {
+export function MediaOverlay({ id, type, url, width, height, position, rotation, content, syncGroupId, syncCount }) {
   const isVideo    = type === 'video'
   const isYoutube  = type === 'youtube'
   const isMarkdown = type === 'markdown'
@@ -2987,7 +2987,7 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
         ) : isSlide ? (
           <SlideMesh url={url} width={width} height={height} />
         ) : isCanvas ? (
-          <CanvasMesh id={id} content={content} width={width} height={height} />
+          <CanvasMesh id={id} content={content} width={width} height={height} syncGroupId={syncGroupId} syncCount={syncCount} />
         ) : isMarkdown ? (
           <MarkdownMesh id={id} content={content} width={width} height={height} />
         ) : isYoutube ? (

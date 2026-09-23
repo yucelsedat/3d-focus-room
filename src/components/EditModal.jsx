@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { marked } from 'marked'
 import { useStore } from '../store/useStore'
 import { useSpeechToText } from '../hooks/useSpeechToText'
+import { loadRoom } from '../utils/loadRoom'
 
 const micPulseStyle = `@keyframes micPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`
 
@@ -53,7 +54,8 @@ export function EditModal() {
   const [editingContent, setEditingContent] = useState('')
   const [copiedId, setCopiedId] = useState(null)
   const [pastePreview, setPastePreview] = useState(null)
-  const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label, mode: 'copy' | 'cut' }
+  const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label, mode: 'copy' | 'cut' | 'sync' }
+  const [syncGroupView, setSyncGroupView] = useState(null) // { id, members } — açık senkron grup listesi
   const [sessionModel, setSessionModel]   = useState('claude-fable-5')
   const [sessionEffort, setSessionEffort] = useState('normal')
   const [sessionPermMode, setSessionPermMode] = useState('bypassPermissions')
@@ -220,16 +222,22 @@ export function EditModal() {
           tileId: selectedTile.id,
           position: JSON.stringify(selectedTile.position),
           rotation: JSON.stringify(selectedTile.rotation),
+          // Kes → 'move': kaynak senkronsa bağ korunur, değilse sunucu normal kopya gibi davranır
+          mode: clonedMedia.mode === 'cut' ? 'move' : clonedMedia.mode === 'sync' ? 'sync' : 'copy',
         }),
       })
-      const d = await r.json()
+      const { source, ...d } = await r.json()
       if (!r.ok) throw new Error(d.error || 'Yapıştırılamadı')
       addMedia(d)
+      // Sync-kopya: kaynak artık senkron (aynı odadaysa border/sayı hemen güncellensin)
+      if (source) useStore.getState().updateMedia(source)
       // Kes modunda: klon başarılı olunca kaynağı sil (taşıma)
       if (clonedMedia.mode === 'cut') {
-        await fetch(`/api/media/${clonedMedia.id}`, { method: 'DELETE' })
+        const del = await fetch(`/api/media/${clonedMedia.id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({}))
         removeMedia(clonedMedia.id)
+        applySyncSiblings(del.siblings)
       }
+      if (clonedMedia.mode === 'sync') applySyncSiblings(await fetchSyncSiblings(d))
       setClonedMedia(null)
       closeModal()
     } catch (err) {
@@ -716,11 +724,65 @@ export function EditModal() {
     }
   }
 
+  // Aynı odadaki senkron kardeşlerin syncCount/syncGroupId'sini store'a yansıt (store'da olmayanlar no-op)
+  const applySyncSiblings = (list) => list?.forEach(m => useStore.getState().updateMedia(m))
+
+  // Yapıştırma sonrası: aynı odadaki grup üyelerinin sayısını tazele
+  const fetchSyncSiblings = async (media) => {
+    if (!media?.syncGroupId) return []
+    const all = await fetch('/api/media').then(r => r.json()).catch(() => [])
+    return all.filter(m => m.syncGroupId === media.syncGroupId)
+  }
+
+  const handleUnsync = async (id) => {
+    try {
+      const r = await fetch(`/api/media/${id}/unsync`, { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Sunucu hatası')
+      useStore.getState().updateMedia(d.media)
+      applySyncSiblings(d.siblings)
+      setSyncGroupView(null)
+    } catch (err) {
+      alert('Senkron kaldırılamadı: ' + err.message)
+    }
+  }
+
+  const handleUnsyncAll = async (m) => {
+    if (!confirm(`Bu senkron grubun ${m.syncCount || ''} kopyasının tümü bağımsız hale gelecek. Emin misin?`)) return
+    try {
+      const r = await fetch(`/api/media/${m.id}/unsync-all`, { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Sunucu hatası')
+      applySyncSiblings(d.members)
+      setSyncGroupView(null)
+    } catch (err) {
+      alert('Grup dağıtılamadı: ' + err.message)
+    }
+  }
+
+  const toggleSyncGroup = async (id) => {
+    if (syncGroupView?.id === id) return setSyncGroupView(null)
+    try {
+      const d = await fetch(`/api/media/${id}/sync-group`).then(r => r.json())
+      setSyncGroupView({ id, members: d.members || [] })
+    } catch {
+      setSyncGroupView(null)
+    }
+  }
+
+  const goToRoom = (roomId, roomName) => {
+    closeModal()
+    document.querySelector('canvas')?.requestPointerLock()
+    loadRoom(roomId, roomName).catch(err => console.error('[EditModal] loadRoom error:', err))
+  }
+
   const handleDelete = async (id) => {
     try {
       const r = await fetch(`/api/media/${id}`, { method: 'DELETE' })
       if (!r.ok) throw new Error('Sunucu hatası')
+      const d = await r.json().catch(() => ({}))
       removeMedia(id)
+      applySyncSiblings(d.siblings)
     } catch (err) {
       console.error(err)
       alert('Silme hatası!')
@@ -834,14 +896,14 @@ export function EditModal() {
         {!loopEditMode && clonedMedia && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', margin: '0 0 8px 0', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 8 }}>
             <span style={{ fontSize: 13, color: '#93c5fd', flex: 1 }}>
-              <b>{clonedMedia.label}</b> {clonedMedia.mode === 'cut' ? 'kesildi — bu duvara taşı' : 'kopyalandı — bu duvara yapıştır'}
+              <b>{clonedMedia.label}</b> {clonedMedia.mode === 'cut' ? 'kesildi — bu duvara taşı' : clonedMedia.mode === 'sync' ? 'senkron kopyalandı — bu duvara senkron yapıştır' : 'kopyalandı — bu duvara yapıştır'}
             </span>
             <button
               style={{ padding: '5px 12px', background: '#2563eb', border: 'none', borderRadius: 6, color: '#fff', fontSize: 13, cursor: 'pointer', fontWeight: 600 }}
               onClick={handlePaste}
               disabled={loading}
             >
-              {clonedMedia.mode === 'cut' ? 'Taşı' : 'Yapıştır'}
+              {clonedMedia.mode === 'cut' ? 'Taşı' : clonedMedia.mode === 'sync' ? 'Senkron Yapıştır' : 'Yapıştır'}
             </button>
             <button
               style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: 16, cursor: 'pointer', padding: '0 4px' }}
@@ -991,6 +1053,20 @@ export function EditModal() {
                           >
                             {isActiveCut ? '✓ Kesildi' : '✂ Kes'}
                           </button>
+                          {m.type === 'canvas' && (() => {
+                            const isActiveSync = clonedMedia?.id === m.id && clonedMedia?.mode === 'sync'
+                            return (
+                              <button
+                                style={{ ...s.deleteBtn, background: isActiveSync ? 'rgba(239,68,68,0.15)' : 'none', border: `1px solid ${isActiveSync ? '#ef4444' : '#333'}`, color: isActiveSync ? '#ef4444' : '#888' }}
+                                title="Senkron kopya: yapıştırılan canvas bununla ortak içerik kullanır"
+                                onClick={() => {
+                                  setClonedMedia(isActiveSync ? null : { id: m.id, type: m.type, label: mediaTypeLabel[m.type] || m.type, mode: 'sync' })
+                                }}
+                              >
+                                {isActiveSync ? '✓ Sync-Kopyalandı' : '⇄ Sync-Kopyala'}
+                              </button>
+                            )
+                          })()}
                         </>
                       )
                     })()}
@@ -999,6 +1075,43 @@ export function EditModal() {
                     </button>
                   </div>
                 </div>
+
+                {/* Senkron canvas: grup bilgisi, listesi ve bağı çözme */}
+                {m.type === 'canvas' && m.syncGroupId && (
+                  <div style={{ margin: '6px 0 2px', padding: '8px 10px', border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.06)', borderRadius: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, color: '#fca5a5', fontWeight: 800, letterSpacing: 1, flex: 1 }}>
+                        SENKRON · {m.syncCount || '?'} kopya
+                      </span>
+                      <button style={{ ...s.deleteBtn, border: '1px solid #333', color: '#bbb' }} onClick={() => toggleSyncGroup(m.id)}>
+                        {syncGroupView?.id === m.id ? 'Listeyi Gizle' : 'Kopyaları Göster'}
+                      </button>
+                      <button style={{ ...s.deleteBtn, border: '1px solid #7f1d1d', color: '#fca5a5' }} title="Yalnızca bu kopyayı gruptan ayır" onClick={() => handleUnsync(m.id)}>
+                        Senkronu Kaldır
+                      </button>
+                      <button style={{ ...s.deleteBtn, border: '1px solid #7f1d1d', color: '#fca5a5' }} title="Gruptaki tüm kopyaları bağımsız yap" onClick={() => handleUnsyncAll(m)}>
+                        Grubu Dağıt
+                      </button>
+                    </div>
+                    {syncGroupView?.id === m.id && (
+                      <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {syncGroupView.members.map(mem => (
+                          <li key={mem.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#ccc' }}>
+                            <span style={{ flex: 1 }}>
+                              {mem.roomName}
+                              {mem.isSelf ? ' — bu kopya' : mem.isCurrentRoom ? ' — bu oda' : ''}
+                            </span>
+                            {!mem.isCurrentRoom && (
+                              <button style={{ ...s.deleteBtn, border: '1px solid #333', color: '#93c5fd' }} onClick={() => goToRoom(mem.roomId, mem.roomName)}>
+                                Odaya Git →
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
                 {/* Inline markdown editör */}
                 {editingId === m.id && (
