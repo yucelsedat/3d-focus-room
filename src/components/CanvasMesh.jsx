@@ -595,7 +595,18 @@ function getBounds(ids, items) {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
 }
 
-export default function CanvasMesh({ id, content, width, height }) {
+// Senkron canvas işareti: öğelerin üstünde kırmızı çerçeve + üye sayısı rozeti
+const SYNC_RED = '#ef4444'
+function SyncMark({ count }) {
+  return (<>
+    <div style={{ position: 'absolute', inset: 0, zIndex: 4, border: `8px solid ${SYNC_RED}`, borderRadius: 4, pointerEvents: 'none' }} />
+    <div style={{ position: 'absolute', top: 18, right: 18, zIndex: 5, padding: '6px 16px', borderRadius: 999, background: SYNC_RED, color: '#fff', fontSize: 26, fontWeight: 800, letterSpacing: 2, fontFamily: '"JetBrains Mono", monospace', pointerEvents: 'none' }}>
+      SYNC{count ? ` · ${count}` : ''}
+    </div>
+  </>)
+}
+
+export default function CanvasMesh({ id, content, width, height, syncGroupId, syncCount }) {
   const updateMedia = useStore(s => s.updateMedia)
   const rooms       = useStore(s => s.rooms)
   const setRooms    = useStore(s => s.setRooms)
@@ -604,7 +615,7 @@ export default function CanvasMesh({ id, content, width, height }) {
 
   const [items, setItems]                   = useState(() =>
     (initial.items || []).map(it => it.type === 'text' && it.h ? { ...it, h: Math.min(it.h, a4MaxH(it.w)) } : it))
-  const [bg]                                = useState(initial.bg || '#1a1a2e')
+  const [bg, setBg]                         = useState(initial.bg || '#1a1a2e')
   const [isEditMode, setIsEditMode]         = useState(false)
   const [isFullscreen, setIsFullscreen]     = useState(false)
   const isFullscreenRef                     = useRef(false)
@@ -661,6 +672,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   // ── refs ──────────────────────────────────────────────────────────────────
   const containerRef    = useRef(null)
   const saveTimerRef    = useRef(null)
+  const lastSentContentRef = useRef(content) // kendi kaydımızın yankısını senkron güncellemeden ayırmak için
   const itemsRef        = useRef(items)
   const bgRef           = useRef(bg)
   const panRef          = useRef(pan)
@@ -691,6 +703,7 @@ export default function CanvasMesh({ id, content, width, height }) {
   }, [])
 
   useEffect(() => { itemsRef.current = items }, [items])
+  useEffect(() => { bgRef.current = bg }, [bg])
 
   // Müzik ses havuzu temizliği: <audio> artık React ağacında olmadığından, silinen bir
   // müzik kartının sesi kendiliğinden durmaz. Bu canvas'ın daha önce sahip olup artık
@@ -730,20 +743,40 @@ export default function CanvasMesh({ id, content, width, height }) {
 
   // ── Persistence ───────────────────────────────────────────────────────────
   const doSave = useCallback(async (ci, cb) => {
+    const body = JSON.stringify({ items: ci, bg: cb, pan: panRef.current, zoom: zoomRef.current })
+    lastSentContentRef.current = body
     try {
       const r = await fetch(`/api/media/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: JSON.stringify({ items: ci, bg: cb, pan: panRef.current, zoom: zoomRef.current }) }),
+        body: JSON.stringify({ content: body }),
       })
-      if (r.ok) updateMedia(await r.json())
+      if (r.ok) {
+        const { syncSiblings, ...media } = await r.json()
+        updateMedia(media)
+        // Senkron kardeşler: aynı odadakiler store'da güncellenir, diğer odalar yüklenince DB'den okur
+        syncSiblings?.forEach(updateMedia)
+      }
     } catch {}
   }, [id, updateMedia])
 
   const scheduleSave = useCallback((ni, nb) => {
     clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => doSave(ni, nb), 600)
+    saveTimerRef.current = setTimeout(() => { saveTimerRef.current = null; doSave(ni, nb) }, 600)
   }, [doSave])
+
+  // Senkron kopyadan gelen içerik: edit modunda değilken items/bg'yi prop'tan yeniden oku.
+  // Pan/zoom her kopyanın kendi görünümüdür, dokunulmaz. Kendi kaydımızın yankısı atlanır.
+  useEffect(() => {
+    if (isEditModeRef.current || content === lastSentContentRef.current) return
+    lastSentContentRef.current = content
+    let parsed
+    try { parsed = JSON.parse(content) } catch { return }
+    const next = (parsed.items || []).map(it => it.type === 'text' && it.h ? { ...it, h: Math.min(it.h, a4MaxH(it.w)) } : it)
+    itemsRef.current = next
+    setItems(next)
+    if (parsed.bg) setBg(parsed.bg)
+  }, [content])
 
   useEffect(() => { scheduleSaveRef.current = scheduleSave }, [scheduleSave])
 
@@ -1128,6 +1161,11 @@ export default function CanvasMesh({ id, content, width, height }) {
   }, [isEditMode])
 
   const exitEdit = () => {
+    // Bekleyen kaydı hemen gönder: senkron kopyalar (başka oda dahil) eski içeriği görmesin
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current); saveTimerRef.current = null
+      doSave(itemsRef.current, bgRef.current)
+    }
     setIsEditMode(false); setIsFullscreen(false); setReaderItemId(null); setReaderEditing(false); setEditingItemId(null)
     setViewerItemId(null)
     setShowUrlInput(false); setUrlValue('')
@@ -1824,6 +1862,7 @@ export default function CanvasMesh({ id, content, width, height }) {
           <div style={{ width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: 'pointer', userSelect: 'none' }}
             onMouseDown={enterEdit} onClick={stop}
           >
+            {syncGroupId && <SyncMark count={syncCount} />}
             <div style={{ position: 'absolute', top: 0, left: 0, width: 8000, height: 8000, transform: surfTx, transformOrigin: '0 0' }}>
               {items.filter(it => it.type !== 'arrow').map(item =>
                 item.type === 'image' ? (
@@ -1887,7 +1926,7 @@ export default function CanvasMesh({ id, content, width, height }) {
           <div ref={containerRef}
             style={isFullscreen
               ? { position: 'fixed', inset: 0, width: '100vw', height: '100vh', backgroundColor: '#07070d', overflow: 'hidden', pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', zIndex: 2147483600 }
-              : { width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', boxShadow: '0 0 0 3px rgba(96,165,250,0.45)' }}
+              : { width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', boxShadow: syncGroupId ? `0 0 0 4px ${SYNC_RED}` : '0 0 0 3px rgba(96,165,250,0.45)' }}
             onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onClick={stop}
           >
             {/* ── Toolbar ───────────────────────────────────────────────── */}

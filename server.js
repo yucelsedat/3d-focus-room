@@ -33,7 +33,63 @@ function serializeMedia(m) {
     height: m.height,
     position: [m.posX, m.posY, m.posZ],
     rotation: [m.rotX, m.rotY, m.rotZ, m.rotOrder],
+    syncGroupId: m.syncGroupId ?? undefined,
+    syncCount: m.syncCount ?? undefined,
   };
+}
+
+// ─── Sync-kopya (senkron canvas) yardımcıları ─────────────────────────────────
+// Aynı syncGroupId'yi taşıyan canvas satırları ortak items/bg paylaşır; varlık
+// dosyaları (resim/mp3/pdf) grup içinde ortaktır, bu yüzden silme referans bilinçlidir.
+
+// Satırlara grup üye sayısını (syncCount) ekleyip serialize eder — tek groupBy sorgusu.
+async function serializeWithSync(rows) {
+  const gids = [...new Set(rows.map(m => m.syncGroupId).filter(Boolean))];
+  const counts = new Map();
+  if (gids.length) {
+    const grouped = await prisma.media.groupBy({ by: ['syncGroupId'], where: { syncGroupId: { in: gids } }, _count: { _all: true } });
+    for (const g of grouped) counts.set(g.syncGroupId, g._count._all);
+  }
+  return rows.map(m => serializeMedia({ ...m, syncCount: m.syncGroupId ? counts.get(m.syncGroupId) : undefined }));
+}
+
+// Tek üyesi kalan grupların bağını çöz. groupIds verilmezse tüm gruplar taranır.
+// Dönüş: grubu çözülen (artık senkronsuz) satırların id'leri.
+async function cleanupSyncGroups(groupIds) {
+  const where = groupIds ? { syncGroupId: { in: groupIds.filter(Boolean) } } : { syncGroupId: { not: null } };
+  if (groupIds && !groupIds.filter(Boolean).length) return [];
+  const grouped = await prisma.media.groupBy({ by: ['syncGroupId'], where, _count: { _all: true } });
+  const lonely = grouped.filter(g => g._count._all < 2).map(g => g.syncGroupId);
+  if (!lonely.length) return [];
+  const rows = await prisma.media.findMany({ where: { syncGroupId: { in: lonely } }, select: { id: true } });
+  await prisma.media.updateMany({ where: { syncGroupId: { in: lonely } }, data: { syncGroupId: null } });
+  return rows.map(r => r.id);
+}
+
+// /uploads altındaki dosyayı yeni adla çoğalt (clone / senkron ayırma).
+function copyUpload(srcUrl) {
+  if (!srcUrl?.startsWith('/uploads/')) return srcUrl;
+  const srcPath = path.join(__dirname, 'public', srcUrl);
+  if (!fs.existsSync(srcPath)) return srcUrl;
+  const ext = path.extname(srcUrl);
+  const dir = path.dirname(srcUrl);
+  const newFilename = `clone-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+  fs.copyFileSync(srcPath, path.join(__dirname, 'public', dir, newFilename));
+  return `${dir}/${newFilename}`;
+}
+
+// Canvas içeriğindeki öğe dosyalarını (url + coverUrl) çoğaltıp yeni içerik döndür.
+function copyCanvasAssets(content) {
+  if (!content) return content;
+  try {
+    const parsed = JSON.parse(content);
+    const items = (parsed.items || []).map(ci => ({
+      ...ci,
+      ...(ci.url ? { url: copyUpload(ci.url) } : {}),
+      ...(ci.coverUrl ? { coverUrl: copyUpload(ci.coverUrl) } : {}),
+    }));
+    return JSON.stringify({ ...parsed, items });
+  } catch { return content; }
 }
 
 // ─── Express setup ────────────────────────────────────────────────────────────
@@ -402,6 +458,7 @@ app.delete('/api/rooms/:id', async (req, res) => {
     }
     stopRoomBackgroundWork(allMediaIds);
     await prisma.room.deleteMany({ where: { id: { in: allIds } } });
+    await cleanupSyncGroups();   // silinen odalardaki senkron üyeler → tek kalan grupları çöz
     for (const roomId of allIds) removeRoomDiskArtifacts(roomId);
     if (allIds.includes(activeRoomId)) activeRoomId = 'default';
     return res.json({ ok: true, deletedIds: allIds });
@@ -419,6 +476,7 @@ app.delete('/api/rooms/:id', async (req, res) => {
   stopRoomBackgroundWork(mediaItems.map(m => m.id));
   // onDelete: Cascade removes media/doors/floor automatically
   await prisma.room.delete({ where: { id } });
+  await cleanupSyncGroups();   // silinen odadaki senkron üyeler → tek kalan grupları çöz
   removeRoomDiskArtifacts(id);
 
   if (activeRoomId === id) activeRoomId = 'default';
@@ -822,7 +880,7 @@ app.delete('/api/room-links/:id', async (req, res) => {
 
 app.get('/api/media', async (req, res) => {
   const media = await prisma.media.findMany({ where: { roomId: activeRoomId } });
-  res.json(media.map(serializeMedia));
+  res.json(await serializeWithSync(media));
 });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
@@ -1185,6 +1243,23 @@ app.put('/api/media/:id', async (req, res) => {
   if (content !== undefined) data.content = content;
 
   const updated = await prisma.media.update({ where: { id }, data });
+
+  // Senkron canvas: items/bg'yi gruptaki diğer satırlara yay; her kopyanın kendi pan/zoom'u korunur.
+  let syncSiblings = [];
+  if (updated.type === 'canvas' && updated.syncGroupId && content !== undefined) {
+    let incoming = null;
+    try { incoming = JSON.parse(content) } catch {}
+    if (incoming) {
+      const siblings = await prisma.media.findMany({ where: { syncGroupId: updated.syncGroupId, id: { not: id } } });
+      syncSiblings = await prisma.$transaction(siblings.map(sib => {
+        let own = {};
+        try { own = JSON.parse(sib.content || '{}') } catch {}
+        const merged = { ...own, items: incoming.items || [], bg: incoming.bg };
+        return prisma.media.update({ where: { id: sib.id }, data: { content: JSON.stringify(merged) } });
+      }));
+    }
+  }
+
   // Defter içeriği tek doğruluk kaynağıdır: içerik her değiştiğinde raw/'u saved=true
   // bloklardan bildirimsel yeniden izdüşür. Deterministik ad → aynı blok tekrar
   // kaydedilse bile duplicate olmaz; silinen/düzenlenip saved'i düşen bloklar raw'dan da
@@ -1193,41 +1268,36 @@ app.put('/api/media/:id', async (req, res) => {
     try { await syncRoomDefterRaw(updated.roomId) }
     catch (e) { console.error('[defter] raw sync failed:', e.message) }
   }
-  res.json(serializeMedia(updated));
+  const [out, ...sibs] = await serializeWithSync([updated, ...syncSiblings]);
+  res.json(sibs.length ? { ...out, syncSiblings: sibs } : out);
 });
 
 app.post('/api/media/clone', async (req, res) => {
   const { sourceId, tileId, position, rotation } = req.body;
+  // mode: 'copy' (bağımsız derin kopya) | 'sync' (senkron kopya, yalnız canvas) | 'move' (kesilen senkron canvas, bağ korunur)
+  const mode = ['sync', 'move'].includes(req.body.mode) ? req.body.mode : 'copy';
   let source;
   try {
     source = await prisma.media.findUnique({ where: { id: BigInt(sourceId) } });
   } catch { return res.status(400).json({ error: 'Geçersiz ID' }); }
   if (!source) return res.status(404).json({ error: 'Kaynak bulunamadı' });
+  if (mode === 'sync' && source.type !== 'canvas') return res.status(400).json({ error: 'Sync-kopya yalnızca canvas için' });
 
   const pos = JSON.parse(position);
   const rot = JSON.parse(rotation);
 
-  const copyUpload = (srcUrl) => {
-    if (!srcUrl?.startsWith('/uploads/')) return srcUrl;
-    const srcPath = path.join(__dirname, 'public', srcUrl);
-    if (!fs.existsSync(srcPath)) return srcUrl;
-    const ext = path.extname(srcUrl);
-    const dir = path.dirname(srcUrl);
-    const newFilename = `clone-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
-    fs.copyFileSync(srcPath, path.join(__dirname, 'public', dir, newFilename));
-    return `${dir}/${newFilename}`;
-  };
-
-  const newUrl = copyUpload(source.url);
-
-  let newContent = source.content;
-  if (source.type === 'canvas' && source.content) {
-    try {
-      const parsed = JSON.parse(source.content);
-      const items = (parsed.items || []).map(ci => ({ ...ci, url: copyUpload(ci.url) }));
-      newContent = JSON.stringify({ ...parsed, items });
-    } catch {}
+  // Senkron kopya ve senkron taşıma dosyaları paylaşır; normal kopya çoğaltır.
+  const shareAssets = mode === 'sync' || (mode === 'move' && source.syncGroupId);
+  let syncGroupId = null;
+  if (mode === 'sync') {
+    syncGroupId = source.syncGroupId || randomUUID();
+    if (!source.syncGroupId) source = await prisma.media.update({ where: { id: source.id }, data: { syncGroupId } });
+  } else if (mode === 'move') {
+    syncGroupId = source.syncGroupId;
   }
+
+  const newUrl = shareAssets ? source.url : copyUpload(source.url);
+  const newContent = shareAssets || source.type !== 'canvas' ? source.content : copyCanvasAssets(source.content);
 
   const media = await prisma.media.create({
     data: {
@@ -1242,9 +1312,63 @@ app.post('/api/media/clone', async (req, res) => {
       posX: parseFloat(pos[0]), posY: parseFloat(pos[1]), posZ: parseFloat(pos[2]),
       rotX: parseFloat(rot[0]), rotY: parseFloat(rot[1]), rotZ: parseFloat(rot[2]),
       rotOrder: String(rot[3] || 'XYZ'),
+      syncGroupId,
     },
   });
-  res.json(serializeMedia(media));
+  const [out, src] = await serializeWithSync([media, source]);
+  res.json(mode === 'sync' ? { ...out, source: src } : out);
+});
+
+// Senkron grubun üyeleri (oda adlarıyla) — grup listesi / odaya git için.
+app.get('/api/media/:id/sync-group', async (req, res) => {
+  let id;
+  try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
+  const item = await prisma.media.findUnique({ where: { id } });
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  if (!item.syncGroupId) return res.json({ members: [] });
+  const members = await prisma.media.findMany({
+    where: { syncGroupId: item.syncGroupId },
+    include: { room: { select: { name: true } } },
+    orderBy: { id: 'asc' },
+  });
+  res.json({
+    members: members.map(m => ({
+      id: Number(m.id), roomId: m.roomId, roomName: m.room?.name ?? m.roomId,
+      isCurrentRoom: m.roomId === activeRoomId, isSelf: m.id === id,
+    })),
+  });
+});
+
+// Tek kopyayı gruptan ayır: dosyalarını çoğaltır (artık paylaşmaz), bağı çözer.
+app.post('/api/media/:id/unsync', async (req, res) => {
+  let id;
+  try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
+  const item = await prisma.media.findUnique({ where: { id } });
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  const gid = item.syncGroupId;
+  if (!gid) return res.json({ media: serializeMedia(item), siblings: [] });
+
+  const updated = await prisma.media.update({ where: { id }, data: { syncGroupId: null, content: copyCanvasAssets(item.content) } });
+  // Grubu çözülen son üye de (artık senkronsuz) kardeş olarak döner → istemci border'ını düşürür.
+  const cleared = await cleanupSyncGroups([gid]);
+  const siblings = await prisma.media.findMany({ where: { OR: [{ syncGroupId: gid }, { id: { in: cleared } }] } });
+  res.json({ media: serializeMedia(updated), siblings: await serializeWithSync(siblings) });
+});
+
+// Grubu tümden dağıt: ilk üye dosyaları korur, diğerleri kendi kopyalarını alır; hepsi bağımsızlaşır.
+app.post('/api/media/:id/unsync-all', async (req, res) => {
+  let id;
+  try { id = BigInt(req.params.id) } catch { return res.status(400).json({ error: 'Geçersiz ID' }) }
+  const item = await prisma.media.findUnique({ where: { id } });
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  if (!item.syncGroupId) return res.json({ members: [serializeMedia(item)] });
+
+  const members = await prisma.media.findMany({ where: { syncGroupId: item.syncGroupId }, orderBy: { id: 'asc' } });
+  const updated = await prisma.$transaction(members.map((m, i) => prisma.media.update({
+    where: { id: m.id },
+    data: { syncGroupId: null, ...(i === 0 ? {} : { content: copyCanvasAssets(m.content) }) },
+  })));
+  res.json({ members: updated.map(serializeMedia) });
 });
 
 app.delete('/api/media/:id', async (req, res) => {
@@ -1253,7 +1377,12 @@ app.delete('/api/media/:id', async (req, res) => {
   const item = await prisma.media.findUnique({ where: { id } });
   if (!item) return res.status(404).json({ error: 'Not found' });
 
-  if (item.type === 'canvas' && item.content) {
+  // Senkron canvas'ın dosyaları kardeşleriyle ortak: grupta başka üye kaldıysa dokunma.
+  const sharedWithSiblings = item.syncGroupId
+    ? (await prisma.media.count({ where: { syncGroupId: item.syncGroupId, id: { not: id } } })) > 0
+    : false;
+
+  if (item.type === 'canvas' && item.content && !sharedWithSiblings) {
     try {
       const parsed = JSON.parse(item.content);
       (parsed.items || []).forEach(ci => {
@@ -1290,7 +1419,15 @@ app.delete('/api/media/:id', async (req, res) => {
   }
 
   await prisma.media.delete({ where: { id } });
-  res.json({ success: true });
+
+  // Kalan kardeşleri güncel syncCount'la döndür (tek kalan üyenin bağı çözülür).
+  let siblings = [];
+  if (item.syncGroupId) {
+    const cleared = await cleanupSyncGroups([item.syncGroupId]);
+    const rows = await prisma.media.findMany({ where: { OR: [{ syncGroupId: item.syncGroupId }, { id: { in: cleared } }] } });
+    siblings = await serializeWithSync(rows);
+  }
+  res.json({ success: true, siblings });
 });
 
 // YouTube oEmbed meta proxy (title + thumbnail — avoids browser CORS)

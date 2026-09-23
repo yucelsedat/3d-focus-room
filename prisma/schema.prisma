@@ -44,7 +44,11 @@ model Media {
   rotY     Float
   rotZ     Float
   rotOrder String  @default("XYZ")
+  // Sync-kopya grubu: aynı değeri taşıyan canvas'lar içerik (items/bg) paylaşır
+  syncGroupId String?
   room     Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([syncGroupId])
 }
 
 model Door {
