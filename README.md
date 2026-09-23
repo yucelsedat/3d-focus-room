@@ -29,6 +29,13 @@ npx prisma migrate deploy   # or: npx prisma migrate dev
 npx prisma generate
 ```
 
+**Updating an existing install:** after every `git pull` that adds a folder under `prisma/migrations/`, run the same two commands before restarting the backend. `migrate deploy` applies only the pending migrations to your existing `prisma/dev.db` (your data is kept), and `generate` refreshes the Prisma client for the new schema. Skipping this makes the backend fail on missing columns — e.g. `Media.syncGroupId`, used by synced canvas copies.
+```bash
+npx prisma migrate status   # lists pending migrations, if any
+npx prisma migrate deploy
+npx prisma generate
+```
+
 ### 3. Start Both Client and Backend Servers
 We use a concurrent script to watch and boot up both Vite's frontend and the Express backend simultaneously.
 ```bash
