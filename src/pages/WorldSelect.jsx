@@ -33,7 +33,8 @@ function roomTagNames(ctx) {
 // ─── Tag Filter Bar ───────────────────────────────────────────────────────────
 function TagFilterBar({
   tags, activeTags, matchAll, totalCount, visibleCount, allCount,
-  onToggle, onClear, onMatchAllChange,
+  untagged, untaggedCount, showUntagged,
+  onToggle, onClear, onMatchAllChange, onUntaggedToggle,
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -41,7 +42,7 @@ function TagFilterBar({
     ? tags
     : tags.filter((t, i) => i < TAG_PREVIEW_LIMIT || activeTags.includes(t.name))
   const hiddenCount = tags.length - shownTags.length
-  const hasSelection = activeTags.length > 0
+  const hasSelection = activeTags.length > 0 || untagged
 
   return (
     <div className="tag-filter">
@@ -56,6 +57,21 @@ function TagFilterBar({
             Tümü
             <span className="tag-chip__count">{allCount}</span>
           </button>
+
+          {showUntagged && (
+            <button
+              type="button"
+              className="tag-chip tag-chip--untagged"
+              aria-pressed={untagged}
+              data-empty={!untagged && untaggedCount === 0}
+              title="Hiç etiketi olmayan odalar"
+              onClick={onUntaggedToggle}
+            >
+              {untagged && <span className="tag-chip__check" aria-hidden="true">✓</span>}
+              Etiketsiz
+              <span className="tag-chip__count">{untaggedCount}</span>
+            </button>
+          )}
 
           <span className="tag-filter__divider" aria-hidden="true" />
 
@@ -776,13 +792,25 @@ export default function WorldSelect() {
     )
   }, [contexts, searchQuery])
 
+  // "Etiketsiz" filtresi (?untagged=1) etiket seçimiyle birlikte kullanılmaz: biri seçilince diğeri temizlenir.
+  const hasUntaggedRooms = useMemo(
+    () => contexts.some(ctx => roomTagNames(ctx).length === 0),
+    [contexts]
+  )
+  const untagged = hasUntaggedRooms && searchParams.get('untagged') === '1'
+  const untaggedCount = useMemo(
+    () => searchedRooms.filter(ctx => roomTagNames(ctx).length === 0).length,
+    [searchedRooms]
+  )
+
   const visibleRooms = useMemo(() => {
+    if (untagged) return searchedRooms.filter(ctx => roomTagNames(ctx).length === 0)
     if (activeTags.length === 0) return searchedRooms
     return searchedRooms.filter(ctx => {
       const names = new Set(roomTagNames(ctx))
       return matchAll ? activeTags.every(t => names.has(t)) : activeTags.some(t => names.has(t))
     })
-  }, [searchedRooms, activeTags, matchAll])
+  }, [searchedRooms, activeTags, matchAll, untagged])
 
   // Her etiketin sayısı = o etiket seçilirse listede kaç oda olacağı.
   // "Hepsi" modunda mevcut sonuç daraltılır; "Herhangi biri" modunda aramaya uyan
@@ -796,15 +824,21 @@ export default function WorldSelect() {
     return allTags.map(t => ({ name: t.name, count: counts.get(t.name) ?? 0 }))
   }, [allTags, activeTags, matchAll, searchedRooms, visibleRooms])
 
-  function writeFilter(tags, nextMatchAll) {
+  function writeFilter(tags, nextMatchAll, nextUntagged = false) {
     setSearchParams(prev => {
       const next = new URLSearchParams(prev)
       next.delete('tag')
       next.delete('match')
+      next.delete('untagged')
+      if (nextUntagged) { next.set('untagged', '1'); return next }
       tags.forEach(t => next.append('tag', t))
       if (tags.length > 0 && nextMatchAll) next.set('match', 'all')
       return next
     }, { replace: true })
+  }
+
+  function toggleUntagged() {
+    writeFilter([], false, !untagged)
   }
 
   function toggleTag(name) {
@@ -940,9 +974,13 @@ export default function WorldSelect() {
           allCount={searchedRooms.length}
           totalCount={contexts.length}
           visibleCount={visibleRooms.length}
+          untagged={untagged}
+          untaggedCount={untaggedCount}
+          showUntagged={hasUntaggedRooms}
           onToggle={toggleTag}
           onClear={clearTags}
           onMatchAllChange={value => writeFilter(activeTags, value)}
+          onUntaggedToggle={toggleUntagged}
         />
       )}
 
@@ -977,9 +1015,11 @@ export default function WorldSelect() {
             <div style={{ fontSize: 13, marginBottom: 20 }}>
               {activeTags.length > 0
                 ? 'Seçili etiketleri azaltmayı ya da eşleşme modunu değiştirmeyi dene.'
-                : 'Farklı bir arama terimi dene.'}
+                : untagged
+                  ? 'Aramaya uyan etiketsiz oda yok.'
+                  : 'Farklı bir arama terimi dene.'}
             </div>
-            {activeTags.length > 0 && (
+            {(activeTags.length > 0 || untagged) && (
               <button type="button" className="tag-filter__clear" onClick={clearTags}>
                 Etiket filtresini temizle
               </button>
@@ -1066,6 +1106,7 @@ export default function WorldSelect() {
           background: rgba(255,149,0,0.12); border-color: rgba(255,149,0,0.55); color: #ffb54d;
         }
         .tag-chip--all[aria-pressed="true"] { background: #f2f2f2; border-color: #f2f2f2; color: #0a0a0a; }
+        .tag-chip--untagged { border-style: dashed; font-style: italic; }
         .tag-chip[data-empty="true"] { opacity: 0.38; }
         .tag-chip[data-empty="true"]:hover { opacity: 0.7; }
         .tag-chip__check { font-size: 11px; font-weight: 800; }
