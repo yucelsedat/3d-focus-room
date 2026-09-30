@@ -315,9 +315,14 @@ export function RoomModal() {
   }
 
   const currentRoom = rooms.find(r => r.id === currentRoomId)
+  // Aktif odanın ataları child olarak bağlanamaz (ağaçta döngü oluşur); sunucu da reddeder.
+  const ancestorIds = new Set()
+  for (let p = currentRoom?.parent?.id; p && !ancestorIds.has(p); p = rooms.find(r => r.id === p)?.parent?.id) {
+    ancestorIds.add(p)
+  }
   const linkableRooms = linkType === 'parent'
     ? rooms.filter(r => r.id === currentRoom?.parent?.id)
-    : rooms.filter(r => r.id !== currentRoomId)
+    : rooms.filter(r => r.id !== currentRoomId && !ancestorIds.has(r.id))
   const filteredLinkRooms = linkableRooms.filter(r =>
     r.name.toLowerCase().includes(linkSearch.toLowerCase())
   )

@@ -730,6 +730,14 @@ app.post('/api/special-doors/link', async (req, res) => {
   const { anchorId, targetRoomId, linkType, layer = 0 } = req.body;
   if (!targetRoomId) return res.status(400).json({ error: 'Oda seçilmedi' });
 
+  // Child bağlamak hedefin parent'ını aktif oda yapar: hedef aktif odanın kendisi
+  // ya da atasıysa ağaçta döngü oluşur ve odalar ana sayfadan kaybolur.
+  if (linkType === 'child') {
+    if (targetRoomId === activeRoomId) return res.status(400).json({ error: "Oda kendisinin child'ı olamaz" });
+    const ancestors = await getAllAncestors(activeRoomId);
+    if (ancestors.has(targetRoomId)) return res.status(400).json({ error: "Dairesel ilişki: seçilen oda bu odanın atası, child olarak bağlanamaz" });
+  }
+
   await prisma.$transaction(async (tx) => {
     if (linkType === 'child') {
       await tx.room.update({ where: { id: targetRoomId }, data: { parentId: activeRoomId } });
