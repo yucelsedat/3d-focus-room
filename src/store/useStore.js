@@ -11,6 +11,7 @@ export const useStore = create((set) => ({
   worldMedia: [],
   roomModal: false,
   menuModal: true,    // uygulama açılışında menü göster
+  notebookOpen: false, // B — oda defteri (kök odaya ait not/todo sayfası)
   hiddenWalls: [],        // iç duvar gizli tile ID'leri
   hiddenOuterWalls: [],   // 1. bahçe duvarı (±30) gizli tile ID'leri
   hiddenOuterWalls2: [],  // 2. bahçe duvarı (±40) gizli tile ID'leri
@@ -40,6 +41,9 @@ export const useStore = create((set) => ({
 
   openMenuModal:  () => set({ menuModal: true }),
   closeMenuModal: () => set({ menuModal: false }),
+
+  openNotebook:  () => set({ notebookOpen: true }),
+  closeNotebook: () => set({ notebookOpen: false }),
 
   setHoveredTile: (tile) => set({ hoveredTile: tile }),
   setWorldMedia: (media) => set({ worldMedia: media }),
