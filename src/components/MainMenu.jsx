@@ -274,6 +274,8 @@ export function MainMenu() {
                   ['Space ×2', 'Hızlı düşüş'],
                   ['E', "Tile'a medya ekle / düzenle"],
                   ['R', 'Kapı aç/kapat · Zemin değiştir'],
+                  ['F', "Baktığın zemin tile'ına ışınlan"],
+                  ['B', 'Oda defterini aç (X / Esc ile kapat)'],
                   ['Q', 'Bu menüyü aç / kapat'],
                   ['C', 'Zoom (basılı tut)'],
                 ].map(([key, desc]) => (

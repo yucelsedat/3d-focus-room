@@ -132,7 +132,7 @@ export function Player() {
       (pressed) => {
         if (!pressed || isTyping() || teleporting.current) return
         const st = useStore.getState()
-        if (st.activeModal || st.roomModal || st.menuModal || st.canvasEditorOpen) return
+        if (st.activeModal || st.roomModal || st.menuModal || st.canvasEditorOpen || st.notebookOpen) return
         // hoveredTile'ı duvarlar da yazıyor (id: 'wall-*' / 'outer-*').
         // Sadece zemin tile'ları sayısal id taşır — yalnızca onlara ışınlanılır.
         const tile = st.hoveredTile
@@ -143,7 +143,8 @@ export function Player() {
   }, [subscribeKeys])
 
   useFrame((state, delta) => {
-    if (teleporting.current || isTyping()) {
+    // Defter açıkken sahne donuk: WASD/Space/Shift defterin tuşlarıyla çakışmasın
+    if (teleporting.current || isTyping() || useStore.getState().notebookOpen) {
       // Oda geçişi sırasında bekleyen hedef artık geçersiz (başka odanın tile'ı)
       if (teleporting.current) pendingTeleport.current = null
       return
@@ -446,5 +447,8 @@ export function Player() {
     state.camera.position.z = nz
   })
 
+  // Defter BİLEREK burada yok: enabled=false kontrolleri ayırır ve pointerlockchange
+  // dinleyicisi de kalkar → kapanışta yeniden kilitlenince isLocked false kalır, fare
+  // kamerayı döndürmez (imleç "donar"). Kilit açıkken fare zaten bir şey yapmıyor.
   return <PointerLockControls enabled={!activeModal && !canvasEditorOpen} />
 }

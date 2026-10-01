@@ -11,9 +11,13 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "migrate": "node prisma/migrate.js",
-    "db:studio": "npx prisma studio"
+    "db:studio": "npx prisma studio",
+    "verify:notebook": "node scripts/verify-notebook-model.mjs"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@prisma/adapter-better-sqlite3": "^7.7.0",
     "@prisma/client": "^7.7.0",
     "@react-three/drei": "^10.7.7",
@@ -32,6 +36,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.15.1",
+    "roughjs": "^4.6.6",
     "three": "^0.183.2",
     "turndown": "^7.2.4",
     "zustand": "^5.0.12"

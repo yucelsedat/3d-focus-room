@@ -109,3 +109,15 @@ model RoomLink {
 
   @@unique([roomId, anchorId, layer])
 }
+
+// Oda Defteri: B tuşuyla açılan defter, en üstteki kök odaya aittir ve o ağacın
+// tüm alt odalarında ortaktır. content = JSON doküman (src/utils/notebookModel.js).
+// Bilinçli olarak FK yok: kök cascade'siz silinince satırlar çocuk ağaçlara
+// dağıtılır (server.js reconcileNotebooks) — cascade defteri anında silerdi.
+// rev: iyimser eşzamanlılık (PUT eski rev ile gelirse 409).
+model RoomNotebook {
+  rootRoomId String   @id
+  content    String
+  rev        Int      @default(0)
+  updatedAt  DateTime @updatedAt
+}

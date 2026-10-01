@@ -1,21 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
 import { loadRoom } from '../utils/loadRoom'
-
-function getAncestors(rooms, currentId) {
-  const ancestors = []
-  let id = currentId
-  const visited = new Set()
-  while (true) {
-    if (visited.has(id)) break
-    visited.add(id)
-    const room = rooms.find(r => r.id === id)
-    if (!room?.parent) break
-    ancestors.unshift({ id: room.parent.id, name: room.parent.name })
-    id = room.parent.id
-  }
-  return ancestors
-}
+import { getAncestors } from '../utils/roomTree'
 
 function NavLink({ id, name, onClick }) {
   const [hov, setHov] = useState(false)
@@ -77,6 +63,7 @@ export function RoomNavHUD() {
   const activeModal = useStore(s => s.activeModal)
   const menuModal = useStore(s => s.menuModal)
   const roomModal = useStore(s => s.roomModal)
+  const notebookOpen = useStore(s => s.notebookOpen)
 
   useEffect(() => {
     const onChange = () => setLocked(!!document.pointerLockElement)
@@ -98,7 +85,7 @@ export function RoomNavHUD() {
     loadRoom(id, name).catch(err => console.error('[RoomNavHUD] loadRoom error:', err))
   }
 
-  const visible = !locked && !activeModal && !menuModal && !roomModal
+  const visible = !locked && !activeModal && !menuModal && !roomModal && !notebookOpen
 
   return (
     <div style={{
