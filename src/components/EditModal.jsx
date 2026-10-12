@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { marked } from 'marked'
+import React, { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import { useSpeechToText } from '../hooks/useSpeechToText'
 import { loadRoom } from '../utils/loadRoom'
+import { pasteRichTextAsMarkdown } from '../utils/richTextToMarkdown'
+import { mdTileWidth, MD_PX_PER_UNIT, MD_COL_PX_W } from '../utils/markdownRender'
 
 const micPulseStyle = `@keyframes micPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`
 
@@ -73,7 +74,6 @@ export function EditModal() {
     { id: 'repo-insight', label: 'repo-insight — neden böyle tasarlanmış (best-effort)', installed: true },
   ])
   const [slideFilePath, setSlideFilePath] = useState('')
-  const mdMeasureRef   = useRef(null)
   const speech1 = useSpeechToText()
   const speech2 = useSpeechToText()
 
@@ -100,11 +100,9 @@ export function EditModal() {
       .catch(() => {})
   }, [activeTab])
 
-  // Markdown: h=5 sabit, içerik ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*2
-  const MD_COL_PX_W = 600   // her sütunun CSS piksel genişliği
-  const MD_COL_PX_H = 1000  // her sütunun CSS piksel yüksekliği (5 birim × 200 px/birim)
-  const MD_H = 5             // sabit 3D yükseklik
-  const MD_COL_W = MD_COL_PX_W / (MD_COL_PX_H / MD_H) // = 600/200 = 3 birim/sütun
+  // Markdown: h=5 sabit, içerik tile ile aynı düzende ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*3
+  const MD_H = 5                                  // sabit 3D yükseklik
+  const MD_COL_W = MD_COL_PX_W / MD_PX_PER_UNIT   // = 600/200 = 3 birim/sütun
 
   useEffect(() => {
     if (activeTab !== 'markdown') return
@@ -113,12 +111,8 @@ export function EditModal() {
       setWidth(MD_COL_W)
       return
     }
-    const el = mdMeasureRef.current
-    if (!el) return
-    el.innerHTML = marked(markdownContent)
-    const nCols = Math.max(1, Math.ceil(el.scrollHeight / MD_COL_PX_H))
     setHeight(MD_H)
-    setWidth(Number((nCols * MD_COL_W).toFixed(2)))
+    setWidth(mdTileWidth(markdownContent, MD_H))
   }, [markdownContent, activeTab])
 
   const tileMedia = selectedTile ? worldMedia.filter(
@@ -791,10 +785,13 @@ export function EditModal() {
 
   const handleSaveContent = async (id) => {
     try {
+      // Metin uzadıysa tile da kolon kolon genişler (yalnız büyür; elle verilen genişlik küçültülmez)
+      const m = worldMedia.find(x => x.id === id)
+      const neededW = m?.type === 'markdown' ? mdTileWidth(editingContent, m.height) : 0
       const r = await fetch(`/api/media/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: editingContent })
+        body: JSON.stringify(neededW > m?.width ? { content: editingContent, width: neededW } : { content: editingContent })
       })
       if (!r.ok) throw new Error('Güncelleme başarısız')
       const updated = await r.json()
@@ -871,16 +868,6 @@ export function EditModal() {
 
   return (
     <div style={s.overlay}>
-      {/* Gizli ölçüm div'i — markdown'un gerçek yüksekliğini hesaplamak için */}
-      <div
-        ref={mdMeasureRef}
-        style={{
-          position: 'fixed', visibility: 'hidden', pointerEvents: 'none',
-          width: '600px', fontSize: '16px', lineHeight: '1.6',
-          fontFamily: 'system-ui, sans-serif', padding: '24px',
-          boxSizing: 'border-box', top: '-9999px', left: '-9999px',
-        }}
-      />
       <div style={s.modal}>
 
         {/* Header */}
@@ -1132,6 +1119,7 @@ export function EditModal() {
                       style={{ ...s.inlineTextarea, borderColor: speech2.listening ? '#ef4444' : undefined }}
                       value={editingContent}
                       onChange={e => setEditingContent(e.target.value)}
+                      onPaste={pasteRichTextAsMarkdown}
                       autoFocus
                     />
                     <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
@@ -1646,6 +1634,7 @@ export function EditModal() {
                 style={{ ...s.input, height: '260px', resize: 'vertical', fontFamily: 'monospace', fontSize: '13px', lineHeight: '1.6', borderColor: speech1.listening ? '#ef4444' : undefined }}
                 value={markdownContent}
                 onChange={e => setMarkdownContent(e.target.value)}
+                onPaste={pasteRichTextAsMarkdown}
                 placeholder={'# Başlık\n\nMetin buraya...\n\n**kalın**, _italik_'}
               />
             </div>

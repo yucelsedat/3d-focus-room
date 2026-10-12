@@ -2,68 +2,18 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
-import { Marked } from 'marked'
-import hljs from 'highlight.js'
-import 'highlight.js/styles/github-dark-dimmed.css'
-import DOMPurify from 'dompurify'
 import { useStore } from '../store/useStore'
 import { loadRoom } from '../utils/loadRoom'
 import { clipboardToMarkdown, pasteRichTextAsMarkdown, missingLinksMessage } from '../utils/richTextToMarkdown'
+import { parseMd } from '../utils/markdownRender'
 
-// Canvas-only marked instance — does NOT affect the global marked used in MarkdownMesh
-const canvasMarked = new Marked({
-  renderer: {
-    code({ text, lang }) {
-      const language = lang && hljs.getLanguage(lang) ? lang : null
-      const highlighted = language
-        ? hljs.highlight(text, { language }).value
-        : hljs.highlightAuto(text).value
-      const detectedLang = language || 'code'
-      return `<div class="cvmd-code-block"><span class="cvmd-code-lang">${detectedLang}</span><pre><code class="hljs language-${detectedLang}">${highlighted}</code></pre></div>`
-    }
-  }
-})
-
-const parseMd = (content) => DOMPurify.sanitize(canvasMarked.parse(content))
-
-// Inject markdown styles once
-if (typeof document !== 'undefined' && !document.getElementById('cvmd-styles')) {
+// Canvas'a özgü stiller (ortak .cvmd markdown stilleri utils/markdownRender'da)
+if (typeof document !== 'undefined' && !document.getElementById('cv-styles')) {
   const s = document.createElement('style')
-  s.id = 'cvmd-styles'
+  s.id = 'cv-styles'
   s.textContent = `
     /* Metin kutusu: kutunun kendisi wheel/scroll alır, içerik tıklanabilir değil */
     .cv-textbox * { pointer-events: none; }
-    .cvmd { line-height: 1.5; }
-    .cvmd > *:first-child { margin-top: 0 !important; }
-    .cvmd > *:last-child  { margin-bottom: 0 !important; }
-    .cvmd h1 { font-size: 1.75em; font-weight: 800; margin: 0 0 0.3em; }
-    .cvmd h2 { font-size: 1.4em;  font-weight: 700; margin: 0.6em 0 0.25em; }
-    .cvmd h3 { font-size: 1.15em; font-weight: 600; margin: 0.5em 0 0.2em; }
-    .cvmd p  { margin: 0 0 0.55em; }
-    .cvmd ul, .cvmd ol { margin: 0 0 0.55em; padding-left: 1.5em; }
-    .cvmd li { margin-bottom: 0.2em; }
-    .cvmd code { background: rgba(255,255,255,0.1); padding: 0.1em 0.38em; border-radius: 4px; font-family: 'Fira Code', 'Cascadia Code', monospace; font-size: 0.85em; }
-    .cvmd blockquote { border-left: 3px solid rgba(255,255,255,0.25); padding-left: 0.75em; margin: 0 0 0.55em 0; opacity: 0.8; }
-    .cvmd a  { color: #60a5fa; text-decoration: underline; }
-    .cvmd hr { border: none; border-top: 1px solid rgba(255,255,255,0.18); margin: 0.6em 0; }
-    .cvmd strong { font-weight: 700; }
-    .cvmd em     { font-style: italic; }
-    .cvmd table  { border-collapse: collapse; margin-bottom: 0.55em; width: 100%; }
-    .cvmd th, .cvmd td { border: 1px solid rgba(255,255,255,0.18); padding: 0.25em 0.55em; }
-    .cvmd th { background: rgba(255,255,255,0.08); font-weight: 600; }
-
-    /* code block wrapper */
-    .cvmd-code-block { position: relative; margin: 0 0 0.6em; border-radius: 8px; overflow: hidden; background: #1c2128; }
-    .cvmd-code-lang {
-      display: inline-block; position: absolute; top: 0; right: 0;
-      padding: 0.18em 0.7em; font-size: 0.72em; font-family: monospace;
-      background: rgba(255,255,255,0.07); color: rgba(148,163,184,0.7);
-      border-bottom-left-radius: 6px; letter-spacing: 0.05em; text-transform: lowercase;
-      pointer-events: none;
-    }
-    .cvmd-code-block pre { margin: 0; padding: 0.9em 1em 0.8em; overflow-x: auto; background: transparent !important; border-radius: 0; }
-    .cvmd-code-block pre code.hljs { padding: 0; font-size: 0.88em; font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Menlo, monospace; line-height: 1.55; background: transparent !important; }
-    .cvmd pre code { font-family: 'Fira Code', 'Cascadia Code', monospace; }
     @keyframes cvMusicMarquee { 0% { transform: translateX(0) } 100% { transform: translateX(-50%) } }
   `
   document.head.appendChild(s)
