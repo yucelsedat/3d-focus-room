@@ -256,7 +256,8 @@ const canvasUpload = multer({
   ...MULTER_UTF8,
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
-    filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${diskName(file.originalname)}`),
+    // Toplu paste'te aynı isimli dosyalar aynı ms'de gelebilir → rastgele ek ile çakışmayı önle
+    filename: (req, file, cb) => cb(null, `canvas-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${diskName(file.originalname)}`),
   }),
 });
 

@@ -92,6 +92,23 @@ const getImageNaturalSize = (url) => new Promise((resolve) => {
   img.src = url
 })
 
+// Toplu resim paste'i: ölçüleri ({w,h}) ~kare bir ızgaraya satır satır dizer, bloğu pt'ye ortalar.
+// Her satır kendi içinde yatay, her resim satır yüksekliğinde dikey ortalanır. Sol-üst köşeleri döndürür.
+const IMG_GRID_GAP = 24
+const layoutImageGrid = (sizes, pt) => {
+  const cols = Math.ceil(Math.sqrt(sizes.length))
+  const rows = []
+  for (let i = 0; i < sizes.length; i += cols) rows.push(sizes.slice(i, i + cols))
+  const rowH = rows.map(r => Math.max(...r.map(s => s.h)))
+  let y = pt.y - (rowH.reduce((a, b) => a + b, 0) + IMG_GRID_GAP * (rows.length - 1)) / 2
+  return rows.flatMap((r, ri) => {
+    let x = pt.x - (r.reduce((a, s) => a + s.w, 0) + IMG_GRID_GAP * (r.length - 1)) / 2
+    const out = r.map(s => { const p = { x: Math.round(x), y: Math.round(y + (rowH[ri] - s.h) / 2) }; x += s.w + IMG_GRID_GAP; return p })
+    y += rowH[ri] + IMG_GRID_GAP
+    return out
+  })
+}
+
 const stopEvt = (e) => { e.stopPropagation(); e.nativeEvent?.stopImmediatePropagation() }
 
 // Metin kutusunun render yüksekliğini ölç (A4 sınırında durur). Yapıştırılan uzun
@@ -954,25 +971,39 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
       return
     }
 
-    const imgClip = clipItems.find(it => it.type.startsWith('image/'))
-    if (imgClip) {
-      const file = imgClip.getAsFile(); if (!file) return
+    // Resim dosyaları — toplu paste destekli: FileList (dosya yöneticisinden çoklu kopya) yoksa items'tan topla.
+    // Dosya yöneticisi bazı uzantılarda (avif, heic…) MIME tipini boş bırakır → uzantıya da bak.
+    const isImg = (f) => f.type.startsWith('image/') || /\.(jpe?g|png|gif|webp|svg|bmp|avif)$/i.test(f.name || '')
+    let imgFiles = [...(e.clipboardData?.files || [])].filter(isImg)
+    if (!imgFiles.length) imgFiles = clipItems.filter(it => it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean)
+    if (imgFiles.length) {
       setPasteMsg('loading')
-      const form = new FormData(); form.append('file', file)
+      let msg = 'err'
       try {
-        const r = await fetch(`/api/canvas/${id}/upload`, { method: 'POST', body: form })
-        const d = await r.json()
-        if (r.ok) {
-          const pt   = centerSurface()
-          const dims = await getImageNaturalSize(d.url)
-          const iw   = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
-          const ih   = dims ? Math.round(iw * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
-          const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: iw, h: ih, url: d.url }
-          setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
-          setPasteMsg('ok')
-        } else setPasteMsg('err')
-      } catch { setPasteMsg('err') }
-      setTimeout(() => setPasteMsg(''), 1800)
+        // Hepsini paralel yükle + ölç, sıra korunur (Promise.all giriş sırasını korur)
+        const sized = await Promise.all(imgFiles.map(async (file) => {
+          try {
+            const form = new FormData(); form.append('file', file)
+            const r = await fetch(`/api/canvas/${id}/upload`, { method: 'POST', body: form })
+            if (!r.ok) return null
+            const d = await r.json()
+            const dims = await getImageNaturalSize(d.url)
+            const w = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
+            const h = dims ? Math.round(w * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
+            return { url: d.url, w, h }
+          } catch { return null }   // tek dosyanın hatası diğerlerini düşürmesin
+        }))
+        const ok = sized.filter(Boolean)
+        if (ok.length) {
+          const pos = layoutImageGrid(ok, centerSurface())
+          const newItems = ok.map((s, i) => ({ id: crypto.randomUUID(), type: 'image', x: pos[i].x, y: pos[i].y, w: s.w, h: s.h, url: s.url }))
+          setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
+          setSelectedIds(new Set(newItems.map(n => n.id)))   // grup halinde taşınabilsin
+          msg = ok.length < imgFiles.length ? `partial:${ok.length}/${imgFiles.length}` : 'ok'
+        }
+      } catch {}
+      setPasteMsg(msg)
+      setTimeout(() => setPasteMsg(''), msg.startsWith('partial:') ? 4000 : 1800)
       return
     }
 
@@ -2080,8 +2111,8 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
               {pasteMsg && (
                 <span title={pasteMsg.startsWith('md-nolink:') ? 'ChatGPT gibi uygulamalarda metni seçmek yerine mesajın kopyala butonunu kullanınca linkler adresleriyle gelir' : undefined}
-                  style={{ fontSize: 22, flexShrink: 0, color: pasteMsg.startsWith('md-nolink:') ? '#fbbf24' : pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'cut' || pasteMsg === 'imgcopy' || pasteMsg === 'md') ? '#4ade80' : '#f87171' }}>
-                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'cut' ? '✂ Kesildi' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'md' ? '✓ Markdown olarak yapıştırıldı' : pasteMsg.startsWith('md-nolink:') ? `✓ Markdown olarak yapıştırıldı · ${missingLinksMessage(Number(pasteMsg.split(':')[1]))}` : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
+                  style={{ fontSize: 22, flexShrink: 0, color: (pasteMsg.startsWith('md-nolink:') || pasteMsg.startsWith('partial:')) ? '#fbbf24' : pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'cut' || pasteMsg === 'imgcopy' || pasteMsg === 'md') ? '#4ade80' : '#f87171' }}>
+                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'cut' ? '✂ Kesildi' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'md' ? '✓ Markdown olarak yapıştırıldı' : pasteMsg.startsWith('md-nolink:') ? `✓ Markdown olarak yapıştırıldı · ${missingLinksMessage(Number(pasteMsg.split(':')[1]))}` : pasteMsg.startsWith('partial:') ? `⚠ ${pasteMsg.split(':')[1]} resim yapıştırıldı, kalanı yüklenemedi` : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
                 </span>
               )}
 
