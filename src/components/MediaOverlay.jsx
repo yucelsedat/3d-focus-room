@@ -1,4 +1,4 @@
-import React, { Suspense, Component, useState, useEffect, useRef } from 'react'
+import React, { Suspense, Component, useState, useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import CanvasMesh from './CanvasMesh'
 import HeaderMesh from './HeaderMesh'
@@ -9,6 +9,7 @@ import { marked } from 'marked'
 import { useStore } from '../store/useStore'
 import { useSpeechToText } from '../hooks/useSpeechToText'
 import { clipboardToMarkdown, padForInsertion, pasteRichTextAsMarkdown, showPasteNotice, missingLinksMessage } from '../utils/richTextToMarkdown'
+import { parseMd, fitMdCols, mdTileWidth, MD_PX_PER_UNIT, MD_COL_PX_W } from '../utils/markdownRender'
 
 // Kısa "x önce" göreli zaman (recall göstergesi için)
 function relTime(iso) {
@@ -216,25 +217,6 @@ function SlideMesh({ url, width, height }) {
   )
 }
 
-const MD_PX_PER_UNIT = 200
-const MD_COL_PX_W    = 600
-
-function measureEditCols(content, pxHeight) {
-  const probe = document.createElement('div')
-  probe.style.cssText = [
-    'position:fixed;left:-9999px;top:0',
-    `width:${MD_COL_PX_W}px;height:auto`,
-    'font-family:system-ui,sans-serif;font-size:16px;line-height:1.6',
-    'padding:44px 24px 24px;box-sizing:border-box',
-    'visibility:hidden;pointer-events:none;white-space:pre-wrap',
-  ].join(';')
-  probe.innerText = content
-  document.body.appendChild(probe)
-  const h = probe.scrollHeight
-  document.body.removeChild(probe)
-  return Math.max(1, Math.ceil(h / pxHeight))
-}
-
 function getCaretOffset(el) {
   const sel = window.getSelection()
   if (!sel || !sel.rangeCount) return 0
@@ -290,18 +272,23 @@ function MarkdownMesh({ id, content, width, height }) {
   const nCols       = Math.max(1, Math.round(pxWidth / MD_COL_PX_W))
   const scaleFactor = w * 40 / pxWidth
 
-  const html = marked(content || '').replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
+  // Canvas metin kutusuyla aynı zengin render (hljs kod blokları, tablo, alıntı, DOMPurify)
+  const html = useMemo(() => parseMd(content, { newTabLinks: true }), [content])
+
+  // EDIT: ham metin tile'a sığmıyorsa düzenleme yüzeyi sağa doğru kolon kolon genişler
+  const refitEditCols = () => setEditNCols(fitMdCols(editRef.current, nCols))
 
   // Faz 1: edit moda gir → textContent yaz (corruption yok) + sütun say
   useEffect(() => {
     if (!isEditing || !editRef.current) return
     editRef.current.textContent = content   // textContent: \n → text node, <br> yok
+    // <Html> içeriği ayrı React kökünde sonradan render olur; kolon ölçümü/odak için hemen göster
+    editRef.current.style.display = 'block'
     editRef.current.focus()
-    const needed = measureEditCols(content, pxHeight)
     cursorPlacedRef.current = false
     pendingCursorRef.current = clickPosRef.current
     clickPosRef.current = null
-    setEditNCols(needed)
+    refitEditCols()
   }, [isEditing])
 
   // Faz 2: editNCols DOM'a yansıdı → cursor koy
@@ -323,11 +310,13 @@ function MarkdownMesh({ id, content, width, height }) {
     if (!editRef.current) return
     const current = editRef.current.textContent.trim()  // textContent: mükemmel round-trip
     if (current === content.trim()) return
+    // Metin uzadıysa tile da kolon kolon genişler (yalnız büyür; elle verilen genişlik küçültülmez)
+    const neededW = mdTileWidth(current, h)
     try {
       const r = await fetch(`/api/media/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: current }),
+        body: JSON.stringify(neededW > w ? { content: current, width: neededW } : { content: current }),
       })
       if (r.ok) updateMedia(await r.json())
     } catch (e) {
@@ -352,6 +341,7 @@ function MarkdownMesh({ id, content, width, height }) {
     speech.start(before, (txt) => {
       if (!editRef.current) return
       editRef.current.textContent = txt + afterCursorRef.current
+      refitEditCols()
       // Cursor'ı konuşulan kısmın sonuna taşı
       const textNode = editRef.current.firstChild
       if (textNode?.nodeType === Node.TEXT_NODE) {
@@ -369,6 +359,7 @@ function MarkdownMesh({ id, content, width, height }) {
       e.preventDefault()
       e.stopPropagation()
       insertAtCursor('\n')  // <br>/<div> değil, saf \n text node
+      refitEditCols()
       return
     }
     if (e.key === 'f' || e.key === 'F') {
@@ -391,16 +382,7 @@ function MarkdownMesh({ id, content, width, height }) {
     inset: 0,
     backgroundColor: 'rgba(255,255,255,0.95)',
     borderRadius: '8px',
-    boxSizing: 'border-box',
     overflow: 'hidden',
-    fontFamily: 'system-ui, sans-serif',
-    fontSize: '16px',
-    lineHeight: '1.6',
-    color: '#1a1a1a',
-    columnCount: nCols,
-    columnGap: '0px',
-    columnFill: 'auto',
-    padding: '44px 24px 24px',
     pointerEvents: 'auto',
     cursor: 'text',
   }
@@ -436,7 +418,8 @@ function MarkdownMesh({ id, content, width, height }) {
 
           {/* VIEW: çok sütunlu rendered markdown */}
           <div
-            style={{ ...baseStyle, display: isEditing ? 'none' : 'block', border: '2px solid transparent' }}
+            className="mdtile cvmd cvmd-light"
+            style={{ ...baseStyle, columnCount: nCols, display: isEditing ? 'none' : 'block' }}
             onClick={(e) => {
               if (e.target.closest('a')) return
               e.stopPropagation()
@@ -449,27 +432,32 @@ function MarkdownMesh({ id, content, width, height }) {
           {/* EDIT: çok sütunlu contentEditable, textContent round-trip, pre-wrap \n */}
           <div
             ref={editRef}
+            className="mdtile"
             contentEditable
             suppressContentEditableWarning
             onKeyDown={handleKeyDown}
+            onInput={refitEditCols}
             onPaste={(e) => {
               e.preventDefault()
               e.stopPropagation()
               // Biçimli metin (web, Docs, Word…) → Markdown; biçimsizse eskisi gibi düz metin
               const { text, rich, missingLinks } = clipboardToMarkdown(e.clipboardData)
-              if (!rich) { insertAtCursor(text); return }
+              if (!rich) { insertAtCursor(text); refitEditCols(); return }
               const full  = editRef.current?.textContent ?? ''
               const caret = editRef.current ? getCaretOffset(editRef.current) : full.length
               insertAtCursor(padForInsertion(text, full.slice(0, caret), full.slice(caret)))
+              refitEditCols()
               if (missingLinks) showPasteNotice(missingLinksMessage(missingLinks), editRef.current)
             }}
             style={{
               ...baseStyle,
+              right: 'auto',
+              width: `${editNCols * MD_COL_PX_W}px`,
               columnCount: editNCols,
               display: isEditing ? 'block' : 'none',
               outline: 'none',
               whiteSpace: 'pre-wrap',
-              border: `2px solid ${speech.listening ? '#ef4444' : '#60a5fa'}`,
+              borderColor: speech.listening ? '#ef4444' : '#60a5fa',
             }}
           />
         </div>
