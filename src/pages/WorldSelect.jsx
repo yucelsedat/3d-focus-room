@@ -901,6 +901,26 @@ export default function WorldSelect() {
           <span style={{ fontWeight: 800, fontSize: 18, letterSpacing: 0.5 }}>Focus Room</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <button
+            onClick={() => navigate('/timeline')}
+            title="Ne yaptık, ne planlıyoruz — zaman ekseni"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 14px', borderRadius: 10, background: 'transparent',
+              border: '1px solid #262626', color: '#ddd', fontSize: 14, fontWeight: 700,
+              cursor: 'pointer', letterSpacing: 0.3,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#ff8a1f'; e.currentTarget.style.color = '#fff' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#262626'; e.currentTarget.style.color = '#ddd' }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="2" y1="16" x2="22" y2="16" />
+              <circle cx="7" cy="16" r="2" fill="currentColor" />
+              <circle cx="16" cy="16" r="2" fill="currentColor" />
+              <path d="M7 14V6h6" /><path d="M16 14v-4h4" />
+            </svg>
+            Timeline
+          </button>
           <div style={{ position: 'relative' }}>
             <input
               type="text"

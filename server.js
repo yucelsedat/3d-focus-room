@@ -13,6 +13,7 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 import { sanitizeNotebook, createEmptyDoc, resolveRoot, planNotebookReconcile, NB_LIMITS } from './src/utils/notebookModel.js';
+import { sanitizeTimeline, createEmptyTimeline, sanitizeTimelineName, noteToText, itemAssetUrls, TL_LIMITS } from './src/utils/timelineModel.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename).replace('/src/server', '');
@@ -67,6 +68,17 @@ async function cleanupSyncGroups(groupIds) {
   return rows.map(r => r.id);
 }
 
+// İçerik JSON'undan gelen /uploads yollarını sil. Yol public/uploads dışına
+// çıkıyorsa (../ ile) dokunulmaz: içerik istemciden gelir, güvenilmez.
+const UPLOADS_ROOT = path.join(__dirname, 'public', 'uploads') + path.sep;
+function unlinkUploads(urls) {
+  for (const url of urls) {
+    const fp = path.resolve(path.join(__dirname, 'public', url));
+    if (!fp.startsWith(UPLOADS_ROOT)) continue;
+    try { if (fs.existsSync(fp)) fs.unlinkSync(fp); } catch {}
+  }
+}
+
 // /uploads altındaki dosyayı yeni adla çoğalt (clone / senkron ayırma).
 function copyUpload(srcUrl) {
   if (!srcUrl?.startsWith('/uploads/')) return srcUrl;
@@ -88,6 +100,7 @@ function copyCanvasAssets(content) {
       ...ci,
       ...(ci.url ? { url: copyUpload(ci.url) } : {}),
       ...(ci.coverUrl ? { coverUrl: copyUpload(ci.coverUrl) } : {}),
+      ...(ci.type === 'note' && Array.isArray(ci.images) ? { images: ci.images.map(copyUpload) } : {}),
     }));
     return JSON.stringify({ ...parsed, items });
   } catch { return content; }
@@ -101,6 +114,7 @@ app.use(cors());
 // Oda defteri gövdeleri 100 kB varsayılanını aşabilir. Global parser'dan ÖNCE
 // bağlanmalı: gövde burada okununca global parser isteği atlar (req._body).
 app.use('/api/notebook', express.json({ limit: '2mb' }));
+app.use('/api/timelines', express.json({ limit: '5mb' }));
 app.use(express.json());
 
 // Yüklenen dosyaları (kapak görselleri, medya) statik olarak sun.
@@ -516,6 +530,74 @@ app.get('/api/worlds', async (req, res) => {
     include: roomInclude,
   });
   res.json(worlds.map(serializeRoom));
+});
+
+// ─── Timeline API ─────────────────────────────────────────────────────────────
+// Çoklu, isimli timeline'lar. İçerik saf modelden geçer (sanitizeTimeline);
+// yazma iyimser eşzamanlılıkla: PUT, okunan rev ile gelir, uyuşmazsa 409 +
+// güncel içerik döner (iki sekme birbirinin değişikliğini sessizce ezmesin).
+
+function parseTimeline(raw) {
+  try { return sanitizeTimeline(JSON.parse(raw)); } catch { return null; }
+}
+
+const timelineMeta = (t) => {
+  const doc = parseTimeline(t.content);
+  return {
+    id: t.id, name: t.name, rev: t.rev, createdAt: t.createdAt, updatedAt: t.updatedAt,
+    noteCount: doc ? doc.items.filter(i => i.type === 'note').length : 0,
+  };
+};
+
+app.get('/api/timelines', async (req, res) => {
+  const rows = await prisma.timeline.findMany({ orderBy: { updatedAt: 'desc' } });
+  res.json(rows.map(timelineMeta));
+});
+
+app.post('/api/timelines', async (req, res) => {
+  const name = sanitizeTimelineName(req.body?.name) || 'Yeni timeline';
+  const id = `tl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const t = await prisma.timeline.create({ data: { id, name, content: JSON.stringify(createEmptyTimeline()), rev: 1 } });
+  res.json(timelineMeta(t));
+});
+
+app.get('/api/timelines/:id', async (req, res) => {
+  const t = await prisma.timeline.findUnique({ where: { id: req.params.id } });
+  if (!t) return res.status(404).json({ error: 'Timeline bulunamadı' });
+  res.json({ id: t.id, name: t.name, rev: t.rev, content: parseTimeline(t.content) || createEmptyTimeline() });
+});
+
+app.put('/api/timelines/:id', async (req, res) => {
+  const { id } = req.params;
+  const { content, rev } = req.body ?? {};
+  const clean = sanitizeTimeline(content);
+  if (!clean || !Number.isInteger(rev) || rev < 1) return res.status(400).json({ error: 'Geçersiz timeline verisi' });
+  const json = JSON.stringify(clean);
+  if (json.length > TL_LIMITS.bytes) return res.status(413).json({ error: 'Timeline çok büyük' });
+  const r = await prisma.timeline.updateMany({ where: { id, rev }, data: { content: json, rev: { increment: 1 } } });
+  if (r.count) return res.json({ rev: rev + 1 });
+  const cur = await prisma.timeline.findUnique({ where: { id } });
+  if (!cur) return res.status(404).json({ error: 'Timeline bulunamadı' });
+  res.status(409).json({ code: 'rev-mismatch', error: 'Timeline başka yerde güncellendi', rev: cur.rev, content: parseTimeline(cur.content) });
+});
+
+app.patch('/api/timelines/:id', async (req, res) => {
+  const name = sanitizeTimelineName(req.body?.name);
+  if (!name) return res.status(400).json({ error: 'İsim gerekli' });
+  const r = await prisma.timeline.updateMany({ where: { id: req.params.id }, data: { name } });
+  if (!r.count) return res.status(404).json({ error: 'Timeline bulunamadı' });
+  res.json({ id: req.params.id, name });
+});
+
+// Silinen timeline'ın yüklenmiş dosyaları da silinir (canvas tile silme davranışı).
+// Başka yüzeye yapıştırılan öğelerin dosyaları yapıştırırken çoğaltıldığı için ortak değildir.
+app.delete('/api/timelines/:id', async (req, res) => {
+  const t = await prisma.timeline.findUnique({ where: { id: req.params.id } });
+  if (!t) return res.status(404).json({ error: 'Timeline bulunamadı' });
+  await prisma.timeline.delete({ where: { id: t.id } });
+  const doc = parseTimeline(t.content);
+  if (doc) unlinkUploads(doc.items.flatMap(itemAssetUrls));
+  res.json({ ok: true });
 });
 
 // ─── Room Notebook API (oda defteri) ─────────────────────────────────────────
@@ -1502,12 +1584,7 @@ app.delete('/api/media/:id', async (req, res) => {
   if (item.type === 'canvas' && item.content && !sharedWithSiblings) {
     try {
       const parsed = JSON.parse(item.content);
-      (parsed.items || []).forEach(ci => {
-        if (ci.url?.startsWith('/uploads/')) {
-          const fp = path.join(__dirname, 'public', ci.url);
-          if (fs.existsSync(fp)) fs.unlinkSync(fp);
-        }
-      });
+      unlinkUploads((parsed.items || []).flatMap(itemAssetUrls));
     } catch {}
   }
 
@@ -3183,9 +3260,10 @@ async function extractRoomTexts(roomId) {
     } else if (m.type === 'canvas' && m.content) {
       try {
         const c = JSON.parse(m.content)
-        const texts = (c.items || [])
-          .filter(it => it.type === 'text' && it.content?.trim())
-          .map(it => it.content.trim())
+        const texts = (c.items || []).flatMap(it =>
+          it.type === 'text' && it.content?.trim() ? [it.content.trim()]
+          : it.type === 'note' ? [noteToText(it)].filter(Boolean)
+          : [])
         if (texts.length) docs.push({ id: String(m.id), tileId: m.tileId, kind: 'canvas', text: texts.join('\n\n') })
       } catch {}
     }
