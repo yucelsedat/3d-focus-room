@@ -121,3 +121,16 @@ model RoomNotebook {
   rev        Int      @default(0)
   updatedAt  DateTime @updatedAt
 }
+
+// Timeline: /timeline sayfasındaki ölçekli zaman ekseni üzerinde sonsuz canvas.
+// content = JSON doküman { items, bg, view } (src/utils/timelineModel.js);
+// öğeler canvas tile ile aynı şemayı paylaşır. rev: iyimser eşzamanlılık
+// (PUT eski rev ile gelirse 409) — iki sekmede açık timeline birbirini ezmesin.
+model Timeline {
+  id        String   @id
+  name      String
+  content   String
+  rev       Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

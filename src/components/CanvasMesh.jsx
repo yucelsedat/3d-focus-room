@@ -4,563 +4,21 @@ import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { useStore } from '../store/useStore'
 import { loadRoom } from '../utils/loadRoom'
-import { clipboardToMarkdown, pasteRichTextAsMarkdown, missingLinksMessage } from '../utils/richTextToMarkdown'
+import { missingLinksMessage } from '../utils/richTextToMarkdown'
 import { parseMd } from '../utils/markdownRender'
-
-// Canvas'a özgü stiller (ortak .cvmd markdown stilleri utils/markdownRender'da)
-if (typeof document !== 'undefined' && !document.getElementById('cv-styles')) {
-  const s = document.createElement('style')
-  s.id = 'cv-styles'
-  s.textContent = `
-    /* Metin kutusu: kutunun kendisi wheel/scroll alır, içerik tıklanabilir değil */
-    .cv-textbox * { pointer-events: none; }
-    @keyframes cvMusicMarquee { 0% { transform: translateX(0) } 100% { transform: translateX(-50%) } }
-  `
-  document.head.appendChild(s)
-}
-
-// 8 bounding-box handle descriptors
-const HANDLES = [
-  { h: 'nw', style: { top: -10, left: -10 },                  cursor: 'nw-resize' },
-  { h: 'n',  style: { top: -10, left: 'calc(50% - 10px)' },   cursor: 'n-resize'  },
-  { h: 'ne', style: { top: -10, right: -10 },                  cursor: 'ne-resize' },
-  { h: 'e',  style: { top: 'calc(50% - 10px)', right: -10 },   cursor: 'e-resize'  },
-  { h: 'se', style: { bottom: -10, right: -10 },               cursor: 'se-resize' },
-  { h: 's',  style: { bottom: -10, left: 'calc(50% - 10px)' }, cursor: 's-resize'  },
-  { h: 'sw', style: { bottom: -10, left: -10 },                cursor: 'sw-resize' },
-  { h: 'w',  style: { top: 'calc(50% - 10px)', left: -10 },    cursor: 'w-resize'  },
-]
-
-const MAX_IMG_W = 800
-const getImageNaturalSize = (url) => new Promise((resolve) => {
-  const img = new Image()
-  // render'daki <img referrerPolicy="no-referrer"> ile aynı koşulda test et —
-  // hotlink korumalı görseller Referer'sız isteklerde çoğunlukla açılır
-  img.referrerPolicy = 'no-referrer'
-  img.onload  = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
-  img.onerror = () => resolve(null)
-  img.src = url
-})
-
-// Toplu resim paste'i: ölçüleri ({w,h}) ~kare bir ızgaraya satır satır dizer, bloğu pt'ye ortalar.
-// Her satır kendi içinde yatay, her resim satır yüksekliğinde dikey ortalanır. Sol-üst köşeleri döndürür.
-const IMG_GRID_GAP = 24
-const layoutImageGrid = (sizes, pt) => {
-  const cols = Math.ceil(Math.sqrt(sizes.length))
-  const rows = []
-  for (let i = 0; i < sizes.length; i += cols) rows.push(sizes.slice(i, i + cols))
-  const rowH = rows.map(r => Math.max(...r.map(s => s.h)))
-  let y = pt.y - (rowH.reduce((a, b) => a + b, 0) + IMG_GRID_GAP * (rows.length - 1)) / 2
-  return rows.flatMap((r, ri) => {
-    let x = pt.x - (r.reduce((a, s) => a + s.w, 0) + IMG_GRID_GAP * (r.length - 1)) / 2
-    const out = r.map(s => { const p = { x: Math.round(x), y: Math.round(y + (rowH[ri] - s.h) / 2) }; x += s.w + IMG_GRID_GAP; return p })
-    y += rowH[ri] + IMG_GRID_GAP
-    return out
-  })
-}
-
-const stopEvt = (e) => { e.stopPropagation(); e.nativeEvent?.stopImmediatePropagation() }
-
-// Metin kutusunun render yüksekliğini ölç (A4 sınırında durur). Yapıştırılan uzun
-// markdown için h doğru olsun ki seçim çerçevesi / bounds içerikle örtüşsün.
-const measureTextItemH = (content, w, fontSize, markdown) => {
-  const el = document.createElement('div')
-  if (markdown) el.className = 'cvmd'
-  Object.assign(el.style, {
-    position: 'absolute', left: '-100000px', top: '0', visibility: 'hidden', width: `${w}px`,
-    fontSize: `${fontSize}px`, padding: '14px', boxSizing: 'border-box', wordBreak: 'break-word',
-    whiteSpace: markdown ? 'normal' : 'pre-wrap',
-  })
-  if (markdown) el.innerHTML = parseMd(content)
-  else el.textContent = content
-  document.body.appendChild(el)
-  const h = Math.ceil(el.scrollHeight)
-  el.remove()
-  return Math.min(Math.max(60, h), Math.max(60, Math.round(w * A4_RATIO)))
-}
-
-// ── Image item — yüklenemeyen görsel şeffaf blok yerine gri placeholder gösterir ──
-// Modül seviyesinde: inline tanım her parent render'da yeni komponent tipi üretip
-// remount'a (ve state kaybına) yol açar.
-const ImageItem = ({ item }) => {
-  const [ok, setOk] = useState(true)
-  return ok ? (
-    <img src={item.url} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setOk(false)}
-      style={{ width: '100%', height: '100%', objectFit: 'fill', borderRadius: 4, display: 'block', pointerEvents: 'none' }} />
-  ) : (
-    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#3a3f47', borderRadius: 4, pointerEvents: 'none' }}>
-      <span style={{ fontSize: 64, opacity: 0.35 }}>🖼️</span>
-    </div>
-  )
-}
-
-// ── Generic link card (Open Graph görsel + başlık; görsel yoksa gri) ──────────
-const LinkCard = ({ item, clickable = false }) => {
-  const [imgOk, setImgOk] = useState(true)
-  const hasImg = !!item.thumbUrl && imgOk
-  return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#3a3f47', cursor: clickable ? 'pointer' : 'inherit', boxSizing: 'border-box' }}
-      {...(clickable ? { onMouseDown: stopEvt, onClick: (e) => { stopEvt(e); navigator.clipboard?.writeText(item.url).catch(() => {}) } } : {})}>
-      {hasImg ? (
-        <img src={item.thumbUrl} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImgOk(false)}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
-      ) : (
-        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          <span style={{ fontSize: 64, opacity: 0.35 }}>🔗</span>
-        </div>
-      )}
-      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: hasImg ? 'linear-gradient(transparent, rgba(0,0,0,0.88))' : 'rgba(0,0,0,0.25)', padding: '28px 14px 12px', color: '#fff', pointerEvents: 'none' }}>
-        {/* başlık yoksa URL'nin kendisi — kart asla "boş" görünmesin */}
-        <div style={{ fontSize: 28, lineHeight: 1.35, fontWeight: 600, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>
-          {item.title || item.url}
-        </div>
-        {item.siteName && (
-          <div style={{ fontSize: 20, marginTop: 6, opacity: 0.7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.siteName}</div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── Instagram dikey (mobil) kart — og görsel + başlık; tıklayınca link kopyalanır ────
-const IG_GRADIENT = 'linear-gradient(45deg,#f09433 0%,#e6683c 25%,#dc2743 50%,#cc2366 75%,#bc1888 100%)'
-// Instagram kamera logosu (stroke SVG)
-const InstaGlyph = ({ size = 32, color = '#fff' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="2" y="2" width="20" height="20" rx="5.5" />
-    <circle cx="12" cy="12" r="4.2" />
-    <circle cx="17.5" cy="6.5" r="1.1" fill={color} stroke="none" />
-  </svg>
-)
-// og:title'dan kullanıcı adı + caption ayıkla ("<isim> on Instagram: "caption"")
-const parseInstaTitle = (raw) => {
-  const t = (raw || '').trim()
-  let m = t.match(/^(.+?)\s+on\s+Instagram\s*:?\s*(.*)$/i) || t.match(/^(.+?)\s*,\s*Instagram\s*:?\s*(.*)$/i)
-  if (m) return { user: m[1].trim(), caption: m[2].replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim() }
-  m = t.match(/^(.+?)\s*[•|]\s*Instagram/i)
-  if (m) return { user: m[1].trim(), caption: '' }
-  return { user: 'instagram', caption: t }
-}
-const InstaCard = ({ item, clickable = false }) => {
-  const [imgOk, setImgOk] = useState(true)
-  const hasImg = !!item.thumbUrl && imgOk
-  const { user, caption } = parseInstaTitle(item.title)
-  const IgIcon = ({ d, fill = 'none' }) => (
-    <svg width="32" height="32" viewBox="0 0 24 24" fill={fill} stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{d}</svg>
-  )
-  return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 22, overflow: 'hidden', background: '#0b0b0b', display: 'flex', flexDirection: 'column', cursor: clickable ? 'pointer' : 'inherit', boxSizing: 'border-box', boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.06)' }}
-      {...(clickable ? { onMouseDown: stopEvt, onClick: (e) => { stopEvt(e); navigator.clipboard?.writeText(item.url).catch(() => {}) } } : {})}>
-      {/* Header: gradient avatar halkası + kullanıcı adı + ⋯ */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', flexShrink: 0, pointerEvents: 'none' }}>
-        <div style={{ width: 46, height: 46, borderRadius: '50%', background: IG_GRADIENT, padding: 2.5, boxSizing: 'border-box', flexShrink: 0 }}>
-          <div style={{ width: '100%', height: '100%', borderRadius: '50%', background: '#2a2a2a', border: '2px solid #0b0b0b', boxSizing: 'border-box' }} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0, color: '#fff', fontSize: 24, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user}</div>
-        <div style={{ color: '#fff', fontSize: 30, fontWeight: 800, letterSpacing: 2, lineHeight: 0.4 }}>⋯</div>
-      </div>
-      {/* Media: og:image — TAMAMI görünsün (contain), arkada bulanık dolgu (IG tarzı) */}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0, background: '#000', overflow: 'hidden' }}>
-        {hasImg ? (
-          <>
-            <img src={item.thumbUrl} alt="" aria-hidden="true" draggable={false} referrerPolicy="no-referrer"
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(24px) brightness(0.5)', transform: 'scale(1.15)', pointerEvents: 'none' }} />
-            <img src={item.thumbUrl} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImgOk(false)}
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
-          </>
-        ) : (
-          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: IG_GRADIENT, pointerEvents: 'none' }}>
-            <InstaGlyph size={96} />
-          </div>
-        )}
-        {/* Instagram logo filigranı (üst-sağ) */}
-        <div style={{ position: 'absolute', top: 12, right: 12, pointerEvents: 'none', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,.65))' }}>
-          <InstaGlyph size={34} />
-        </div>
-      </div>
-      {/* Aksiyon ikonları + caption */}
-      <div style={{ flexShrink: 0, padding: '10px 14px 16px', color: '#fff', pointerEvents: 'none' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 8 }}>
-          <IgIcon d={<path d="M12 21s-7.5-4.6-9.6-9C1 9.3 2.6 5.5 6.2 5.5c2 0 3.2 1.1 3.8 2.2h4c.6-1.1 1.8-2.2 3.8-2.2 3.6 0 5.2 3.8 3.8 6.5C19.5 16.4 12 21 12 21z" />} />
-          <IgIcon d={<path d="M21 11.5a8.4 8.4 0 0 1-12.5 7.3L3 21l2.2-5.4A8.4 8.4 0 1 1 21 11.5z" />} />
-          <IgIcon d={<><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4 20-7z" /></>} />
-          <span style={{ marginLeft: 'auto' }}><IgIcon d={<path d="M6 3h12v18l-6-4-6 4V3z" />} /></span>
-        </div>
-        <div style={{ fontSize: 22, lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>
-          <b style={{ fontWeight: 700 }}>{user}</b>{caption ? ' ' + caption : ''}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// Instagram permalink algılama + og:image kapaklı dikey (mobil) item üretimi.
-// Hem Ctrl+V paste hem de URL-input (🖼️ Resim) yolları buradan geçer → tek kaynak.
-const isInstaUrl = (text) => {
-  try { const u = new URL(text); return /(^|\.)instagram\.com$/i.test(u.hostname) && /\/(p|reel|reels|tv)\/[A-Za-z0-9_-]+/i.test(u.pathname) } catch { return false }
-}
-const buildInstaItem = async (url, pt) => {
-  let title = '', thumbUrl = '', siteName = 'instagram'
-  try {
-    const r = await fetch(`/api/link-meta?url=${encodeURIComponent(url)}`)
-    if (r.ok) { const d = await r.json(); title = d.title || ''; thumbUrl = d.image || ''; siteName = d.siteName || siteName }
-  } catch {}
-  // dikey mobil oran (9:15.75)
-  return { id: crypto.randomUUID(), type: 'insta', x: pt.x, y: pt.y, w: 320, h: 560, url, thumbUrl, title, siteName }
-}
-
-// ── Müzik kartı — kapak + kayan başlık + play/pause ───────────────────────────
-// <audio> elementi React ağacına bağlı OLMAMALI: edit ↔ görüntüleme modu geçişinde
-// MusicCard unmount/remount olur; DOM'daki <audio> de kaldırılırsa çalan şarkı kesilir.
-// Bu yüzden ses elementleri module-level bir havuzda (item.id → HTMLAudioElement)
-// tutulur; React unmount'tan bağımsız çalmaya devam eder. Kart yalnızca UI'ı yönetir.
-const audioPool = new Map()
-let currentlyPlayingAudio = null   // aynı anda tek mp3 çalsın
-const getPoolAudio = (id, url) => {
-  let a = audioPool.get(id)
-  if (!a) { a = new Audio(url); a.preload = 'none'; audioPool.set(id, a) }
-  return a
-}
-const disposePoolAudio = (id) => {
-  const a = audioPool.get(id)
-  if (!a) return
-  try { a.pause() } catch {}
-  if (currentlyPlayingAudio === a) currentlyPlayingAudio = null
-  audioPool.delete(id)
-}
-const MusicCard = ({ item, clickable = false }) => {
-  const [coverOk, setCoverOk] = useState(true)
-  // remount'ta (mod geçişi) havuzda çalan ses varsa ikon doğru başlasın
-  const [playing, setPlaying] = useState(() => { const a = audioPool.get(item.id); return a ? !a.paused : false })
-  const [marquee, setMarquee] = useState(false)
-  const titleRef = useRef(null)
-  const hasCover = !!item.coverUrl && coverOk
-
-  useEffect(() => {
-    const el = titleRef.current
-    if (el) setMarquee(el.scrollWidth > el.clientWidth + 2)
-  }, [item.title, item.w])
-
-  // Havuzdaki ses elementine bağlan: mevcut çalma durumunu yansıt ve buton ikonunu
-  // play/pause/ended olaylarıyla senkronla. Mod değişiminde remount olsak da havuzdaki
-  // element aynı kalır → çalma kesilmez, ikon anında doğru duruma oturur.
-  useEffect(() => {
-    const a = getPoolAudio(item.id, item.url)
-    if (a.src !== new URL(item.url, location.href).href) a.src = item.url  // cross-canvas kopyada url değişebilir
-    // Başlangıç ikonu lazy useState init'inden geldi; burada yalnızca olay dinleyicileri bağla.
-    const onPlay  = () => setPlaying(true)
-    const onPause = () => setPlaying(false)
-    const onEnded = () => { setPlaying(false); if (currentlyPlayingAudio === a) currentlyPlayingAudio = null }
-    a.addEventListener('play', onPlay)
-    a.addEventListener('pause', onPause)
-    a.addEventListener('ended', onEnded)
-    return () => {
-      a.removeEventListener('play', onPlay)
-      a.removeEventListener('pause', onPause)
-      a.removeEventListener('ended', onEnded)
-    }
-  }, [item.id, item.url])
-
-  const togglePlay = () => {
-    const a = getPoolAudio(item.id, item.url)
-    if (a.paused) {
-      if (currentlyPlayingAudio && currentlyPlayingAudio !== a) { try { currentlyPlayingAudio.pause() } catch {} }
-      currentlyPlayingAudio = a
-      a.play().catch(() => {})
-    } else a.pause()
-  }
-
-  return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 18, overflow: 'hidden',
-      background: 'linear-gradient(160deg,#1f2937,#0b0f16)', display: 'flex', flexDirection: 'column',
-      padding: 16, boxSizing: 'border-box', cursor: clickable ? 'default' : 'inherit',
-      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)' }}
-      {...(clickable ? { onMouseDown: stopEvt } : {})}>
-      {/* Kapak — üstte, kare */}
-      <div style={{ position: 'relative', width: '100%', aspectRatio: '1 / 1', borderRadius: 12, overflow: 'hidden', flexShrink: 0, background: '#3a3f47' }}>
-        {hasCover ? (
-          <img src={item.coverUrl} alt="" draggable={false} onError={() => setCoverOk(false)}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
-        ) : (
-          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'linear-gradient(135deg,#6d28d9,#db2777)', pointerEvents: 'none' }}>
-            <span style={{ fontSize: 72, opacity: 0.85 }}>🎵</span>
-          </div>
-        )}
-      </div>
-      {/* Şarkı adı (uzunsa kayar) */}
-      <div ref={titleRef} style={{ overflow: 'hidden', whiteSpace: 'nowrap', color: '#fff', fontSize: 26, fontWeight: 700,
-        textAlign: 'center', marginTop: 16, flexShrink: 0 }}>
-        <span style={{ display: 'inline-block', paddingRight: marquee ? 40 : 0,
-          ...(marquee ? { animation: 'cvMusicMarquee 9s linear infinite' } : {}) }}>
-          {item.title}{marquee ? '        ' + item.title : ''}
-        </span>
-      </div>
-      {/* Sanatçı adı */}
-      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 20, fontWeight: 400, textAlign: 'center',
-        marginTop: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0 }}>
-        {item.artist || '—'}
-      </div>
-      {/* Play / pause — en altta ortada */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
-        <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); togglePlay() }}
-          style={{ width: 60, height: 60, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.14)',
-            color: '#fff', fontSize: 26, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          {playing ? '⏸' : '▶'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ── PDF kartı — belge ikonu + dosya adı + sayfa/boyut + "Aç" ─────────────────
-const formatBytes = (n) => {
-  if (!n) return ''
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`
-}
-// Katlanmış köşeli sayfa + kırmızı "PDF" etiketi
-const PdfGlyph = ({ size = 150 }) => (
-  <svg width={size} height={size * 1.22} viewBox="0 0 100 122" fill="none" style={{ display: 'block', filter: 'drop-shadow(0 10px 18px rgba(0,0,0,0.45))' }}>
-    <path d="M8 4h60l28 28v82a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4z" fill="#f8fafc" />
-    <path d="M68 4v24a4 4 0 0 0 4 4h24z" fill="#cbd5e1" />
-    <rect x="18" y="46" width="52" height="4" rx="2" fill="#e2e8f0" />
-    <rect x="18" y="56" width="64" height="4" rx="2" fill="#e2e8f0" />
-    <rect x="18" y="104" width="40" height="4" rx="2" fill="#e2e8f0" />
-    <rect x="-6" y="70" width="80" height="28" rx="5" fill="#dc2626" />
-    <text x="34" y="90.5" textAnchor="middle" fill="#fff" fontSize="19" fontWeight="800" fontFamily="system-ui, sans-serif" letterSpacing="1.5">PDF</text>
-  </svg>
-)
-const PdfCard = ({ item, clickable = false }) => {
-  const open = () => window.open(item.url, '_blank', 'noopener')
-  const meta = [item.pages > 0 ? `${item.pages} sayfa` : '', formatBytes(item.size)].filter(Boolean).join(' · ')
-  return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 18, overflow: 'hidden',
-      background: 'linear-gradient(160deg,#2a1215,#0b0f16 70%)', display: 'flex', flexDirection: 'column',
-      padding: 16, boxSizing: 'border-box', cursor: clickable ? 'default' : 'inherit',
-      boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)' }}
-      {...(clickable ? { onMouseDown: stopEvt } : {})}>
-      {/* İkon alanı */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 12,
-        background: 'radial-gradient(circle at 50% 40%, rgba(220,38,38,0.28), rgba(255,255,255,0.03) 70%)', pointerEvents: 'none' }}>
-        <PdfGlyph />
-      </div>
-      {/* Dosya adı (en fazla 2 satır) */}
-      <div title={item.title} style={{ color: '#fff', fontSize: 24, fontWeight: 800, lineHeight: 1.3, textAlign: 'center', marginTop: 14,
-        overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word', flexShrink: 0 }}>
-        {item.title}
-      </div>
-      {/* Sayfa sayısı · boyut */}
-      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: 18, fontWeight: 400, textAlign: 'center', marginTop: 6,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0, minHeight: 22 }}>
-        {meta || 'PDF belgesi'}
-      </div>
-      {/* Aç — yeni sekmede tarayıcının PDF görüntüleyicisi */}
-      <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); open() }} title="PDF'i yeni sekmede aç"
-        style={{ marginTop: 14, height: 52, borderRadius: 12, border: 'none', background: '#dc2626', color: '#fff',
-          fontSize: 20, fontWeight: 800, cursor: 'pointer', flexShrink: 0, letterSpacing: 0.3 }}>
-        Aç ↗
-      </button>
-    </div>
-  )
-}
-
-// ── Tam ekran resim görüntüleyici (carousel) ─────────────────────────────────
-// Canvas'taki resimler okuma sırasıyla (yukarıdan aşağı, soldan sağa) gezilir.
-const imageOrder = (a, b) => (a.y - b.y) || (a.x - b.x)
-const imageName = (url) => {
-  try { return decodeURIComponent(new URL(url, location.href).pathname.split('/').pop() || '') } catch { return '' }
-}
-const clampZoom = (s) => Math.min(8, Math.max(1, s))
-
-// Tek resmin sahnesi: tekerlekle imleç etrafında yakınlaştırma, yakınken sürükleyerek
-// kaydırma, çift tıkla %250 ↔ sığdır. Resim değişince key ile remount → zoom sıfırlanır.
-const ViewerStage = ({ item, onBackdrop, onZoomChange }) => {
-  const [ok, setOk] = useState(true)
-  const [z, setZ] = useState({ s: 1, x: 0, y: 0 })
-  const [dragging, setDragging] = useState(false)
-  const dragRef = useRef(null)
-  const stageRef = useRef(null)
-
-  useEffect(() => { onZoomChange?.(z.s) }, [z.s]) // eslint-disable-line
-
-  // imlecin sahne merkezine göre konumu
-  const rel = (e) => {
-    const r = stageRef.current.getBoundingClientRect()
-    return { cx: e.clientX - r.left - r.width / 2, cy: e.clientY - r.top - r.height / 2 }
-  }
-  // (cx,cy) altındaki nokta sabit kalacak şekilde yeni ölçeğe geç
-  const zoomAt = (p, s, cx, cy) => {
-    const ns = clampZoom(s)
-    if (ns === 1) return { s: 1, x: 0, y: 0 }
-    const k = ns / p.s
-    return { s: ns, x: cx - (cx - p.x) * k, y: cy - (cy - p.y) * k }
-  }
-
-  const onWheel = (e) => {
-    const { cx, cy } = rel(e)
-    setZ(p => zoomAt(p, p.s * (e.deltaY < 0 ? 1.18 : 1 / 1.18), cx, cy))
-  }
-  const onDoubleClick = (e) => {
-    const { cx, cy } = rel(e)
-    setZ(p => (p.s > 1 ? { s: 1, x: 0, y: 0 } : zoomAt(p, 2.5, cx, cy)))
-  }
-  const onPointerDown = (e) => {
-    if (e.button !== 0) return
-    dragRef.current = { px: e.clientX, py: e.clientY, x: z.x, y: z.y, moved: false }
-    if (z.s > 1) { e.currentTarget.setPointerCapture(e.pointerId); setDragging(true) }
-  }
-  const onPointerMove = (e) => {
-    const d = dragRef.current; if (!d) return
-    const dx = e.clientX - d.px, dy = e.clientY - d.py
-    if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true
-    if (z.s > 1) setZ(p => ({ ...p, x: d.x + dx, y: d.y + dy }))
-  }
-  const onPointerUp = (e) => {
-    const d = dragRef.current; dragRef.current = null
-    setDragging(false)
-    // sığdırılmışken resim dışındaki boşluğa tek tık → kapat
-    if (d && !d.moved && z.s === 1 && e.target === e.currentTarget) onBackdrop?.()
-  }
-
-  return (
-    <div ref={stageRef} onWheel={onWheel} onDoubleClick={onDoubleClick}
-      onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
-      style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-        cursor: z.s > 1 ? (dragging ? 'grabbing' : 'grab') : 'zoom-in', touchAction: 'none' }}>
-      {ok ? (
-        <img src={item.url} alt={imageName(item.url)} draggable={false} referrerPolicy="no-referrer" onError={() => setOk(false)}
-          // kutu sahneyi doldurur, resim içine contain ile sığar (küçük resimler de ekranı doldurur);
-          // yan boşluklar ok butonlarına yer bırakır
-          style={{ width: 'calc(100% - 200px)', height: 'calc(100% - 32px)', objectFit: 'contain', display: 'block',
-            transform: `translate(${z.x}px, ${z.y}px) scale(${z.s})`, transformOrigin: 'center',
-            transition: dragging ? 'none' : 'transform 140ms ease-out', pointerEvents: 'none' }} />
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: 'rgba(226,232,240,0.55)', pointerEvents: 'none' }}>
-          <span style={{ fontSize: 96, opacity: 0.4 }}>🖼️</span>
-          <span style={{ fontSize: 20 }}>Resim yüklenemedi</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-const viewerBtn = { height: 52, minWidth: 52, padding: '0 16px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.16)',
-  background: 'rgba(20,20,32,0.72)', color: '#e2e8f0', fontSize: 22, cursor: 'pointer', lineHeight: 1,
-  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexShrink: 0 }
-
-const ImageViewer = ({ images, index, onStep, onJump, onClose, onDownload }) => {
-  const item = images[index]
-  const [zoomPct, setZoomPct] = useState(100)
-  const stripRef = useRef(null)
-  const many = images.length > 1
-
-  // aktif küçük resmi şeritte görünür tut
-  useEffect(() => {
-    stripRef.current?.querySelector(`[data-idx="${index}"]`)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' })
-  }, [index])
-  // komşu resimleri önceden yükle → geçişte beklemesin
-  useEffect(() => {
-    if (!many) return
-    for (const d of [-1, 1]) {
-      const n = images[(index + d + images.length) % images.length]
-      const im = new Image(); im.referrerPolicy = 'no-referrer'; im.src = n.url
-    }
-  }, [index, images, many])
-
-  const block = (e) => e.stopPropagation()
-  const arrow = (dir) => (
-    <button onMouseDown={block} onPointerDown={block} onDoubleClick={block} onClick={(e) => { block(e); onStep(dir) }}
-      title={dir < 0 ? 'Önceki (A / ←)' : 'Sonraki (D / →)'}
-      style={{ ...viewerBtn, position: 'absolute', top: '50%', [dir < 0 ? 'left' : 'right']: 28, transform: 'translateY(-50%)',
-        width: 72, height: 72, borderRadius: '50%', padding: 0, fontSize: 34, zIndex: 2, backdropFilter: 'blur(8px)' }}>
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points={dir < 0 ? '15 5 8 12 15 19' : '9 5 16 12 9 19'} />
-      </svg>
-    </button>
-  )
-
-  return (
-    <div onMouseDown={block} onMouseUp={block} onMouseMove={block} onClick={block} onDoubleClick={block} onWheel={block}
-      style={{ position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(5,5,12,0.97)', backdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column',
-        pointerEvents: 'auto', userSelect: 'none', color: '#e2e8f0' }}>
-      {/* Üst çubuk: sayaç + dosya adı · kısayol ipucu · zoom / indir / kapat */}
-      <div style={{ height: 84, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 28px', boxSizing: 'border-box' }}>
-        <span style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-          {index + 1}<span style={{ fontWeight: 200, opacity: 0.55 }}> / {images.length}</span>
-        </span>
-        <span title={imageName(item.url)} style={{ fontSize: 18, opacity: 0.5, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {imageName(item.url)}
-        </span>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 16, opacity: 0.38, whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {many ? 'A / D · ← / → geçiş  ·  ' : ''}tekerlek yakınlaştır · çift tık %250  ·  ESC kapat
-        </span>
-        {zoomPct > 100 && <span style={{ fontSize: 18, opacity: 0.7, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{Math.round(zoomPct)}%</span>}
-        <button onClick={(e) => { block(e); onDownload(item) }} title="Resmi indir" style={viewerBtn}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-        </button>
-        <button onClick={(e) => { block(e); onClose() }} title="Kapat (ESC)" style={{ ...viewerBtn, fontSize: 28 }}>✕</button>
-      </div>
-
-      {/* Sahne */}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <ViewerStage key={item.id} item={item} onBackdrop={onClose} onZoomChange={(s) => setZoomPct(s * 100)} />
-        {many && arrow(-1)}
-        {many && arrow(1)}
-      </div>
-
-      {/* Küçük resim şeridi */}
-      {many && (
-        <div ref={stripRef} onWheel={(e) => { block(e); e.currentTarget.scrollLeft += e.deltaY + e.deltaX }}
-          style={{ height: 112, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 28px', overflowX: 'auto', overflowY: 'hidden',
-            boxSizing: 'border-box', scrollbarWidth: 'thin', justifyContent: 'safe center' }}>
-          {images.map((im, i) => (
-            <button key={im.id} data-idx={i} onClick={(e) => { block(e); onJump(i) }} title={imageName(im.url)}
-              style={{ width: 112, height: 76, flexShrink: 0, padding: 0, borderRadius: 8, overflow: 'hidden', cursor: 'pointer', background: '#1e222a',
-                border: i === index ? '3px solid #60a5fa' : '3px solid transparent', opacity: i === index ? 1 : 0.5,
-                transition: 'opacity 120ms, border-color 120ms', boxSizing: 'border-box' }}>
-              <img src={im.url} alt="" draggable={false} referrerPolicy="no-referrer" loading="lazy"
-                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// Module-level clipboard — persists across canvas instances / re-renders
-let canvasMeshClipboard = null
-let _canvasClipboardTs   = 0
-// When the user copies something outside the canvas, clear the internal clipboard
-// so Ctrl+V uses the OS clipboard instead of stale canvas items.
-// The 50ms guard prevents this from firing on our own Ctrl+C (where e.preventDefault
-// blocks the copy event but a tiny race is possible in some browsers).
-if (typeof document !== 'undefined') {
-  document.addEventListener('copy', () => {
-    if (Date.now() - _canvasClipboardTs > 50) canvasMeshClipboard = null
-  }, true)
-}
-
-// Metin kutusu içeriğiyle birlikte uzar ama en fazla A4 oranına (genişlik × 297/210)
-// kadar; taşan içerik kutunun içinde scroll edilir.
-const A4_RATIO = 297 / 210
-const a4MaxH = (w) => Math.max(60, Math.round((w || 0) * A4_RATIO))
-
-// bounding box of box-type items matching id set
-function getBounds(ids, items) {
-  const sel = items.filter(it => ids.has(it.id) && it.type !== 'arrow')
-  if (!sel.length) return null
-  const minX = Math.min(...sel.map(it => it.x))
-  const minY = Math.min(...sel.map(it => it.y))
-  const maxX = Math.max(...sel.map(it => it.x + it.w))
-  const maxY = Math.max(...sel.map(it => it.y + it.h))
-  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
-}
+import { pasteRichTextAsMarkdown } from '../utils/richTextToMarkdown'
+import { makeNote, todayIso, NOTE_DEFAULTS } from '../utils/timelineModel'
+import {
+  HANDLES, MAX_IMG_W, getImageNaturalSize, a4MaxH, getBounds, resizeItems, imageOrder,
+  saveImageItem, copyImageToClipboard, isInstaUrl, buildInstaItem, disposePoolAudio,
+  getCanvasClipboard, setCanvasClipboard, copyItemAssets, placeClipItems, buildPasteItems, pasteMsgView, urlsToViewerImages,
+} from './canvas/canvasUtils'
+import { ImageItem, LinkCard, InstaCard, MusicCard, PdfCard, YoutubeCard, RoomChip, NoteCard } from './canvas/cards'
+import { ItemBody } from './canvas/ItemBody'
+import { ImageViewer } from './canvas/ImageViewer'
+import { ArrowLayer } from './canvas/ArrowLayer'
+import { TextItemBox } from './canvas/TextItem'
+import { NoteEditor } from './canvas/NoteEditor'
 
 // Senkron canvas işareti: öğelerin üstünde kırmızı çerçeve + üye sayısı rozeti
 const SYNC_RED = '#ef4444'
@@ -591,6 +49,10 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const readerItemIdRef                     = useRef(null)
   const [viewerItemId, setViewerItemId]     = useState(null) // tam ekran resim görüntüleyicide açık resim
   const viewerItemIdRef                     = useRef(null)
+  const [noteEditId, setNoteEditId]         = useState(null) // not balonu düzenleyicisinde açık not
+  const [noteGallery, setNoteGallery]       = useState(null) // { images:[url], index } — not resimleri tam ekran
+  // Not editörü / galerisi kendi klavye, wheel ve paste'ini yönetir → canvas dinleyicileri susar
+  const noteOverlayRef                      = useRef(false)
   const closeViewerRef                      = useRef(null)
   const stepViewerRef                       = useRef(null)
   // window size — fullscreen'de tile oranını (contain) ekrana sığdırmak için gerekli
@@ -698,6 +160,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   }, [isFullscreen])
   useEffect(() => { readerItemIdRef.current = readerItemId }, [readerItemId])
   useEffect(() => { viewerItemIdRef.current = viewerItemId }, [viewerItemId])
+  useEffect(() => { noteOverlayRef.current = !!(noteEditId || noteGallery) }, [noteEditId, noteGallery])
   useEffect(() => { showColorPickerRef.current = showColorPicker }, [showColorPicker])
   useEffect(() => {
     panRef.current = pan
@@ -765,7 +228,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
       }
       if (!isEditModeRef.current) return
       // reader / resim görüntüleyici açık → wheel modalın; canvas'ı pan/zoom etme
-      if (readerItemIdRef.current || viewerItemIdRef.current) return
+      if (readerItemIdRef.current || viewerItemIdRef.current || noteOverlayRef.current) return
       const el = containerRef.current
       // canvas sınırları dışındaki wheel'leri yoksay
       if (el) {
@@ -815,6 +278,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   useEffect(() => {
     if (!isEditMode) return
     const onKey = e => {
+      if (noteOverlayRef.current) return
       // Resim görüntüleyici açıkken tüm tuşları o yönetir (Delete vb. canvas kısayolları çalışmasın)
       if (viewerItemIdRef.current) {
         e.stopPropagation()
@@ -841,8 +305,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
       if (ctrl && e.key === 'c') {
         if (selectedIdsRef.current.size > 0) {
           e.preventDefault(); e.stopPropagation()
-          _canvasClipboardTs = Date.now()
-          canvasMeshClipboard = { sourceId: id, items: itemsRef.current.filter(it => selectedIdsRef.current.has(it.id)) }
+          setCanvasClipboard(id, itemsRef.current.filter(it => selectedIdsRef.current.has(it.id)))
           setPasteMsg('copy')
           setTimeout(() => setPasteMsg(''), 1000)
         }
@@ -852,8 +315,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         if (selectedIdsRef.current.size > 0) {
           e.preventDefault(); e.stopPropagation()
           // Kes = seçili item'ları panoya al + canvas'tan kaldır
-          _canvasClipboardTs = Date.now()
-          canvasMeshClipboard = { sourceId: id, items: itemsRef.current.filter(it => selectedIdsRef.current.has(it.id)) }
+          setCanvasClipboard(id, itemsRef.current.filter(it => selectedIdsRef.current.has(it.id)))
           const toCut = new Set(selectedIdsRef.current)
           setItems(prev => {
             const next = prev.filter(it => !toCut.has(it.id))
@@ -866,7 +328,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         }
         return
       }
-      if (ctrl && e.key === 'v' && canvasMeshClipboard?.items?.length) {
+      if (ctrl && e.key === 'v' && getCanvasClipboard()?.items?.length) {
         e.preventDefault(); e.stopPropagation()
         pasteInternalRef.current?.()
         return
@@ -898,237 +360,46 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
   // ── Paste ─────────────────────────────────────────────────────────────────
   pasteActionRef.current = async (e) => {
+    // Not editörü kendi paste'ini (galeriye resim) yönetir
+    if (noteOverlayRef.current) return
     const active = document.activeElement
     if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') return
     e.preventDefault(); e.stopPropagation()
-    const clipItems = [...(e.clipboardData?.items || [])]
+    applyPasteResult(await buildPasteItems(e.clipboardData, { uploadKey: id, center: centerSurface, onLoading: () => setPasteMsg('loading') }))
+  }
 
-    // Biçimli metin (web sayfası, Google Docs, Word…) → Markdown modunda metin kutusu.
-    // Resim kontrolünden önce: Word/LibreOffice seçimi text/html'in yanında image/png de koyar.
-    // Yalnızca text/plain de varsa — "Resmi kopyala" (sadece <img> + image/png) resim olarak kalsın.
-    const hasFiles = (e.clipboardData?.files?.length || 0) > 0 && !clipItems.some(it => it.type === 'text/html')
-    const richPaste = hasFiles ? null : clipboardToMarkdown(e.clipboardData)
-    if (richPaste?.rich && e.clipboardData.getData('text/plain').trim()) {
-      const pt = centerSurface()
-      const w = 800, fontSize = 30
-      const h = measureTextItemH(richPaste.text, w, fontSize, true)
-      const ni = { id: crypto.randomUUID(), type: 'text', x: pt.x, y: pt.y, w, h, content: richPaste.text, fontSize, markdown: true }
-      setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
-      setSelectedIds(new Set([ni.id]))
-      // adresi kaynakta olmayan link varsa uyarı daha uzun kalsın
-      const missing = richPaste.missingLinks
-      setPasteMsg(missing ? `md-nolink:${missing}` : 'md'); setTimeout(() => setPasteMsg(''), missing ? 5000 : 1600)
-      return
-    }
+  // Dosya / link / metin sürükle-bırak: paste ile aynı hat, öğeler bırakılan noktaya
+  const onDragOverEdit = (e) => {
+    if (noteOverlayRef.current) return
+    const types = [...e.dataTransfer.types]
+    if (types.includes('Files') || types.includes('text/uri-list') || types.includes('text/plain')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }
+  }
+  const onDropEdit = async (e) => {
+    if (noteOverlayRef.current) return
+    e.preventDefault(); stop(e)
+    const pt = toSurface(e.clientX, e.clientY)
+    applyPasteResult(await buildPasteItems(e.dataTransfer, { uploadKey: id, center: () => pt, onLoading: () => setPasteMsg('loading') }))
+  }
 
-    // Resim dosyaları — toplu paste destekli: FileList (dosya yöneticisinden çoklu kopya) yoksa items'tan topla.
-    // Dosya yöneticisi bazı uzantılarda (avif, heic…) MIME tipini boş bırakır → uzantıya da bak.
-    const isImg = (f) => f.type.startsWith('image/') || /\.(jpe?g|png|gif|webp|svg|bmp|avif)$/i.test(f.name || '')
-    let imgFiles = [...(e.clipboardData?.files || [])].filter(isImg)
-    if (!imgFiles.length) imgFiles = clipItems.filter(it => it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean)
-    if (imgFiles.length) {
-      setPasteMsg('loading')
-      let msg = 'err'
-      try {
-        // Hepsini paralel yükle + ölç, sıra korunur (Promise.all giriş sırasını korur)
-        const sized = await Promise.all(imgFiles.map(async (file) => {
-          try {
-            const form = new FormData(); form.append('file', file)
-            const r = await fetch(`/api/canvas/${id}/upload`, { method: 'POST', body: form })
-            if (!r.ok) return null
-            const d = await r.json()
-            const dims = await getImageNaturalSize(d.url)
-            const w = dims ? Math.min(MAX_IMG_W, dims.w) : MAX_IMG_W
-            const h = dims ? Math.round(w * dims.h / dims.w) : Math.round(MAX_IMG_W * 9 / 16)
-            return { url: d.url, w, h }
-          } catch { return null }   // tek dosyanın hatası diğerlerini düşürmesin
-        }))
-        const ok = sized.filter(Boolean)
-        if (ok.length) {
-          const pos = layoutImageGrid(ok, centerSurface())
-          const newItems = ok.map((s, i) => ({ id: crypto.randomUUID(), type: 'image', x: pos[i].x, y: pos[i].y, w: s.w, h: s.h, url: s.url }))
-          setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
-          setSelectedIds(new Set(newItems.map(n => n.id)))   // grup halinde taşınabilsin
-          msg = ok.length < imgFiles.length ? `partial:${ok.length}/${imgFiles.length}` : 'ok'
-        }
-      } catch {}
-      setPasteMsg(msg)
-      setTimeout(() => setPasteMsg(''), msg.startsWith('partial:') ? 4000 : 1800)
-      return
-    }
-
-    // Ses dosyaları — toplu paste destekli: FileList (daha güvenilir) yoksa items'tan topla.
-    let audioFiles = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('audio/'))
-    if (!audioFiles.length) audioFiles = clipItems.filter(it => it.type.startsWith('audio/')).map(it => it.getAsFile()).filter(Boolean)
-    if (audioFiles.length) {
-      setPasteMsg('loading')
-      try {
-        // Hepsini paralel yükle, sıra korunur (Promise.all giriş sırasını korur)
-        const metas = await Promise.all(audioFiles.map(async (file) => {
-          const form = new FormData(); form.append('file', file)
-          const r = await fetch(`/api/canvas/${id}/upload-audio`, { method: 'POST', body: form })
-          return r.ok ? r.json() : null
-        }))
-        const ok = metas.filter(Boolean)
-        if (ok.length) {
-          const W = 300, H = 480, GAP = 24, step = W + GAP
-          const pt = centerSurface()
-          const startX = pt.x - ((ok.length - 1) * step) / 2   // grubu merkeze yatay ortala
-          const newItems = ok.map((d, i) => ({
-            id: crypto.randomUUID(), type: 'music', x: startX + i * step, y: pt.y, w: W, h: H,
-            url: d.url, title: d.title, artist: d.artist, coverUrl: d.coverUrl, duration: d.duration,
-          }))
-          setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
-          setPasteMsg('ok')
-        } else setPasteMsg('err')
-      } catch { setPasteMsg('err') }
-      setTimeout(() => setPasteMsg(''), 1800)
-      return
-    }
-
-    // PDF dosyaları — ses ile aynı toplu paste akışı
-    const isPdf = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '')
-    let pdfFiles = [...(e.clipboardData?.files || [])].filter(isPdf)
-    if (!pdfFiles.length) pdfFiles = clipItems.filter(it => it.kind === 'file' && it.type === 'application/pdf').map(it => it.getAsFile()).filter(Boolean)
-    if (pdfFiles.length) {
-      setPasteMsg('loading')
-      try {
-        const metas = await Promise.all(pdfFiles.map(async (file) => {
-          const form = new FormData(); form.append('file', file)
-          const r = await fetch(`/api/canvas/${id}/upload-pdf`, { method: 'POST', body: form })
-          return r.ok ? r.json() : null
-        }))
-        const ok = metas.filter(Boolean)
-        if (ok.length) {
-          const W = 300, H = 424, GAP = 24, step = W + GAP   // A4 oranı (1:√2)
-          const pt = centerSurface()
-          const startX = pt.x - ((ok.length - 1) * step) / 2
-          const newItems = ok.map((d, i) => ({
-            id: crypto.randomUUID(), type: 'pdf', x: startX + i * step, y: pt.y, w: W, h: H,
-            url: d.url, title: d.title, size: d.size, pages: d.pages,
-          }))
-          setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
-          setPasteMsg('ok')
-        } else setPasteMsg('err')
-      } catch { setPasteMsg('err') }
-      setTimeout(() => setPasteMsg(''), 1800)
-      return
-    }
-
-    const text = e.clipboardData?.getData('text/plain')?.trim()
-    if (text) {
-      // YouTube link
-      const ytId = (() => { try { const u = new URL(text); if (u.hostname.includes('youtube.com')) return u.searchParams.get('v'); if (u.hostname === 'youtu.be') return u.pathname.slice(1).split('?')[0] } catch {} return null })()
-      if (ytId) {
-        setPasteMsg('loading')
-        const pt  = centerSurface()
-        let title = '', thumbUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`
-        try {
-          const r = await fetch(`/api/youtube-meta?url=${encodeURIComponent(text)}`)
-          if (r.ok) { const d = await r.json(); title = d.title || ''; if (d.thumbnail_url) thumbUrl = d.thumbnail_url }
-        } catch {}
-        const ni = { id: crypto.randomUUID(), type: 'youtube', x: pt.x, y: pt.y, w: 480, h: 270, url: text, videoId: ytId, thumbUrl, title }
-        setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
-        setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
-        return
-      }
-
-      // Instagram reel/gönderi linki → dikey mobil kart (og görsel + başlık)
-      if (isInstaUrl(text)) {
-        setPasteMsg('loading')
-        const ni = await buildInstaItem(text, centerSurface())
-        setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
-        setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
-        return
-      }
-
-      const parsedUrl = (() => { try { const u = new URL(text); return /^https?:$/.test(u.protocol) && u.hostname.includes('.') ? u : null } catch { return null } })()
-      const isImgUrl = parsedUrl ? /\.(jpe?g|png|gif|webp|svg|bmp|avif|tiff?)$/i.test(parsedUrl.pathname) : false
-      const pt = centerSurface()
-      // Generic link — Open Graph görsel + başlıktan kart oluştur
-      const addLinkCard = async () => {
-        let title = '', thumbUrl = '', siteName = parsedUrl.hostname
-        try {
-          const r = await fetch(`/api/link-meta?url=${encodeURIComponent(text)}`)
-          if (r.ok) { const d = await r.json(); title = d.title || ''; thumbUrl = d.image || ''; siteName = d.siteName || siteName }
-        } catch {}
-        const ni = { id: crypto.randomUUID(), type: 'link', x: pt.x, y: pt.y, w: 480, h: 300, url: text, thumbUrl, title, siteName }
-        setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
-      }
-      if (isImgUrl) {
-        setPasteMsg('loading')
-        const dims = await getImageNaturalSize(text)
-        if (dims) {
-          const iw = Math.min(MAX_IMG_W, dims.w)
-          const ih = Math.round(iw * dims.h / dims.w)
-          const ni = { id: crypto.randomUUID(), type: 'image', x: pt.x, y: pt.y, w: iw, h: ih, url: text }
-          setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
-        } else {
-          // Görsel yüklenemedi (hotlink koruması / ölü link) — şeffaf blok yerine link kartı
-          await addLinkCard()
-        }
-      } else if (parsedUrl) {
-        setPasteMsg('loading')
-        await addLinkCard()
-      } else {
-        const ni = { id: crypto.randomUUID(), type: 'text', x: pt.x, y: pt.y, w: 500, h: 220, content: text || '', fontSize: 30 }
-        setItems(prev => { const next = [...prev, ni]; scheduleSaveRef.current(next, bgRef.current); return next })
-        setEditingItemId(ni.id)
-      }
-      setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
-    }
+  function applyPasteResult(res) {
+    if (!res) return
+    if (res.items.length) setItems(prev => { const next = [...prev, ...res.items]; scheduleSaveRef.current(next, bgRef.current); return next })
+    // toplu resim grup halinde taşınabilsin
+    if (res.select) setSelectedIds(new Set(res.items.map(n => n.id)))
+    if (res.editId) setEditingItemId(res.editId)
+    setPasteMsg(res.msg); setTimeout(() => setPasteMsg(''), res.ms)
   }
 
   pasteInternalRef.current = async () => {
-    if (!canvasMeshClipboard?.items?.length) return
-    const clip = canvasMeshClipboard
+    const clip = getCanvasClipboard()
+    if (!clip?.items?.length) return
     let clipItems = clip.items
-
+    // Başka canvas'tan (veya timeline'dan) geliyorsa dosyaları çoğalt
     if (clip.sourceId !== id) {
-      const copyableUrls = clipItems.flatMap(it => {
-        const urls = []
-        if ((it.type === 'image' || it.type === 'music' || it.type === 'pdf') && it.url?.startsWith('/uploads/')) urls.push(it.url)
-        if (it.type === 'music' && it.coverUrl?.startsWith('/uploads/')) urls.push(it.coverUrl)
-        return urls
-      })
-      if (copyableUrls.length) {
-        setPasteMsg('loading')
-        try {
-          const r = await fetch('/api/canvas/copy-images', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: copyableUrls }),
-          })
-          const d = await r.json()
-          if (r.ok && d.mapping) {
-            clipItems = clipItems.map(it => {
-              if ((it.type === 'image' || it.type === 'pdf') && d.mapping[it.url]) return { ...it, url: d.mapping[it.url] }
-              if (it.type === 'music') {
-                const next = { ...it }
-                if (d.mapping[it.url]) next.url = d.mapping[it.url]
-                if (d.mapping[it.coverUrl]) next.coverUrl = d.mapping[it.coverUrl]
-                return next
-              }
-              return it
-            })
-          }
-        } catch {}
-      }
+      setPasteMsg('loading')
+      try { clipItems = await copyItemAssets(clipItems) } catch {}
     }
-
-    const origIds = new Set(clipItems.map(i => i.id))
-    const box = getBounds(origIds, clipItems)
-    const pt = centerSurface()
-    const ox = box ? pt.x - box.x - box.w / 2 : 0
-    const oy = box ? pt.y - box.y - box.h / 2 : 0
-
-    const newItems = clipItems.map(it => ({
-      ...it,
-      id: crypto.randomUUID(),
-      x: (it.x ?? 0) + ox,
-      y: (it.y ?? 0) + oy,
-      ...(it.type === 'arrow' ? { x1: it.x1 + ox, y1: it.y1 + oy, x2: it.x2 + ox, y2: it.y2 + oy } : {}),
-    }))
-
+    const newItems = placeClipItems(clipItems, centerSurface())
     setItems(prev => { const next = [...prev, ...newItems]; scheduleSaveRef.current(next, bgRef.current); return next })
     setSelectedIds(new Set(newItems.map(c => c.id)))
     setPasteMsg('ok'); setTimeout(() => setPasteMsg(''), 1200)
@@ -1148,7 +419,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
       doSave(itemsRef.current, bgRef.current)
     }
     setIsEditMode(false); setIsFullscreen(false); setReaderItemId(null); setReaderEditing(false); setEditingItemId(null)
-    setViewerItemId(null)
+    setViewerItemId(null); setNoteEditId(null); setNoteGallery(null)
     setShowUrlInput(false); setUrlValue('')
     setShowRoomSearch(false); setRoomSearchText('')
     setIsPanning(false); setDragState(null); setResizeState(null)
@@ -1278,48 +549,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         }))
         return
       }
-      const { handle: rh, initBounds: ib, initItems } = resizeState
-      const isCorner = rh.length === 2  // nw ne se sw
-      let nx = ib.x, ny = ib.y, nw, nh, scale
-      if (isCorner) {
-        // uniform scale locked to aspect ratio, font scales too
-        const rawW = rh.includes('e') ? ib.w + dx : ib.w - dx
-        nw = Math.max(40, rawW)
-        scale = nw / ib.w
-        nh = ib.h * scale
-        if (rh.includes('w')) nx = ib.x + ib.w - nw
-        if (rh.includes('n')) ny = ib.y + ib.h - nh
-      } else {
-        // edge: resize only the relevant axis, no font change
-        nw = ib.w; nh = ib.h
-        if (rh.includes('e')) nw = Math.max(40, ib.w + dx)
-        if (rh.includes('s')) nh = Math.max(20, ib.h + dy)
-        if (rh.includes('w')) { nw = Math.max(40, ib.w - dx); nx = ib.x + ib.w - nw }
-        if (rh.includes('n')) { nh = Math.max(20, ib.h - dy); ny = ib.y + ib.h - nh }
-        // Lock aspect ratio for a single image item
-        if (initItems.length === 1) {
-          const selItem = itemsRef.current.find(it => it.id === initItems[0].id)
-          if (selItem?.type === 'image') {
-            const ratio = ib.w / ib.h
-            if (rh === 'e' || rh === 'w') {
-              nh = nw / ratio
-            } else {
-              nw = nh * ratio
-              if (rh === 'n') ny = ib.y + ib.h - nh
-            }
-          }
-        }
-        scale = null
-      }
-      const sx = nw / ib.w, sy = nh / ib.h
-      setItems(prev => prev.map(it => {
-        const init = initItems.find(ii => ii.id === it.id)
-        if (!init) return it
-        const updated = { ...it, x: nx + (init.x - ib.x) * sx, y: ny + (init.y - ib.y) * sy, w: init.w * sx, h: init.h * sy }
-        if (isCorner && it.type === 'text') updated.fontSize = Math.max(6, Math.round(init.fontSize * scale))
-        if (it.type === 'text') updated.h = Math.min(updated.h, a4MaxH(updated.w))
-        return updated
-      })); return
+      setItems(prev => resizeItems(prev, resizeState, dx, dy)); return
     }
     if (dragState) {
       const pt = toSurface(e.clientX, e.clientY)
@@ -1463,6 +693,31 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     setSelectedIds(new Set([ni.id])); setEditingItemId(ni.id); setDrawMode(null)
   }
 
+  // Not balonu: bugünün tarihiyle açılır (ölçek timeline ile ortak, bkz. NOTE_DEFAULTS)
+  const addNote = (e) => {
+    stop(e)
+    const pt = centerSurface()
+    const ni = makeNote({ id: crypto.randomUUID(), start: todayIso(), x: pt.x - NOTE_DEFAULTS.w / 2, y: pt.y - NOTE_DEFAULTS.h / 2 })
+    setItems(prev => { const next = [...prev, ni]; scheduleSave(next, bgRef.current); return next })
+    setSelectedIds(new Set([ni.id])); setDrawMode(null); setShowUrlInput(false); setShowRoomSearch(false)
+    setNoteEditId(ni.id)
+  }
+
+  const saveNote = (note) => {
+    setItems(prev => { const next = prev.map(it => it.id === note.id ? note : it); scheduleSave(next, bgRef.current); return next })
+    setNoteEditId(null)
+  }
+
+  const deleteNote = (noteId) => {
+    setItems(prev => { const next = prev.filter(it => it.id !== noteId); scheduleSave(next, bgRef.current); return next })
+    setSelectedIds(new Set()); setNoteEditId(null)
+  }
+
+  const openNoteLink = (link) => {
+    if (link.kind === 'room') navigateToRoom({ roomId: link.roomId, roomName: link.roomName })
+    else window.open(link.url, '_blank', 'noopener')
+  }
+
   const addImageFromUrl = async (e) => {
     stop(e); const url = urlValue.trim(); if (!url) return
     const pt   = centerSurface()
@@ -1533,36 +788,6 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
   const flashMsg = (msg) => { setPasteMsg(msg); setTimeout(() => setPasteMsg(''), 1500) }
 
-  const fetchImageBlob = async (url) => {
-    try {
-      const r = await fetch(url, { referrerPolicy: 'no-referrer' })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      return await r.blob()
-    } catch (err) {
-      // CORS engelli harici görsel → sunucu proxy'si üzerinden dene
-      const abs = new URL(url, location.href)
-      if (abs.origin === location.origin) throw err
-      const r = await fetch(`/api/image-proxy?url=${encodeURIComponent(abs.href)}`)
-      if (!r.ok) throw new Error(`proxy HTTP ${r.status}`)
-      return r.blob()
-    }
-  }
-
-  // Görseli blob olarak indirir; başarısızsa hata fırlatır (çağıran karar verir)
-  const saveImageItem = async (item) => {
-    const blob = await fetchImageBlob(item.url)
-    const ext  = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/\+.*$/, '')
-    let name = 'canvas-image'
-    try { const p = new URL(item.url, location.href).pathname.split('/').pop(); if (p) name = decodeURIComponent(p) } catch {}
-    if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += `.${ext}`
-    const a = document.createElement('a')
-    const href = URL.createObjectURL(blob)
-    a.href = href; a.download = name
-    document.body.appendChild(a); a.click(); a.remove()
-    // hemen revoke edilirse ardışık indirmelerde tarayıcı dosyayı almadan blob düşebilir
-    setTimeout(() => URL.revokeObjectURL(href), 10000)
-  }
-
   const downloadSelectedImage = async (e) => {
     stop(e)
     const item = getSelImage(); if (!item) return
@@ -1595,21 +820,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const copySelectedImage = async (e) => {
     stop(e)
     const item = getSelImage(); if (!item) return
-    try {
-      const blob = await fetchImageBlob(item.url)
-      // Pano API'si çoğu tarayıcıda sadece image/png kabul eder — gerekirse çevir
-      let png = blob
-      if (blob.type !== 'image/png') {
-        const bmp = await createImageBitmap(blob)
-        const c = document.createElement('canvas')
-        c.width = bmp.width; c.height = bmp.height
-        c.getContext('2d').drawImage(bmp, 0, 0)
-        bmp.close()
-        png = await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('PNG dönüşümü başarısız')), 'image/png'))
-      }
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
-      flashMsg('imgcopy')
-    } catch { flashMsg('err') }
+    try { await copyImageToClipboard(item.url); flashMsg('imgcopy') } catch { flashMsg('err') }
   }
 
   const zoomStep = (dir) => {
@@ -1626,7 +837,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const tbH   = CANVAS_TB_H
   // wheel handler (mount-closure) aspect'e bağlı pxH'i ref üzerinden okur
   pxHRef.current = pxH
-  const markerId = `arr-${id}`, markerIdPre = `arr-pre-${id}`
+  const markerId = `arr-${id}`
   const surfTx = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
 
   // ── Fullscreen contain-fit geometri ───────────────────────────────────────
@@ -1666,6 +877,11 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     ? (items.find(it => selectedIds.has(it.id) && it.type === 'image') || null)
     : null
 
+  const selNoteItem = selectedIds.size === 1
+    ? (items.find(it => selectedIds.has(it.id) && it.type === 'note') || null)
+    : null
+  const noteEditItem = noteEditId ? items.find(it => it.id === noteEditId && it.type === 'note') : null
+
   // tam ekran resim görüntüleyici: okuma sırasındaki tüm resimler + açık olanın indeksi
   const viewerImages = viewerItemId ? viewerImagesOf(items) : []
   const viewerIndex  = viewerImages.findIndex(it => it.id === viewerItemId)
@@ -1673,157 +889,30 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   // text item currently shown in the fullscreen reader modal
   const readerItem = readerItemId ? items.find(it => it.id === readerItemId && it.type === 'text') : null
 
-  // ── Arrow SVG layer ───────────────────────────────────────────────────────
-  const ArrowLayer = ({ editMode }) => (
-    <svg style={{ position: 'absolute', top: 0, left: 0, width: 8000, height: 8000, overflow: 'visible', pointerEvents: 'none' }}>
-      <defs>
-        <marker id={markerId} markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#e2e8f0" />
-        </marker>
-        <marker id={markerIdPre} markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="rgba(96,165,250,0.9)" />
-        </marker>
-      </defs>
-      {items.filter(it => it.type === 'arrow').map(item => {
-        const isSel = selectedIds.has(item.id)
-        const isHov = editMode && (hoveredArrowId === item.id || isSel)
-        return (
-          <g key={item.id} style={{ pointerEvents: editMode ? 'auto' : 'none' }}
-            onMouseEnter={() => editMode && setHoveredArrowId(item.id)}
-            onMouseLeave={() => setHoveredArrowId(null)}
-            onMouseDown={e => { if (editMode) onItemMouseDown(e, item) }}
-          >
-            <line x1={item.x1} y1={item.y1} x2={item.x2} y2={item.y2} stroke="transparent" strokeWidth={28} style={{ cursor: 'move' }} />
-            <line x1={item.x1} y1={item.y1} x2={item.x2} y2={item.y2}
-              stroke={isHov ? '#60a5fa' : (item.color || '#e2e8f0')} strokeWidth={item.strokeWidth || 4}
-              markerEnd={item.hasArrow ? `url(#${isHov ? markerIdPre : markerId})` : undefined} style={{ pointerEvents: 'none' }} />
-            {isHov && (() => {
-              const mx = (item.x1 + item.x2) / 2, my = (item.y1 + item.y2) / 2
-              return (
-                <>
-                  <foreignObject x={mx - 22} y={my - 22} width={44} height={44} style={{ overflow: 'visible' }}>
-                    <button onMouseDown={stop}
-                      onClick={() => { const toD = item.id; setItems(prev => { const next = prev.filter(it => it.id !== toD); scheduleSave(next, bgRef.current); return next }) }}
-                      style={{ width: 44, height: 44, background: '#ef4444', border: '2px solid #fff', borderRadius: '50%', color: '#fff', fontSize: 24, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.5)', pointerEvents: 'auto' }}>×</button>
-                  </foreignObject>
-                  
-                  <foreignObject x={item.x1 - 12} y={item.y1 - 12} width={24} height={24} style={{ overflow: 'visible' }}>
-                    <div onMouseDown={e => onArrowHandleMouseDown(e, item, 'start')} 
-                         style={{ width: 24, height: 24, background: '#fff', border: '3px solid #60a5fa', borderRadius: '50%', cursor: 'pointer', pointerEvents: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }} />
-                  </foreignObject>
-                  
-                  <foreignObject x={item.x2 - 12} y={item.y2 - 12} width={24} height={24} style={{ overflow: 'visible' }}>
-                    <div onMouseDown={e => onArrowHandleMouseDown(e, item, 'end')} 
-                         style={{ width: 24, height: 24, background: '#fff', border: '3px solid #60a5fa', borderRadius: '50%', cursor: 'pointer', pointerEvents: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }} />
-                  </foreignObject>
-                </>
-              )
-            })()}
-          </g>
-        )
-      })}
-      {drawingLine && (
-        <line x1={drawingLine.x1} y1={drawingLine.y1} x2={drawingLine.x2} y2={drawingLine.y2}
-          stroke="rgba(96,165,250,0.85)" strokeWidth={4} strokeDasharray="10 5"
-          markerEnd={drawMode === 'arrow' ? `url(#${markerIdPre})` : undefined} style={{ pointerEvents: 'none' }} />
-      )}
-    </svg>
-  )
-
-  // ── Room chip visual ──────────────────────────────────────────────────────
-  const RoomChip = ({ item }) => (
-    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.35)', borderRadius: 8, cursor: 'inherit', boxSizing: 'border-box', pointerEvents: 'none' }}>
-      <span style={{ fontSize: 30 }}>🏠</span>
-      <span style={{ color: '#93c5fd', fontSize: 28, textDecoration: 'underline', textUnderlineOffset: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.roomName}</span>
-    </div>
-  )
-
-  // ── Box item content ──────────────────────────────────────────────────────
-  const YoutubeCard = ({ item, clickable = false }) => (
-    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', cursor: clickable ? 'pointer' : 'inherit' }}
-      {...(clickable ? { onMouseDown: stop, onClick: (e) => { stop(e); navigator.clipboard?.writeText(item.url).catch(() => {}) } } : {})}>
-      <img src={item.thumbUrl} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
-      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-        <svg width="64" height="44" viewBox="0 0 68 48">
-          <path d="M66.52 7.74c-.78-2.93-2.49-5.41-5.42-6.19C55.79.13 34 0 34 0S12.21.13 6.9 1.55c-2.93.78-4.63 3.26-5.42 6.19C.06 13.05 0 24 0 24s.06 10.95 1.48 16.26c.78 2.93 2.49 5.41 5.42 6.19C12.21 47.87 34 48 34 48s21.79-.13 27.1-1.55c2.93-.78 4.64-3.26 5.42-6.19C67.94 34.95 68 24 68 24s-.06-10.95-1.48-16.26z" fill="#f00"/>
-          <path d="M45 24L27 14v20" fill="#fff"/>
-        </svg>
-      </div>
-      {item.title && (
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.85))', padding: '28px 12px 10px', color: '#fff', fontSize: 28, lineHeight: 1.35, fontWeight: 600, pointerEvents: 'none' }}>
-          {item.title}
-        </div>
-      )}
-    </div>
-  )
-
-  const renderBoxContent = (item) => {
-    if (item.type === 'room')    return <RoomChip item={item} />
-    if (item.type === 'link')    return <LinkCard item={item} />
-    if (item.type === 'insta')   return <InstaCard item={item} />
-    if (item.type === 'youtube') return <YoutubeCard item={item} />
-    if (item.type === 'music')   return <MusicCard item={item} />
-    if (item.type === 'pdf')     return <PdfCard item={item} />
-    if (item.type === 'image') return <ImageItem item={item} />
-    if (item.type === 'text' && editingItemId === item.id) {
-      // içeriğe göre uzat, A4 yüksekliğinde durdur → fazlası textarea içinde scroll
-      const maxH = a4MaxH(item.w)
-      // height:auto ile ölçüm yaparken textarea bir an çöküyor → tarayıcı scrollTop'u
-      // 0'a kırpıyordu (yazarken imleç birinci satıra atlıyordu). Ölçüm öncesi scroll
-      // konumunu alıp hemen geri koyuyoruz; senkron olduğu için ekrana yansımıyor.
-      const fit = el => {
-        const prevTop = el.scrollTop
-        el.style.height = 'auto'
-        const full = el.scrollHeight
-        const newH = Math.min(full, maxH)
-        el.style.height = newH + 'px'
-        el.style.overflowY = full > maxH ? 'auto' : 'hidden'
-        if (el.scrollTop !== prevTop) el.scrollTop = prevTop
-        return newH
-      }
-      const autoH = el => {
-        if (!el) return
-        const newH = fit(el)
-        if (item.h === 0 && newH > 0) setItems(prev => prev.map(it => it.id === item.id && it.h === 0 ? { ...it, h: newH } : it))
-      }
-      return (
-        <textarea autoFocus defaultValue={item.content}
-          ref={autoH}
-          data-cv-scroll="1"
-          placeholder="Metin yazın…"
-          style={{ width: '100%', height: 'auto', minHeight: 60, maxHeight: maxH, background: 'rgba(0,0,0,0.6)', border: '1px solid #60a5fa', borderRadius: 4, color: '#fff', fontSize: item.fontSize || 30, padding: 14, resize: 'none', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', overflow: 'hidden', display: 'block' }}
-          onInput={e => {
-            const newH = fit(e.target)
-            setItems(prev => prev.map(it => it.id === item.id ? { ...it, h: newH } : it))
-          }}
-          onMouseDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}
-          // biçimli metin → Markdown olarak imlece eklenir; kutu markdown moduna geçer (yoksa sözdizimi ham görünür)
-          onPaste={e => { if (pasteRichTextAsMarkdown(e) && !item.markdown) setItems(prev => prev.map(it => it.id === item.id ? { ...it, markdown: true } : it)) }}
-          onBlur={e => {
-            const val = e.target.value
-            const newH = fit(e.target)
-            setItems(prev => { const next = prev.map(it => it.id === item.id ? { ...it, content: val, h: newH } : it); scheduleSave(next, bgRef.current); return next })
-            setEditingItemId(null)
-          }}
-        />
-      )
-    }
-    const textBox = {
-      width: '100%', height: 'auto',
-      minHeight: Math.min(item.h || 60, a4MaxH(item.w)), maxHeight: a4MaxH(item.w),
-      overflowX: 'hidden', overflowY: 'auto',
-      background: item.bgColor !== undefined ? item.bgColor : 'rgba(0,0,0,0.38)',
-      borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30,
-      padding: 14, boxSizing: 'border-box', wordBreak: 'break-word', userSelect: 'none',
-    }
-    if (item.markdown && item.content) {
-      return (
-        <div className="cvmd cv-textbox" data-cv-scroll="1" style={textBox}
-          dangerouslySetInnerHTML={{ __html: parseMd(item.content) }} />
-      )
-    }
-    return <div className="cv-textbox" data-cv-scroll="1" style={{ ...textBox, whiteSpace: 'pre-wrap' }}>{item.content}</div>
+  function deleteArrow(toD) {
+    setItems(prev => { const next = prev.filter(it => it.id !== toD); scheduleSave(next, bgRef.current); return next })
   }
+
+  // ── Arrow SVG layer ───────────────────────────────────────────────────────
+  const arrowLayer = (editMode) => (
+    <ArrowLayer items={items} selectedIds={selectedIds} hoveredArrowId={hoveredArrowId} editMode={editMode}
+      markerId={`${markerId}-${editMode ? 'e' : 'r'}`} drawingLine={editMode ? drawingLine : null} drawMode={drawMode}
+      onHover={setHoveredArrowId} onItemMouseDown={onItemMouseDown}
+      onDelete={deleteArrow}
+      onHandleMouseDown={onArrowHandleMouseDown} />
+  )
+
+  // ── Box item content (edit mode) ──────────────────────────────────────────
+  const renderBoxContent = (item) => (
+    <ItemBody item={item} editing={editingItemId === item.id}
+      onOpenImages={(images, index) => setNoteGallery({ images, index })} onOpenLink={openNoteLink}
+      onTextHeight={(newH, { initial }) => setItems(prev => prev.map(it => it.id === item.id && (!initial || it.h === 0) ? { ...it, h: newH } : it))}
+      onTextMarkdown={() => setItems(prev => prev.map(it => it.id === item.id ? { ...it, markdown: true } : it))}
+      onTextCommit={(val, newH) => {
+        setItems(prev => { const next = prev.map(it => it.id === item.id ? { ...it, content: val, h: newH } : it); scheduleSave(next, bgRef.current); return next })
+        setEditingItemId(null)
+      }} />
+  )
 
   // ── Room search ───────────────────────────────────────────────────────────
   const filteredRooms = rooms.filter(r => !roomSearchText || r.name.toLowerCase().includes(roomSearchText.toLowerCase()))
@@ -1870,21 +959,13 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
                     <PdfCard item={item} clickable />
                   </div>
+                ) : item.type === 'note' ? (
+                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'none' }}>
+                    <NoteCard item={item} />
+                  </div>
                 ) : item.type === 'text' ? (
-                  (() => {
-                    const st = {
-                      position: 'absolute', left: item.x, top: item.y, width: item.w, height: 'auto',
-                      minHeight: Math.min(item.h || 60, a4MaxH(item.w)), maxHeight: a4MaxH(item.w),
-                      overflowX: 'hidden', overflowY: 'auto',
-                      background: item.bgColor !== undefined ? item.bgColor : 'transparent',
-                      borderRadius: 4, color: item.color || '#e2e8f0', fontSize: item.fontSize || 30,
-                      padding: 14, boxSizing: 'border-box', wordBreak: 'break-word', userSelect: 'none',
-                    }
-                    return item.markdown && item.content
-                      ? <div key={item.id} className="cvmd cv-textbox" data-cv-scroll="1" style={st}
-                          dangerouslySetInnerHTML={{ __html: parseMd(item.content) }} />
-                      : <div key={item.id} className="cv-textbox" data-cv-scroll="1" style={{ ...st, whiteSpace: 'pre-wrap' }}>{item.content}</div>
-                  })()
+                  <TextItemBox key={item.id} item={item} defaultBg="transparent"
+                    style={{ position: 'absolute', left: item.x, top: item.y, width: item.w }} />
                 ) : item.type === 'room' ? (
                   <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}
                     onMouseDown={stop} onClick={(e) => { stop(e); navigateToRoom(item) }}>
@@ -1892,7 +973,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                   </div>
                 ) : null
               )}
-              <ArrowLayer editMode={false} />
+              {arrowLayer(false)}
             </div>
             {items.length === 0 && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.18)', fontSize: 38, gap: 12, pointerEvents: 'none' }}>
@@ -1909,6 +990,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
               ? { position: 'fixed', inset: 0, width: '100vw', height: '100vh', backgroundColor: '#07070d', overflow: 'hidden', pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', zIndex: 2147483600 }
               : { width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: drawMode ? 'crosshair' : isPanning ? 'grabbing' : dragState ? 'grabbing' : 'default', userSelect: 'none', boxShadow: syncGroupId ? `0 0 0 4px ${SYNC_RED}` : '0 0 0 3px rgba(96,165,250,0.45)' }}
             onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} onClick={stop}
+            onDragOver={onDragOverEdit} onDrop={onDropEdit}
           >
             {/* ── Toolbar ───────────────────────────────────────────────── */}
             <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: tbH, background: 'rgba(5,5,15,0.92)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', gap: 14, padding: '0 20px', zIndex: 20, boxSizing: 'border-box', borderBottom: '1px solid rgba(96,165,250,0.18)', overflowX: isFullscreen ? 'auto' : 'visible', overflowY: 'hidden',
@@ -1918,6 +1000,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
               onMouseDown={stop}>
 
               <button onMouseDown={stop} onClick={addText} style={tbBtn}>✏️ Metin</button>
+              <button onMouseDown={stop} onClick={addNote} title="Resimli, tarihli zengin not balonu" style={tbBtn}>📝 Not</button>
               <button onMouseDown={stop} onClick={(e) => { stop(e); setShowUrlInput(v => !v); setUrlValue(''); setShowRoomSearch(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showUrlInput ? act : {}) }}>🖼️ Resim</button>
               <button onMouseDown={stop} onClick={(e) => { stop(e); setShowRoomSearch(v => !v); setRoomSearchText(''); setShowUrlInput(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showRoomSearch ? act : {}) }}>🏠 Oda</button>
 
@@ -2010,6 +1093,10 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                     </>
                   )}
 
+                  {selNoteItem && (
+                    <button onMouseDown={stop} onClick={(e) => { stop(e); setNoteEditId(selNoteItem.id) }} title="Notu düzenle (çift tık)" style={tbBtn}>✎ Notu düzenle</button>
+                  )}
+
                   {/* image download & copy-as-image buttons — only when a single image is selected */}
                   {selImageItem && (
                     <>
@@ -2059,12 +1146,15 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                 </span>
               )}
 
-              {pasteMsg && (
-                <span title={pasteMsg.startsWith('md-nolink:') ? 'ChatGPT gibi uygulamalarda metni seçmek yerine mesajın kopyala butonunu kullanınca linkler adresleriyle gelir' : undefined}
-                  style={{ fontSize: 22, flexShrink: 0, color: (pasteMsg.startsWith('md-nolink:') || pasteMsg.startsWith('partial:')) ? '#fbbf24' : pasteMsg === 'loading' ? '#60a5fa' : (pasteMsg === 'ok' || pasteMsg === 'copy' || pasteMsg === 'cut' || pasteMsg === 'imgcopy' || pasteMsg === 'md') ? '#4ade80' : '#f87171' }}>
-                  {pasteMsg === 'loading' ? '⟳ Yapıştırılıyor…' : pasteMsg === 'copy' ? '⧉ Kopyalandı' : pasteMsg === 'cut' ? '✂ Kesildi' : pasteMsg === 'imgcopy' ? '🖼 Resim panoya kopyalandı' : pasteMsg === 'md' ? '✓ Markdown olarak yapıştırıldı' : pasteMsg.startsWith('md-nolink:') ? `✓ Markdown olarak yapıştırıldı · ${missingLinksMessage(Number(pasteMsg.split(':')[1]))}` : pasteMsg.startsWith('partial:') ? `⚠ ${pasteMsg.split(':')[1]} resim yapıştırıldı, kalanı yüklenemedi` : pasteMsg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'}
-                </span>
-              )}
+              {pasteMsg && (() => {
+                const pm = pasteMsgView(pasteMsg, missingLinksMessage)
+                return (
+                  <span title={pasteMsg.startsWith('md-nolink:') ? 'ChatGPT gibi uygulamalarda metni seçmek yerine mesajın kopyala butonunu kullanınca linkler adresleriyle gelir' : undefined}
+                    style={{ fontSize: 22, flexShrink: 0, color: pm.color }}>
+                    {pm.text}
+                  </span>
+                )
+              })()}
 
               <span style={{ marginLeft: 'auto', fontSize: 20, color: 'rgba(148,163,184,0.3)', flexShrink: 0 }}>
                 {hasBoxSel ? 'Ctrl+C: kopyala · Ctrl+X: kes · Ctrl+D: çoğalt · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'} · ESC
@@ -2182,7 +1272,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                     onMouseDown={e => onItemMouseDown(e, item)}
                     onMouseEnter={() => !drawMode && setHoveredItemId(item.id)}
                     onMouseLeave={() => setHoveredItemId(null)}
-                    onDoubleClick={e => { stop(e); if (drawMode) return; if (item.type === 'text') setEditingItemId(item.id); else if (item.type === 'image' && item.url) openViewer(item.id) }}
+                    onDoubleClick={e => { stop(e); if (drawMode) return; if (item.type === 'text') setEditingItemId(item.id); else if (item.type === 'note') setNoteEditId(item.id); else if (item.type === 'image' && item.url) openViewer(item.id) }}
                   >
                     {renderBoxContent(item)}
                   </div>
@@ -2225,7 +1315,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                 }} />
               )}
 
-              <ArrowLayer editMode />
+              {arrowLayer(true)}
 
               {items.length === 0 && !drawingLine && (
                 <div style={{ position: 'absolute', top: 180, left: 0, right: 0, color: 'rgba(255,255,255,0.12)', fontSize: 38, textAlign: 'center', pointerEvents: 'none' }}>
@@ -2253,6 +1343,20 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
           <ImageViewer images={viewerImages} index={viewerIndex}
             onStep={stepViewer} onJump={(i) => setViewerItemId(viewerImages[i].id)}
             onClose={closeViewer} onDownload={(it) => saveImageItem(it).catch(() => window.open(it.url, '_blank', 'noopener'))} />,
+          document.body
+        )}
+        {noteEditItem && (
+          <NoteEditor key={noteEditItem.id} note={noteEditItem} uploadKey={id}
+            onSave={saveNote} onDelete={() => deleteNote(noteEditItem.id)} onClose={() => setNoteEditId(null)} />
+        )}
+        {noteGallery && createPortal(
+          <ImageViewer ownKeys images={urlsToViewerImages(noteGallery.images)} index={noteGallery.index}
+            onStep={(d) => setNoteGallery(g => {
+              const n = g.images.length
+              return { ...g, index: d === 'first' ? 0 : d === 'last' ? n - 1 : (g.index + d + n) % n }
+            })}
+            onJump={(i) => setNoteGallery(g => ({ ...g, index: i }))} onClose={() => setNoteGallery(null)}
+            onDownload={(it) => saveImageItem(it).catch(() => window.open(it.url, '_blank', 'noopener'))} />,
           document.body
         )}
         {readerItem && createPortal((() => {

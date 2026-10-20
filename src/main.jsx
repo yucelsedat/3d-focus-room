@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import './index.css'
 import App from './App.jsx'
 import WorldSelect from './pages/WorldSelect.jsx'
+import TimelineRoute from './pages/TimelineRoute.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -11,6 +12,7 @@ createRoot(document.getElementById('root')).render(
       <Routes>
         <Route path="/" element={<WorldSelect />} />
         <Route path="/game" element={<App />} />
+        <Route path="/timeline" element={<TimelineRoute />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,
