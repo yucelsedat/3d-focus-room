@@ -31,7 +31,12 @@ function SyncMark({ count }) {
   </>)
 }
 
-export default function CanvasMesh({ id, content, width, height, syncGroupId, syncCount }) {
+// standalone: /canvas sayfası — 3B sahne yok; aynı editör doğrudan tam ekran düzenleme
+// modunda açılır (oyundaki tile'a eklenen her özellik sayfada da çalışır, tersi de).
+// toolbarStart / toolbarEnd araç çubuğunun iki ucuna, overlay editör kabına eklenir.
+// readOnly (yalnız standalone): salt okunur görünüm — duvardaki tile'ın render modundaki
+// tıklanabilir kartlar (link kopyala, odaya git, müzik…) + kaydırma/yakınlaştırma; kayıt yok.
+export default function CanvasMesh({ id, content, width, height, syncGroupId, syncCount, standalone = false, readOnly = false, toolbarStart, toolbarEnd, overlay, onOpenRoom }) {
   const updateMedia = useStore(s => s.updateMedia)
   const rooms       = useStore(s => s.rooms)
   const setRooms    = useStore(s => s.setRooms)
@@ -41,9 +46,13 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const [items, setItems]                   = useState(() =>
     (initial.items || []).map(it => it.type === 'text' && it.h ? { ...it, h: Math.min(it.h, a4MaxH(it.w)) } : it))
   const [bg, setBg]                         = useState(initial.bg || '#1a1a2e')
-  const [isEditMode, setIsEditMode]         = useState(false)
-  const [isFullscreen, setIsFullscreen]     = useState(false)
-  const isFullscreenRef                     = useRef(false)
+  const [editModeState, setIsEditMode]      = useState(false)
+  // standalone'da mod sayfadan gelir (düzenleme ↔ okuma); oyunda tile'a tıklayınca açılır
+  const isEditMode                          = standalone ? !readOnly : editModeState
+  const readView                            = standalone && readOnly
+  const readViewRef                         = useRef(readView)
+  const [isFullscreen, setIsFullscreen]     = useState(standalone)
+  const isFullscreenRef                     = useRef(standalone)
   const [readerItemId, setReaderItemId]     = useState(null) // text item shown in fullscreen reader modal
   const [readerEditing, setReaderEditing]   = useState(false) // reader modal in edit (textarea) mode
   const readerItemIdRef                     = useRef(null)
@@ -107,7 +116,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const panRef          = useRef(pan)
   const zoomRef         = useRef(zoom)
   const selectedIdsRef  = useRef(selectedIds)
-  const isEditModeRef   = useRef(false)
+  const isEditModeRef   = useRef(isEditMode)
   const scheduleSaveRef = useRef(null)
   const pasteActionRef      = useRef(null)
   const pasteInternalRef    = useRef(null)
@@ -149,6 +158,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
   useEffect(() => { selectedIdsRef.current = selectedIds }, [selectedIds])
   useEffect(() => { isEditModeRef.current = isEditMode }, [isEditMode])
+  useEffect(() => { readViewRef.current = readView }, [readView])
   useEffect(() => { isFullscreenRef.current = isFullscreen }, [isFullscreen])
   // Fullscreen açıkken pencere yeniden boyutlanırsa contain ölçeğini güncelle
   useEffect(() => {
@@ -162,13 +172,17 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   useEffect(() => { viewerItemIdRef.current = viewerItemId }, [viewerItemId])
   useEffect(() => { noteOverlayRef.current = !!(noteEditId || noteGallery) }, [noteEditId, noteGallery])
   useEffect(() => { showColorPickerRef.current = showColorPicker }, [showColorPicker])
+  // Yalnız gerçek değişimde kaydet: mount'ta (ref zaten aynı değer) boş kayıt atılmasın —
+  // /canvas düzenleme modunda açıldığından aksi halde her açılış bir PUT gönderiyordu.
   useEffect(() => {
+    const changed = panRef.current !== pan
     panRef.current = pan
-    if (isEditMode) scheduleSaveRef.current?.(itemsRef.current, bgRef.current)
+    if (isEditMode && changed) scheduleSaveRef.current?.(itemsRef.current, bgRef.current)
   }, [pan]) // eslint-disable-line
   useEffect(() => {
+    const changed = zoomRef.current !== zoom
     zoomRef.current = zoom
-    if (isEditMode) scheduleSaveRef.current?.(itemsRef.current, bgRef.current)
+    if (isEditMode && changed) scheduleSaveRef.current?.(itemsRef.current, bgRef.current)
   }, [zoom]) // eslint-disable-line
 
   // ── Persistence ───────────────────────────────────────────────────────────
@@ -226,7 +240,8 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
           if (!atEdge) { e.stopPropagation(); return }
         }
       }
-      if (!isEditModeRef.current) return
+      // okuma görünümü de kaydırılıp yakınlaştırılır (pan/zoom kaydı yalnız düzenleme modunda)
+      if (!isEditModeRef.current && !readViewRef.current) return
       // reader / resim görüntüleyici açık → wheel modalın; canvas'ı pan/zoom etme
       if (readerItemIdRef.current || viewerItemIdRef.current || noteOverlayRef.current) return
       const el = containerRef.current
@@ -293,7 +308,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         if (act) { e.preventDefault(); if (!e.repeat || k !== 'Escape') act() }
         return
       }
-      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); if (readerItemIdRef.current) { setReaderItemId(null); setReaderEditing(false); return } if (showColorPickerRef.current) { setShowColorPicker(null); return } if (isFullscreenRef.current) { setIsFullscreen(false); return } exitEdit(); return }
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); if (readerItemIdRef.current) { setReaderItemId(null); setReaderEditing(false); return } if (showColorPickerRef.current) { setShowColorPicker(null); return } if (standalone) return; if (isFullscreenRef.current) { setIsFullscreen(false); return } exitEdit(); return }
       const active = document.activeElement
       if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') return
       const ctrl = e.ctrlKey || e.metaKey
@@ -349,7 +364,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         setSelectedIds(new Set())
       }
     }
-    const onLock = () => { if (document.pointerLockElement) exitEdit() }
+    const onLock = () => { if (document.pointerLockElement && !standalone) exitEdit() }
     document.addEventListener('keydown', onKey, true)
     document.addEventListener('pointerlockchange', onLock)
     return () => {
@@ -514,13 +529,30 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     // clear selection + close panels + pan
     setSelectedIds(new Set())
     if (showColorPicker) { setShowColorPicker(null); return }
-    if (editingItemId)  { setEditingItemId(null); return }
+    // Önce blur: metin kutusu onBlur'da kaydeder; odaklıyken DOM'dan kaldırılınca tarayıcı
+    // blur göndermiyor ve yazılan metin kayboluyordu.
+    if (editingItemId)  { document.activeElement?.blur(); setEditingItemId(null); return }
     if (showUrlInput)   { setShowUrlInput(false); setUrlValue(''); return }
     if (showRoomSearch) { setShowRoomSearch(false); setRoomSearchText(''); return }
     setIsPanning(true)
     const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
     setPanStart({ x: ix - pan.x, y: iy - pan.y })
   }
+
+  // Okuma görünümü: her yerden sürükleyerek kaydır (tıklanabilir kartlar mousedown'ı kendileri durdurur)
+  const onReadMouseDown = (e) => {
+    stop(e)
+    setIsPanning(true)
+    const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
+    setPanStart({ x: ix - pan.x, y: iy - pan.y })
+  }
+  // Yalnızca kaydırır — düzenleme işleyicilerinin (çizim, sürükleme, kayıt) hiçbiri çalışmaz
+  const onReadMouseMove = (e) => {
+    if (!isPanning) return
+    const { ix, iy } = getInternalCoords(e.clientX, e.clientY)
+    setPan({ x: ix - panStart.x, y: iy - panStart.y })
+  }
+  const onReadMouseUp = () => setIsPanning(false)
 
   // ── Unified mouse move ────────────────────────────────────────────────────
   const onMouseMove = (e) => {
@@ -755,6 +787,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const navigateToRoom = (item) => {
     const found = rooms.find(r => r.id === item.roomId) || (item.roomId ? { id: item.roomId, name: item.roomName } : null)
     if (!found) { alert(`"${item.roomName}" odası bulunamadı.`); return }
+    if (onOpenRoom) { onOpenRoom(found); return }
     loadRoom(found.id, found.name).catch(() => alert('Oda yüklenemedi'))
   }
 
@@ -918,68 +951,115 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const filteredRooms = rooms.filter(r => !roomSearchText || r.name.toLowerCase().includes(roomSearchText.toLowerCase()))
   const noMatch = roomSearchText.trim() && filteredRooms.length === 0
 
-  return (
+  // Render modu öğeleri: duvardaki tile ve /canvas okuma görünümü aynı tıklanabilir kartları gösterir
+  const readItems = (
     <>
-      <mesh position={[0, 0, 0.02]}>
-        <planeGeometry args={[w, h]} />
-        <meshBasicMaterial transparent opacity={0.05} color="#ffffff" depthWrite={false} side={THREE.DoubleSide} />
-      </mesh>
+      {items.filter(it => it.type !== 'arrow').map(item =>
+        item.type === 'image' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'none' }}>
+            <ImageItem item={item} />
+          </div>
+        ) : item.type === 'youtube' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+            <YoutubeCard item={item} clickable />
+          </div>
+        ) : item.type === 'link' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+            <LinkCard item={item} clickable />
+          </div>
+        ) : item.type === 'insta' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+            <InstaCard item={item} clickable />
+          </div>
+        ) : item.type === 'music' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+            <MusicCard item={item} clickable />
+          </div>
+        ) : item.type === 'pdf' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
+            <PdfCard item={item} clickable />
+          </div>
+        ) : item.type === 'note' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'none' }}>
+            <NoteCard item={item} />
+          </div>
+        ) : item.type === 'text' ? (
+          <TextItemBox key={item.id} item={item} defaultBg="transparent"
+            style={{ position: 'absolute', left: item.x, top: item.y, width: item.w }} />
+        ) : item.type === 'room' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}
+            onMouseDown={stop} onClick={(e) => { stop(e); navigateToRoom(item) }}>
+            <RoomChip item={item} />
+          </div>
+        ) : null
+      )}
+      {arrowLayer(false)}
+    </>
+  )
 
-      <Html key={`canvas-${w}-${h}`} transform position={[0, 0, 0.01]} scale={scale} style={{ pointerEvents: 'none' }}>
+  // Düzenleme ve okuma araç çubuğu aynı kabuk. Tam ekranda butonlar 1:1 çizildiğinden çubuk
+  // zoom'la küçültülür (yükseklik telafi edilir). Genişlik left/right:0'a bırakılır — standart
+  // CSS zoom'da yüzdeler ölçeklenmez; telafili % genişlik çubuğu ekrandan taşırıyordu.
+  const toolbarStyle = { position: 'absolute', top: 0, left: 0, right: 0, height: tbH, background: 'rgba(5,5,15,0.92)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', gap: 14, padding: '0 20px', zIndex: 20, boxSizing: 'border-box', borderBottom: '1px solid rgba(96,165,250,0.18)', overflowX: isFullscreen ? 'auto' : 'visible', overflowY: 'hidden',
+    ...(isFullscreen ? { zoom: FS_TB_ZOOM, height: tbH / FS_TB_ZOOM } : {}) }
+  const zoomControls = (<>
+    <button onMouseDown={stop} onClick={(e) => { stop(e); zoomStep(-1) }} style={{ ...tbBtn, padding: '0 16px', fontSize: 30 }}>−</button>
+    <span onMouseDown={stop} onClick={(e) => { stop(e); setZoom(1); setPan({ x: 0, y: 0 }) }}
+      style={{ fontSize: 22, color: 'rgba(148,163,184,0.8)', minWidth: 54, textAlign: 'center', cursor: 'pointer', flexShrink: 0 }}>
+      {Math.round(zoom * 100)}%
+    </span>
+    <button onMouseDown={stop} onClick={(e) => { stop(e); zoomStep(1) }} style={{ ...tbBtn, padding: '0 16px', fontSize: 30 }}>+</button>
+  </>)
+
+  const body = (
+      <>
 
         {/* ══ RENDER MODE ══════════════════════════════════════════════════ */}
-        {!isEditMode && (
+        {!isEditMode && !standalone && (
           <div style={{ width: pxW, height: pxH, backgroundColor: bg, position: 'relative', overflow: 'hidden', borderRadius: 4, pointerEvents: 'auto', cursor: 'pointer', userSelect: 'none' }}
             onMouseDown={enterEdit} onClick={stop}
           >
             {syncGroupId && <SyncMark count={syncCount} />}
             <div style={{ position: 'absolute', top: 0, left: 0, width: 8000, height: 8000, transform: surfTx, transformOrigin: '0 0' }}>
-              {items.filter(it => it.type !== 'arrow').map(item =>
-                item.type === 'image' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'none' }}>
-                    <ImageItem item={item} />
-                  </div>
-                ) : item.type === 'youtube' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
-                    <YoutubeCard item={item} clickable />
-                  </div>
-                ) : item.type === 'link' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
-                    <LinkCard item={item} clickable />
-                  </div>
-                ) : item.type === 'insta' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
-                    <InstaCard item={item} clickable />
-                  </div>
-                ) : item.type === 'music' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
-                    <MusicCard item={item} clickable />
-                  </div>
-                ) : item.type === 'pdf' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}>
-                    <PdfCard item={item} clickable />
-                  </div>
-                ) : item.type === 'note' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'none' }}>
-                    <NoteCard item={item} />
-                  </div>
-                ) : item.type === 'text' ? (
-                  <TextItemBox key={item.id} item={item} defaultBg="transparent"
-                    style={{ position: 'absolute', left: item.x, top: item.y, width: item.w }} />
-                ) : item.type === 'room' ? (
-                  <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}
-                    onMouseDown={stop} onClick={(e) => { stop(e); navigateToRoom(item) }}>
-                    <RoomChip item={item} />
-                  </div>
-                ) : null
-              )}
-              {arrowLayer(false)}
+              {readItems}
             </div>
             {items.length === 0 && (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.18)', fontSize: 38, gap: 12, pointerEvents: 'none' }}>
                 <span>✎</span><span style={{ fontSize: 26 }}>tıkla ve düzenle</span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ══ READ MODE (/canvas salt okunur) ══════════════════════════════ */}
+        {readView && renderEdit(
+          <div ref={containerRef}
+            style={{ position: 'fixed', inset: 0, backgroundColor: '#07070d', overflow: 'hidden', pointerEvents: 'auto', cursor: isPanning ? 'grabbing' : 'grab', userSelect: 'none', zIndex: 2147483600 }}
+            onMouseMove={onReadMouseMove} onMouseUp={onReadMouseUp} onMouseLeave={onReadMouseUp} onClick={stop}>
+            <div style={toolbarStyle} onMouseDown={stop}>
+              {toolbarStart}
+              <span style={{ height: 54, display: 'flex', alignItems: 'center', padding: '0 20px', borderRadius: 8, border: '1px solid rgba(96,165,250,0.4)', background: 'rgba(96,165,250,0.12)', color: '#93c5fd', fontSize: 24, fontWeight: 800, letterSpacing: 1, flexShrink: 0 }}>
+                Salt okunur
+              </span>
+              <div style={div} />
+              {zoomControls}
+              <span style={{ marginLeft: 'auto', fontSize: 20, color: 'rgba(148,163,184,0.3)', flexShrink: 0 }}>
+                Sürükle: kaydır · Ctrl+tekerlek: yakınlaştır · Kartlara tıklayabilirsin
+              </span>
+              {toolbarEnd}
+            </div>
+            {overlay}
+            <div style={{ position: 'absolute', left: fsOffX, top: fsOffY, width: fsDispW, height: fsDispH, overflow: 'hidden', backgroundColor: bg, borderRadius: 4, boxShadow: '0 0 0 1px rgba(96,165,250,0.35), 0 12px 48px rgba(0,0,0,0.55)' }}>
+              <div style={{ position: 'absolute', top: 0, left: 0, width: 8000, height: 8000, transform: `scale(${fsScale}) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}
+                onMouseDown={onReadMouseDown}>
+                {readItems}
+              </div>
+              {items.length === 0 && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.18)', fontSize: 22, pointerEvents: 'none' }}>
+                  Bu canvas boş
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -993,12 +1073,9 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
             onDragOver={onDragOverEdit} onDrop={onDropEdit}
           >
             {/* ── Toolbar ───────────────────────────────────────────────── */}
-            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: tbH, background: 'rgba(5,5,15,0.92)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', gap: 14, padding: '0 20px', zIndex: 20, boxSizing: 'border-box', borderBottom: '1px solid rgba(96,165,250,0.18)', overflowX: isFullscreen ? 'auto' : 'visible', overflowY: 'hidden',
-              // fullscreen: buttons are rendered 1:1 so the row is physically large — zoom the
-              // whole bar down (width/height compensated so the bar still fills the top edge).
-              ...(isFullscreen ? { zoom: FS_TB_ZOOM, width: `${100 / FS_TB_ZOOM}%`, height: tbH / FS_TB_ZOOM } : {}) }}
-              onMouseDown={stop}>
+            <div style={toolbarStyle} onMouseDown={stop}>
 
+              {toolbarStart}
               <button onMouseDown={stop} onClick={addText} style={tbBtn}>✏️ Metin</button>
               <button onMouseDown={stop} onClick={addNote} title="Resimli, tarihli zengin not balonu" style={tbBtn}>📝 Not</button>
               <button onMouseDown={stop} onClick={(e) => { stop(e); setShowUrlInput(v => !v); setUrlValue(''); setShowRoomSearch(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showUrlInput ? act : {}) }}>🖼️ Resim</button>
@@ -1011,20 +1088,17 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
               <div style={div} />
 
-              <button onMouseDown={stop} onClick={(e) => { stop(e); zoomStep(-1) }} style={{ ...tbBtn, padding: '0 16px', fontSize: 30 }}>−</button>
-              <span onMouseDown={stop} onClick={(e) => { stop(e); setZoom(1); setPan({ x: 0, y: 0 }) }}
-                style={{ fontSize: 22, color: 'rgba(148,163,184,0.8)', minWidth: 54, textAlign: 'center', cursor: 'pointer', flexShrink: 0 }}>
-                {Math.round(zoom * 100)}%
-              </span>
-              <button onMouseDown={stop} onClick={(e) => { stop(e); zoomStep(1) }} style={{ ...tbBtn, padding: '0 16px', fontSize: 30 }}>+</button>
+              {zoomControls}
 
               <div style={div} />
 
-              <button onMouseDown={stop} onClick={(e) => { stop(e); setIsFullscreen(v => !v) }}
-                title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
-                style={{ ...tbBtn, padding: '0 16px', ...(isFullscreen ? act : {}) }}>
-                {isFullscreen ? '🗗 Çık' : '⛶ Tam ekran'}
-              </button>
+              {!standalone && (
+                <button onMouseDown={stop} onClick={(e) => { stop(e); setIsFullscreen(v => !v) }}
+                  title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
+                  style={{ ...tbBtn, padding: '0 16px', ...(isFullscreen ? act : {}) }}>
+                  {isFullscreen ? '🗗 Çık' : '⛶ Tam ekran'}
+                </button>
+              )}
 
               {(imageCount > 0 || dlAll) && (
                 <>
@@ -1157,9 +1231,11 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
               })()}
 
               <span style={{ marginLeft: 'auto', fontSize: 20, color: 'rgba(148,163,184,0.3)', flexShrink: 0 }}>
-                {hasBoxSel ? 'Ctrl+C: kopyala · Ctrl+X: kes · Ctrl+D: çoğalt · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'} · ESC
+                {hasBoxSel ? 'Ctrl+C: kopyala · Ctrl+X: kes · Ctrl+D: çoğalt · Del: sil' : 'Ctrl+sürükle: seç · Ctrl+A: tümünü seç'}{standalone ? '' : ' · ESC'}
               </span>
+              {toolbarEnd}
             </div>
+            {overlay}
 
             {/* ── Room search dropdown ───────────────────────────────────── */}
             {showRoomSearch && (
@@ -1435,6 +1511,19 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         })(),
         document.body
       )}
+      </>
+  )
+
+  if (standalone) return body
+  return (
+    <>
+      <mesh position={[0, 0, 0.02]}>
+        <planeGeometry args={[w, h]} />
+        <meshBasicMaterial transparent opacity={0.05} color="#ffffff" depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+
+      <Html key={`canvas-${w}-${h}`} transform position={[0, 0, 0.01]} scale={scale} style={{ pointerEvents: 'none' }}>
+        {body}
       </Html>
     </>
   )

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore'
 import { useSpeechToText } from '../hooks/useSpeechToText'
 import { loadRoom } from '../utils/loadRoom'
@@ -36,6 +37,7 @@ function MicButton({ listening, onToggle, supported }) {
 }
 
 export function EditModal() {
+  const navigate = useNavigate()
   const { activeModal, selectedTile, worldMedia, closeModal, addMedia, removeMedia, modalEdit, applyLoopSpecEdit } = useStore()
   // Düzenleme modu: başlatılmamış LoopFlow tile'ının ayarlarını PATCH ile güncelle (yeni media eklemez)
   const loopEditMode = modalEdit?.type === 'roomsession-loop'
@@ -55,7 +57,9 @@ export function EditModal() {
   const [editingContent, setEditingContent] = useState('')
   const [copiedId, setCopiedId] = useState(null)
   const [pastePreview, setPastePreview] = useState(null)
-  const [clonedMedia, setClonedMedia] = useState(null) // { id, type, label, mode: 'copy' | 'cut' | 'sync' }
+  // Tile panosu store'da: /canvas sayfasında kopyalanan canvas da burada yapıştırılır
+  const clonedMedia    = useStore(s => s.tileClipboard)
+  const setClonedMedia = useStore(s => s.setTileClipboard)
   const [syncGroupView, setSyncGroupView] = useState(null) // { id, members } — açık senkron grup listesi
   const [sessionModel, setSessionModel]   = useState('claude-fable-5')
   const [sessionEffort, setSessionEffort] = useState('normal')
@@ -221,7 +225,10 @@ export function EditModal() {
         }),
       })
       const { source, ...d } = await r.json()
-      if (!r.ok) throw new Error(d.error || 'Yapıştırılamadı')
+      if (!r.ok) {
+        if (r.status === 404) setClonedMedia(null)   // kaynak silinmiş: panoda bayat kayıt bırakma
+        throw new Error(d.error || 'Yapıştırılamadı')
+      }
       addMedia(d)
       // Sync-kopya: kaynak artık senkron (aynı odadaysa border/sayı hemen güncellensin)
       if (source) useStore.getState().updateMedia(source)
@@ -1088,7 +1095,11 @@ export function EditModal() {
                               {mem.roomName}
                               {mem.isSelf ? ' — bu kopya' : mem.isCurrentRoom ? ' — bu oda' : ''}
                             </span>
-                            {!mem.isCurrentRoom && (
+                            {mem.isCanvasPage ? (
+                              <button style={{ ...s.deleteBtn, border: '1px solid #333', color: '#93c5fd' }} onClick={() => { closeModal(); navigate('/canvas') }}>
+                                Canvas'a Git →
+                              </button>
+                            ) : !mem.isCurrentRoom && (
                               <button style={{ ...s.deleteBtn, border: '1px solid #333', color: '#93c5fd' }} onClick={() => goToRoom(mem.roomId, mem.roomName)}>
                                 Odaya Git →
                               </button>
