@@ -921,6 +921,25 @@ export default function WorldSelect() {
             </svg>
             Timeline
           </button>
+          <button
+            onClick={() => navigate('/canvas')}
+            title="Tam ekran canvas — kopyalayıp bir odanın duvarına ekleyebilirsin"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 14px', borderRadius: 10, background: 'transparent',
+              border: '1px solid #262626', color: '#ddd', fontSize: 14, fontWeight: 700,
+              cursor: 'pointer', letterSpacing: 0.3,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#ff8a1f'; e.currentTarget.style.color = '#fff' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#262626'; e.currentTarget.style.color = '#ddd' }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="14" rx="2" />
+              <path d="M7 14l3-3 2 2 3-4 2 3" />
+              <path d="M9 21h6" />
+            </svg>
+            Canvas
+          </button>
           <div style={{ position: 'relative' }}>
             <input
               type="text"

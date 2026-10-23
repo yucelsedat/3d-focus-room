@@ -1,5 +1,12 @@
 import { create } from 'zustand'
 
+// Tile panosu (Kopyala / Kes / Sync-Kopyala): oyundaki EditModal ile /canvas sayfası
+// ortak kullanır. Sayfalar arası geçişte ve yenilemede kaybolmasın diye localStorage'da.
+const TILE_CLIP_KEY = 'tileClipboard'
+function readTileClipboard() {
+  try { return JSON.parse(localStorage.getItem(TILE_CLIP_KEY)) || null } catch { return null }
+}
+
 export const useStore = create((set) => ({
   activeModal: false,
   canvasEditorOpen: false,
@@ -27,6 +34,12 @@ export const useStore = create((set) => ({
   outerRoomLinks: [],      // 1. bahçe duvarı bağlantı kapıları
   outerRoomLinks2: [],     // 2. bahçe duvarı bağlantı kapıları
   roomHistory: [],
+  tileClipboard: readTileClipboard(), // { id, type, label, mode: 'copy' | 'cut' | 'sync' }
+
+  setTileClipboard: (clip) => {
+    try { clip ? localStorage.setItem(TILE_CLIP_KEY, JSON.stringify(clip)) : localStorage.removeItem(TILE_CLIP_KEY) } catch {}
+    set({ tileClipboard: clip })
+  },
 
   setCanvasEditorOpen: (open) => set({ canvasEditorOpen: open }),
   openCanvasEditor: (id) => set({ canvasEditorOpen: true, canvasEditorMediaId: id }),

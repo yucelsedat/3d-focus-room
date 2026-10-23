@@ -136,6 +136,12 @@ ensureDir('public/uploads/pdf');
 let activeRoomId   = 'default';
 let activeRoomType = 'room';
 
+// /canvas sayfasının canvas'ı sıradan bir Media satırıdır (kopyala/kes/senkron aynı
+// hattan çalışsın diye); Media.roomId zorunlu olduğundan gizli bir sistem odasında durur.
+// Bu oda oda listelerinde görünmez ve aktifleştirilemez.
+const CANVAS_PAGE_ROOM_ID = '__canvas_page__';
+const VISIBLE_ROOMS = { id: { not: CANVAS_PAGE_ROOM_ID } };
+
 // ─── AI Session tracking ─────────────────────────────────────────────────────
 // Use standalone claude CLI (not CLAUDE_CODE_EXECPATH which is the VS Code extension's
 // internal binary and doesn't work when spawned outside the VS Code context)
@@ -350,6 +356,7 @@ app.get('/api/rooms', async (req, res) => {
   // Son aktif olan oda en başta: oda her aktifleştiğinde (activate) lastActiveAt
   // güncellenir, böylece liste bir "son kullanılan" kuyruğu gibi davranır.
   const rooms = await prisma.room.findMany({
+    where: VISIBLE_ROOMS,
     orderBy: { lastActiveAt: 'desc' },
     include: roomInclude,
   });
@@ -380,7 +387,7 @@ app.post('/api/rooms', async (req, res) => {
 app.post('/api/rooms/:id/activate', async (req, res) => {
   const { id } = req.params;
   const existing = await prisma.room.findUnique({ where: { id } });
-  if (!existing) return res.status(404).json({ error: 'Oda bulunamadı' });
+  if (!existing || id === CANVAS_PAGE_ROOM_ID) return res.status(404).json({ error: 'Oda bulunamadı' });
 
   // lastActiveAt'i güncelle → oda ana sayfada en başa geçer (son kullanılan kuyruğu).
   const room = await prisma.room.update({
@@ -525,7 +532,7 @@ async function getAllAncestors(roomId, visited = new Set()) {
 
 app.get('/api/worlds', async (req, res) => {
   const worlds = await prisma.room.findMany({
-    where: { parentId: null },
+    where: { parentId: null, ...VISIBLE_ROOMS },
     orderBy: { createdAt: 'asc' },
     include: roomInclude,
   });
@@ -912,7 +919,7 @@ app.delete('/api/special-doors/:id', async (req, res) => {
     data: { parentId: null },
   });
   await reconcileNotebooks();   // kopan alt ağaç kendi defterine
-  const allRooms = await prisma.room.findMany({ include: roomInclude });
+  const allRooms = await prisma.room.findMany({ where: VISIBLE_ROOMS, include: roomInclude });
   res.json({ success: true, rooms: allRooms.map(serializeRoom) });
 });
 
@@ -940,7 +947,7 @@ app.post('/api/special-doors/link', async (req, res) => {
     where: { roomId: activeRoomId },
     include: { target: { select: { id: true, name: true } } },
   });
-  const allRooms = await prisma.room.findMany({ include: roomInclude });
+  const allRooms = await prisma.room.findMany({ where: VISIBLE_ROOMS, include: roomInclude });
   res.json({
     specialDoors: updatedDoors.map(sd => serializeSpecialDoor(sd)),
     rooms: allRooms.map(serializeRoom),
@@ -1289,6 +1296,44 @@ app.post('/api/canvas', async (req, res) => {
   }
 });
 
+// /canvas sayfasının canvas'ı: yoksa (ilk açılış ya da "Kes" ile bir duvara taşındıysa)
+// boş olarak oluşturulur. Eşzamanlı ilk istekler (StrictMode çift effect) tek satır üretsin
+// diye oluşturma tek bir promise'te toplanır.
+let canvasPagePending = null;
+async function ensureCanvasPage() {
+  const existing = await prisma.media.findFirst({ where: { roomId: CANVAS_PAGE_ROOM_ID, type: 'canvas' }, orderBy: { id: 'asc' } });
+  if (existing) return existing;
+  await prisma.room.upsert({
+    where: { id: CANVAS_PAGE_ROOM_ID },
+    update: {},
+    create: { id: CANVAS_PAGE_ROOM_ID, name: 'Canvas sayfası', roomType: 'canvas-page' },
+  });
+  return prisma.media.create({
+    data: {
+      id: BigInt(Date.now()),
+      roomId: CANVAS_PAGE_ROOM_ID,
+      tileId: 'canvas-page',
+      type: 'canvas',
+      url: null,
+      content: JSON.stringify({ items: [], bg: '#1a1a2e' }),
+      width: 8, height: 4.5,
+      posX: 0, posY: 0, posZ: 0,
+      rotX: 0, rotY: 0, rotZ: 0,
+    },
+  });
+}
+
+app.get('/api/canvas-page', async (req, res) => {
+  try {
+    canvasPagePending ??= ensureCanvasPage().finally(() => { canvasPagePending = null; });
+    const [media] = await serializeWithSync([await canvasPagePending]);
+    res.json(media);
+  } catch (err) {
+    console.error('[canvas-page] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/header', async (req, res) => {
   try {
     const { tileId, width, height, position, rotation, bg = '#1a1a2e', color = '#ffffff', text = '' } = req.body;
@@ -1532,7 +1577,9 @@ app.get('/api/media/:id/sync-group', async (req, res) => {
   });
   res.json({
     members: members.map(m => ({
-      id: Number(m.id), roomId: m.roomId, roomName: m.room?.name ?? m.roomId,
+      id: Number(m.id), roomId: m.roomId,
+      roomName: m.roomId === CANVAS_PAGE_ROOM_ID ? 'Canvas sayfası' : (m.room?.name ?? m.roomId),
+      isCanvasPage: m.roomId === CANVAS_PAGE_ROOM_ID,
       isCurrentRoom: m.roomId === activeRoomId, isSelf: m.id === id,
     })),
   });
