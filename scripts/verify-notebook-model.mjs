@@ -382,4 +382,27 @@ test('reconcile: canlı defterdeki ölü oda satırı yerinde kalır', () => {
   assert.deepEqual(plan, { upserts: [], deletes: [] })
 })
 
+// ─── kitaplık ────────────────────────────────────────────────────────────────
+test('kitaplık: anahtar ayrıştırma', () => {
+  assert.deepEqual(M.parseBookKey('book:abc-1'), { kind: 'book', id: 'abc-1' })
+  assert.deepEqual(M.parseBookKey('room:default'), { kind: 'room', id: 'default' })
+  assert.deepEqual(M.parseBookKey(M.bookKey('room', 'r1')), { kind: 'room', id: 'r1' })
+  for (const bad of [null, '', 'book:', 'shelf:x', 'book:a:b', 'book:a/b', 'book:a b', 'book:' + 'x'.repeat(129)]) {
+    assert.equal(M.parseBookKey(bad), null, String(bad))
+  }
+})
+test('kitaplık: ad temizleme', () => {
+  assert.equal(M.cleanBookName('  Yaz\n  günlüğü \t'), 'Yaz günlüğü')
+  assert.equal(M.cleanBookName('   '), null)
+  assert.equal(M.cleanBookName(42), null)
+  assert.equal(M.cleanBookName('x'.repeat(100)).length, M.NB_LIMITS.name)
+})
+test('kitaplık: kapak yalnızca /uploads ya da http(s)', () => {
+  assert.equal(M.cleanCover(' /uploads/notebooks/a.jpg '), '/uploads/notebooks/a.jpg')
+  assert.equal(M.cleanCover('https://ex.com/a.png'), 'https://ex.com/a.png')
+  for (const bad of ['/uploads/../server.js', '/etc/passwd', 'javascript:alert(1)', 'data:image/png;base64,AA', '', null, 'x'.repeat(3000)]) {
+    assert.equal(M.cleanCover(bad), null, String(bad))
+  }
+})
+
 console.log(`✓ notebookModel: ${passed} kontrol geçti`)

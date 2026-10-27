@@ -475,3 +475,10 @@ export function pasteMsgView(msg, missingLinksMessage) {
     : msg === 'ok' ? '✓ Yapıştırıldı' : '✕ Hata'
   return { color, text }
 }
+
+// Defter kartı: kitaplıktaki deftere bakar (src); ad/kapak kopyası ilk çizim için.
+// Boy canvas'ın 1920 px'lik mantıksal ölçeğinde (timeline aynı ölçek).
+export const NOTEBOOK_CARD = { w: 300, h: 400 }
+export function makeNotebookItem(meta, pt) {
+  return { id: crypto.randomUUID(), type: 'notebook', x: pt.x, y: pt.y, w: NOTEBOOK_CARD.w, h: NOTEBOOK_CARD.h, src: meta.key, name: meta.name, cover: meta.cover }
+}

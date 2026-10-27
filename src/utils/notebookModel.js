@@ -10,6 +10,11 @@
 //            roomId, roomName (silinen oda için snapshot), seed (≠0), createdAt, doneAt }
 //   ArchivedRow = Row & { pageId, pageTitle, archivedAt }
 //
+// Kitaplık: iki tür defter aynı dokümanı kullanır, anahtarla ayrılır —
+//   'room:<odaId>'  oda defteri (kök odaya ait, RoomNotebook)
+//   'book:<id>'     bağımsız defter (Notebook); canvas'taki defter kartları bunu gösterir
+// Ad ve kapak dokümanda değil satırda durur (kart dokümanı indirmeden çizilsin).
+//
 // Ağaç kuralı: başlık her zaman derinlik 0'dır ve çocuk almaz; her satır en fazla
 // bir üstündeki satırdan bir seviye derin olabilir (normalizeDepths).
 
@@ -21,6 +26,8 @@ export const NB_LIMITS = {
   archive: 2000,
   depth: 2,
   bytes: 1_500_000,
+  name: 60,
+  cover: 2000,
 }
 
 const TYPES = new Set(['todo', 'note', 'heading'])
@@ -132,6 +139,35 @@ export function sanitizeNotebook(doc) {
     }
   }
   return { version: 1, pages, archive }
+}
+
+// ─── kitaplık: anahtar / ad / kapak ────────────────────────────────────────────
+
+const KEY_RE = /^(room|book):([^:\s/]{1,128})$/
+
+export function parseBookKey(key) {
+  const m = typeof key === 'string' ? KEY_RE.exec(key) : null
+  return m ? { kind: m[1], id: m[2] } : null
+}
+
+export const bookKey = (kind, id) => `${kind}:${id}`
+
+// Boş → null (oda defterinde "kök odanın adı" demek)
+export function cleanBookName(n) {
+  const s = typeof n === 'string' ? oneLine(n).replace(/\s+/g, ' ').trim().slice(0, NB_LIMITS.name) : ''
+  return s || null
+}
+
+// Kapak: yalnızca kendi /uploads dosyalarımız ya da http(s) adresi; gerisi null
+export function cleanCover(u) {
+  if (typeof u !== 'string') return null
+  const s = u.trim()
+  if (!s || s.length > NB_LIMITS.cover) return null
+  if (s.startsWith('/uploads/')) return s.includes('..') || s.includes('\\') ? null : s
+  try {
+    const url = new URL(s)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
+  } catch { return null }
 }
 
 // ─── ağaç yardımcıları ────────────────────────────────────────────────────────

@@ -23,12 +23,17 @@ import {
 import {
   getBounds, resizeItems, imageOrder, stopEvt, saveImageItem, urlsToViewerImages, uploadImageFile, layoutImageGrid,
   getCanvasClipboard, setCanvasClipboard, copyItemAssets, placeClipItems, buildPasteItems, pasteMsgView,
+  makeNotebookItem, NOTEBOOK_CARD,
 } from '../components/canvas/canvasUtils'
 import { missingLinksMessage } from '../utils/richTextToMarkdown'
 import { ItemBody } from '../components/canvas/ItemBody'
 import { ArrowLayer } from '../components/canvas/ArrowLayer'
 import { ImageViewer } from '../components/canvas/ImageViewer'
 import { NoteEditor } from '../components/canvas/NoteEditor'
+import { NotebookShelfMenu, NotebookCardDialog } from '../components/canvas/NotebookShelf'
+import { NotebookHost } from '../components/notebook/NotebookHost'
+import { takeNotebook } from '../components/notebook/shelfStore'
+import { useStore } from '../store/useStore'
 import { API, FONT_UI, FONT_DISPLAY, FONT_MONO, C, toolBtn, toolOn, divider } from './timeline/theme'
 import { useTimelineDoc } from './timeline/useTimelineDoc'
 import { SaveBadge, ConflictBanner } from './timeline/ui'
@@ -158,6 +163,12 @@ export default function TimelinePage() {
       </nav>
       {error && <div style={{ padding: 40, textAlign: 'center', color: '#f87171', font: `300 15px ${FONT_UI}` }}>{error}</div>}
       {!error && active && <TimelineShell key={active.id} id={active.id} />}
+      {/* defter kartından "elime al": defter burada açılır, oda etiketi oyuna götürür */}
+      <NotebookHost onOpenRoom={(room) => {
+        localStorage.setItem('lastRoomId', room.id)
+        localStorage.setItem('lastRoomName', room.name || '')
+        navigate('/game')
+      }} />
     </div>
   )
 }
@@ -173,6 +184,22 @@ if (typeof document !== 'undefined' && !document.getElementById('tl-page-styles'
     .tl-bar:hover { filter: brightness(1.25); }
   `
   document.head.appendChild(s)
+}
+
+// Kitaplık menüsü araç çubuğunun altında (çubuk yatay kaydığı için sabit konumlu);
+// dışarı tıklayınca / Esc ile kapanır
+function ShelfPopover({ at, onClose, onPick, onCreate }) {
+  useEffect(() => {
+    const onDown = () => onClose()
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [onClose])
+  return (
+    <NotebookShelfMenu onPick={onPick} onCreate={onCreate}
+      style={{ position: 'fixed', left: Math.max(8, Math.min(at.left, window.innerWidth - 368)), top: at.top, zIndex: 60 }} />
+  )
 }
 
 function TimelineSwitcher({ list, active, onSelect, onCreate, onRename, onDelete, onOpen }) {
@@ -321,6 +348,9 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
   const [hoveredArrowId, setHoveredArrowId] = useState(null)
   const [editingTextId, setEditingTextId] = useState(null)
   const [noteEditId, setNoteEditId] = useState(null)
+  const [notebookEditId, setNotebookEditId] = useState(null) // ayarları açık defter kartı
+  const [shelfAt, setShelfAt] = useState(null)       // kitaplık menüsü: düğmenin ekran konumu
+  const notebookOpen = useStore(st => st.notebookOpen)
   const [viewer, setViewer] = useState(null)         // { images:[{id,url}], index }
   const [drawMode, setDrawMode] = useState(null)     // null | 'line' | 'arrow'
   const [drawingLine, setDrawingLine] = useState(null)
@@ -535,6 +565,22 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
     update(prev => [...prev, ni])
     setSelectedIds(new Set([ni.id])); setEditingTextId(ni.id); setDrawMode(null)
   }
+  const addNotebook = (meta, { edit = false } = {}) => {
+    const c = viewCenterDisp()
+    const ni = keepInDay(fromDisplay(makeNotebookItem(meta, { x: c.x - NOTEBOOK_CARD.w / 2, y: c.y - NOTEBOOK_CARD.h / 2 }), kNow()))
+    update(prev => [...prev, ni])
+    setSelectedIds(new Set([ni.id])); setShelfAt(null); setDrawMode(null)
+    if (edit) setNotebookEditId(ni.id)
+  }
+  // Aynı deftere bakan kartların ad/kapak kopyası da tazelensin
+  const syncNotebookCards = (src, meta) => {
+    if (!itemsRef.current.some(it => it.type === 'notebook' && it.src === src)) return
+    update(prev => prev.map(it => it.type === 'notebook' && it.src === src ? { ...it, src: meta.key, name: meta.name, cover: meta.cover } : it))
+  }
+  const removeNotebookCards = (src) => {
+    update(prev => prev.filter(it => !(it.type === 'notebook' && it.src === src)))
+    setSelectedIds(new Set()); setNotebookEditId(null)
+  }
   const addImageFiles = async (files) => {
     const imgs = files.filter(f => f.type.startsWith('image/'))
     if (!imgs.length) return
@@ -715,6 +761,7 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
     stopEvt(e)
     if (drawMode) return
     if (item.type === 'note') setNoteEditId(item.id)
+    else if (item.type === 'notebook') setNotebookEditId(item.id)
     else if (item.type === 'text') { setEditingTextId(item.id); setSelectedIds(new Set([item.id])) }
     else if (item.type === 'image' && item.url) openImageItem(item.id)
   }
@@ -763,7 +810,7 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
 
   // ── klavye ──
   const onKey = useEffectEvent((e) => {
-    if (noteEditId || viewer || isTyping()) return
+    if (noteEditId || notebookEditId || notebookOpen || viewer || isTyping()) return
     const ctrl = e.ctrlKey || e.metaKey
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key
     if (k === 'Escape') {
@@ -796,10 +843,11 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
     if (selectedIds.size === 1 && k === 'Enter') {
       const it = itemsRef.current.find(i => selectedIds.has(i.id))
       if (it?.type === 'note') { e.preventDefault(); setNoteEditId(it.id) }
+      if (it?.type === 'notebook') { e.preventDefault(); setNotebookEditId(it.id) }
     }
   })
   const onPaste = useEffectEvent(async (e) => {
-    if (noteEditId || isTyping() || !itemsRef.current) return
+    if (noteEditId || notebookEditId || notebookOpen || isTyping() || !itemsRef.current) return
     e.preventDefault()
     const at = pastePoint()
     applyPasteResult(await buildPasteItems(e.clipboardData, { uploadKey, center: () => at, onLoading: () => setPasteMsg('loading') }))
@@ -866,6 +914,7 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
 
   const v = view
   const noteEditItem = noteEditId ? (items || []).find(it => it.id === noteEditId && it.type === 'note') : null
+  const notebookEditItem = notebookEditId ? (items || []).find(it => it.id === notebookEditId && it.type === 'notebook') : null
   const selBounds = items && v ? getBounds(selectedIds, disp) : null
   // tek tarihli not: sol/sağ = zaman, üst/alt = yükseklik; tarihli not içeren çoklu seçim boyutlanmaz
   const selDated = items ? items.filter(it => selectedIds.has(it.id) && it.type === 'note' && isValidStamp(it.start)).length : 0
@@ -885,6 +934,10 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
         <button className="tl-btn" onClick={() => fileRef.current?.click()} style={toolBtn}>Resim</button>
         <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
           onChange={e => { const f = [...e.target.files]; e.target.value = ''; addImageFiles(f) }} />
+        <button className="tl-btn" title="Kitaplıktan defter kartı ekle" aria-expanded={!!shelfAt}
+          onMouseDown={stopEvt}
+          onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setShelfAt(at => at ? null : { left: r.left, top: r.bottom + 6 }) }}
+          style={{ ...toolBtn, ...(shelfAt ? toolOn : {}) }}>Defter</button>
         <button className="tl-btn" onClick={() => setDrawMode(m => m === 'line' ? null : 'line')} style={{ ...toolBtn, ...(drawMode === 'line' ? toolOn : {}) }}>Çizgi</button>
         <button className="tl-btn" onClick={() => setDrawMode(m => m === 'arrow' ? null : 'arrow')} style={{ ...toolBtn, ...(drawMode === 'arrow' ? toolOn : {}) }}>Ok</button>
         <span style={divider} />
@@ -996,6 +1049,17 @@ function TimelineBoard({ id, doc, dayLock = null, onBack, onGoDay, onOpenMonth }
       {noteEditItem && (
         <NoteEditor key={noteEditItem.id} note={noteEditItem} uploadKey={uploadKey}
           onSave={saveNote} onDelete={() => deleteNote(noteEditItem.id)} onClose={() => setNoteEditId(null)} />
+      )}
+      {shelfAt && (
+        <ShelfPopover at={shelfAt} onClose={() => setShelfAt(null)}
+          onPick={(meta) => addNotebook(meta)} onCreate={(meta) => addNotebook(meta, { edit: true })} />
+      )}
+      {notebookEditItem && (
+        <NotebookCardDialog key={notebookEditItem.id} item={notebookEditItem}
+          onClose={() => setNotebookEditId(null)}
+          onSaved={(meta) => syncNotebookCards(notebookEditItem.src, meta)}
+          onTake={() => { setNotebookEditId(null); takeNotebook(notebookEditItem.src) }}
+          onDeleted={() => removeNotebookCards(notebookEditItem.src)} />
       )}
       {viewer && (
         <ImageViewer ownKeys images={viewer.images} index={viewer.index}

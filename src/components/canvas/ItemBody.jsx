@@ -1,7 +1,7 @@
 // ── Düzenleme yüzeyinde bir öğenin içeriği ───────────────────────────────────
 // Canvas tile edit modu ve Timeline aynı gövdeyi render eder. Konumlandırma,
 // seçim çerçevesi ve sürükleme çağıranın işi; burada yalnızca öğenin kendisi var.
-import { ImageItem, LinkCard, InstaCard, MusicCard, PdfCard, YoutubeCard, RoomChip, NoteCard } from './cards'
+import { ImageItem, LinkCard, InstaCard, MusicCard, PdfCard, YoutubeCard, RoomChip, NoteCard, NotebookCard } from './cards'
 import { TextItemBox, TextItemEditor } from './TextItem'
 
 // width: gösterim genişliği (timeline not kartını zaman aralığına sığdırınca)
@@ -15,6 +15,7 @@ export function ItemBody({ item, width, editing, onOpenImages, onOpenLink, onTex
     case 'pdf':     return <PdfCard item={item} />
     case 'image':   return <ImageItem item={item} />
     case 'note':    return <NoteCard item={item} width={width} onOpenImages={onOpenImages} onOpenLink={onOpenLink} />
+    case 'notebook': return <NotebookCard item={item} width={width} />
     case 'text':
       // içeriğe göre uzat, A4 yüksekliğinde durdur → fazlası textarea içinde scroll
       return editing

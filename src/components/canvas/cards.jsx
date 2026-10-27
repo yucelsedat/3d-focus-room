@@ -6,6 +6,8 @@ import { useState, useEffect, useRef } from 'react'
 import { parseMd } from '../../utils/markdownRender'
 import { formatRange, formatRangeShort, statusOf } from '../../utils/timelineModel'
 import { stopEvt, parseInstaTitle, formatBytes, audioPool, getPoolAudio, togglePoolAudio, releasePoolAudio } from './canvasUtils'
+import { useStore } from '../../store/useStore'
+import { useShelf, ensureShelf, clothOf } from '../notebook/shelfStore'
 
 // Canvas'a özgü stiller (ortak .cvmd markdown stilleri utils/markdownRender'da)
 if (typeof document !== 'undefined' && !document.getElementById('cv-styles')) {
@@ -274,6 +276,66 @@ export const RoomChip = ({ item }) => (
     <span style={{ color: '#93c5fd', fontSize: 28, textDecoration: 'underline', textUnderlineOffset: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.roomName}</span>
   </div>
 )
+
+// ── Defter kartı ─────────────────────────────────────────────────────────────
+// Kitaplıktaki bir defterin kapağı (item.src = 'book:<id>' | 'room:<kökId>'). Ad ve
+// kapak kitaplıktan canlı okunur — aynı deftere bakan bütün kartlar birlikte değişir;
+// kartın kendi kopyası (name, cover) ilk çizim ve kitaplık yüklenemezse içindir.
+// Ölçüler kart genişliğine göre: köşe tutamacıyla büyütünce yazı da büyür.
+export const NotebookCard = ({ item, width, clickable = false, onOpen }) => {
+  useEffect(() => { ensureShelf() }, [])
+  const live = useShelf(st => st.byKey[item.src])
+  const shelfReady = useShelf(st => st.state === 'ready')
+  const held = useStore(st => st.heldNotebook === item.src)
+  const [imgFail, setImgFail] = useState(null)
+  const name = live?.name || item.name || 'Defter'
+  const cover = live ? live.cover : item.cover
+  const hasImg = !!cover && imgFail !== cover
+  // Bağımsız defter kitaplıkta yoksa silinmiştir; oda defteri satırsız da olabilir
+  const missing = shelfReady && !live && item.src?.startsWith('book:')
+  const isRoom = item.src?.startsWith('room:')
+  const u = (width ?? item.w ?? 300) / 300
+  const spine = 22 * u
+  const open = clickable && !missing && onOpen
+
+  return (
+    <div title={missing ? 'Bu defter kitaplıktan silinmiş' : open ? `${name} — elime al` : name}
+      style={{ position: 'relative', width: '100%', height: '100%', boxSizing: 'border-box', pointerEvents: open ? 'auto' : 'none', cursor: open ? 'pointer' : 'inherit',
+        borderRadius: `${4 * u}px ${12 * u}px ${12 * u}px ${4 * u}px`, overflow: 'hidden',
+        background: missing ? '#2a2d33' : clothOf(item.src), opacity: missing ? 0.6 : 1,
+        boxShadow: `0 ${14 * u}px ${28 * u}px -${12 * u}px rgba(0,0,0,0.75), inset 0 0 0 ${1 * u}px rgba(255,255,255,0.08)` }}
+      {...(open ? { onMouseDown: stopEvt, onClick: (e) => { stopEvt(e); onOpen() } } : {})}>
+      {hasImg && (
+        <img src={cover} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImgFail(cover)}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
+      )}
+      {/* sırt: koyu şerit + dikiş */}
+      <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: spine, pointerEvents: 'none',
+        background: 'linear-gradient(90deg, rgba(0,0,0,0.55), rgba(0,0,0,0.25) 70%, rgba(255,255,255,0.08))' }}>
+        <div style={{ position: 'absolute', top: 10 * u, bottom: 10 * u, right: 5 * u, borderRight: `${1.5 * u}px dashed rgba(247,242,228,0.35)` }} />
+      </div>
+      {/* etiket: ad + tür */}
+      <div style={{ position: 'absolute', left: spine + 16 * u, right: 16 * u, bottom: 18 * u, pointerEvents: 'none',
+        padding: `${12 * u}px ${14 * u}px`, borderRadius: 3 * u, background: 'rgba(247,242,228,0.94)', color: '#1d1c1a',
+        boxShadow: `0 ${6 * u}px ${14 * u}px -${8 * u}px rgba(0,0,0,0.6)` }}>
+        <div style={{ font: `800 ${10 * u}px ${FONT_UI}`, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'rgba(29,28,26,0.55)', marginBottom: 4 * u }}>
+          {missing ? 'silinmiş defter' : isRoom ? 'oda defteri' : 'defter'}
+        </div>
+        <div style={{ font: `italic 200 ${30 * u}px/1.08 ${FONT_DISPLAY}`, letterSpacing: '-0.01em', overflowWrap: 'anywhere',
+          display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {name}
+        </div>
+      </div>
+      {held && !missing && (
+        <div style={{ position: 'absolute', top: 14 * u, right: 0, pointerEvents: 'none', padding: `${5 * u}px ${12 * u}px ${5 * u}px ${10 * u}px`,
+          background: '#f4d35e', color: '#1d1c1a', font: `800 ${10 * u}px ${FONT_UI}`, letterSpacing: '0.18em', textTransform: 'uppercase',
+          borderRadius: `${3 * u}px 0 0 ${3 * u}px`, boxShadow: `0 ${4 * u}px ${10 * u}px -${6 * u}px rgba(0,0,0,0.7)` }}>
+          elinde
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Not balonu ───────────────────────────────────────────────────────────────
 // Timeline'ın asıl öğesi; canvas tile'da da aynı öğe. Bütün ölçüler item.fontSize'a

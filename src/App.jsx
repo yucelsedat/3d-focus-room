@@ -1,4 +1,4 @@
-import { useEffect, Suspense, Component, lazy } from 'react'
+import { useEffect, Suspense, Component } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { KeyboardControls } from '@react-three/drei'
 import { Grid, OutdoorFloor } from './components/Grid'
@@ -15,31 +15,10 @@ import { KeyHandler } from './components/KeyHandler'
 import { BlueDoors } from './components/BlueDoor'
 import { RoomNavHUD } from './components/RoomNavHUD'
 import { LoopIndicator } from './components/LoopIndicator'
+import { NotebookHost } from './components/notebook/NotebookHost'
 import { useStore } from './store/useStore'
 import { loadRoom } from './utils/loadRoom'
 import './App.css'
-
-// Defter ayrı chunk (roughjs + dnd-kit). Açılıştan birkaç saniye sonra boşta
-// önceden indirilir; B'ye basıldığında hazır olur.
-const loadNotebookOverlay = () => import('./components/notebook/NotebookOverlay')
-const NotebookOverlay = lazy(loadNotebookOverlay)
-
-// Chunk henüz inmediyse anında geri bildirim. Tıklama yayılımı durdurulur:
-// aksi halde drei PointerLockControls imleci yeniden kilitler.
-function NotebookFallback() {
-  return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 2147483647, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(6,6,8,0.88)', color: 'rgba(247,242,228,0.7)',
-        fontFamily: "'Caveat', cursive", fontSize: 34,
-      }}
-    >
-      defter açılıyor…
-    </div>
-  )
-}
 
 class SceneErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -53,13 +32,6 @@ class SceneErrorBoundary extends Component {
 
 function App() {
   const setRooms = useStore((state) => state.setRooms)
-  const notebookOpen = useStore((state) => state.notebookOpen)
-
-  useEffect(() => {
-    const idle = window.requestIdleCallback ?? ((cb) => setTimeout(cb, 1))
-    const t = setTimeout(() => idle(() => { loadNotebookOverlay().catch(() => {}) }), 4000)
-    return () => clearTimeout(t)
-  }, [])
 
   useEffect(() => {
     document.body.classList.add('game-mode')
@@ -145,11 +117,7 @@ function App() {
         <EditModal />
         <RoomModal />
         <MainMenu />
-        {notebookOpen && (
-          <Suspense fallback={<NotebookFallback />}>
-            <NotebookOverlay />
-          </Suspense>
-        )}
+        <NotebookHost />
       </div>
     </KeyboardControls>
   )
