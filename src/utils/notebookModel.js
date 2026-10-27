@@ -400,6 +400,96 @@ export function backspaceAt(rows, id) {
   return mergeWithPrev(rows, id)
 }
 
+// ─── pano: satır bloklarını kopyala / kes / yapıştır ──────────────────────────
+// Pano satırı = { type, text, done, depth (en sığ seçili satıra göre göreli), roomId, roomName }
+
+// Seçili satırlar sayfa sırasıyla
+export function clipRows(rows, ids) {
+  const picked = rows.filter(r => ids.has(r.id))
+  if (!picked.length) return []
+  const base = Math.min(...picked.map(r => r.depth))
+  return picked.map(r => ({
+    type: r.type, text: r.text, done: r.done, depth: r.depth - base, roomId: r.roomId, roomName: r.roomName,
+  }))
+}
+
+// Panodan okunan (güvenilmez) veri → pano satırları | null
+export function cleanClip(raw) {
+  if (!Array.isArray(raw)) return null
+  const out = []
+  for (const r of raw.slice(0, NB_LIMITS.rows)) {
+    if (!r || typeof r !== 'object') continue
+    const type = TYPES.has(r.type) ? r.type : 'note'
+    out.push({
+      type,
+      text: typeof r.text === 'string' ? oneLine(r.text).slice(0, NB_LIMITS.text) : '',
+      done: type === 'todo' && r.done === true,
+      depth: Math.max(0, Math.min(MAX_DEPTH, Math.trunc(num(r.depth)))),
+      roomId: typeof r.roomId === 'string' && r.roomId ? r.roomId.slice(0, 128) : null,
+      roomName: typeof r.roomName === 'string' ? r.roomName.slice(0, 120) : null,
+    })
+  }
+  return out.length ? out : null
+}
+
+// Satırları siler; sayfa boş kalırsa tek boş satır bırakır
+export function removeRows(rows, ids, ctx = {}) {
+  const out = rows.filter(r => !ids.has(r.id))
+  if (out.length === rows.length) return { rows }
+  if (!out.length) return { rows: [makeRow({ roomId: ctx.roomId ?? null, roomName: ctx.roomName ?? null })] }
+  return { rows: normalizeDepths(out) }
+}
+
+// Pano satırlarını yeni kimliklerle ekler. Konum:
+//   replaceIds → seçili satırların yerine (ilkinin olduğu yere)
+//   atId       → o satırın yerine (boşsa), önüne (before) ya da ardına; çocuklu satırda ilk çocuk olur
+//   hiçbiri    → sayfa sonuna
+// keepRooms: aynı defterden gelen satırlar oda izini korur; başka defterden gelenler o anki
+// odaya geçer (oda defterinde yabancı kökün satırı uzlaştırmada o deftere taşınırdı).
+// Dönüş: { rows, focus, ids } — ids eklenen satırlar
+export function insertClip(rows, clip, { atId = null, before = false, replaceIds = null, keepRooms = false } = {}, ctx = {}, now = Date.now()) {
+  let base = rows
+  let index = rows.length
+  let depth = 0
+  if (replaceIds?.size) {
+    const first = rows.findIndex(r => replaceIds.has(r.id))
+    if (first >= 0) {
+      index = first
+      depth = rows[first].depth
+      base = rows.filter(r => !replaceIds.has(r.id))
+    }
+  } else if (atId) {
+    const i = indexOf(rows, atId)
+    if (i >= 0) {
+      const row = rows[i]
+      depth = row.depth
+      if (!row.text) {
+        index = i
+        base = [...rows.slice(0, i), ...rows.slice(i + 1)]
+      } else if (before) {
+        index = i
+      } else {
+        index = i + 1
+        if (i + 1 < rows.length && rows[i + 1].depth > row.depth) depth = row.depth + 1
+      }
+    }
+  }
+  const room = Math.max(0, NB_LIMITS.rows - base.length)
+  const created = clip.slice(0, room).map(c => makeRow({
+    type: c.type,
+    text: c.text,
+    done: c.done,
+    doneAt: c.done ? now : null,
+    depth: c.type === 'heading' ? 0 : Math.min(MAX_DEPTH, depth + c.depth),
+    roomId: keepRooms ? c.roomId : ctx.roomId ?? null,
+    roomName: keepRooms ? c.roomName : ctx.roomName ?? null,
+  }))
+  if (!created.length) return { rows, ids: [] }
+  const out = [...base.slice(0, index), ...created, ...base.slice(index)]
+  const last = created[created.length - 1]
+  return { rows: normalizeDepths(out), focus: { id: last.id, caret: last.text.length }, ids: created.map(r => r.id) }
+}
+
 // ─── girinti ──────────────────────────────────────────────────────────────────
 
 export function indentBlock(rows, id) {

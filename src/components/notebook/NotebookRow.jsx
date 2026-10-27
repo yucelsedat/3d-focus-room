@@ -5,9 +5,10 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   setText, splitRow, backspaceAt, mergeWithPrev, indentBlock, outdentBlock,
-  toggleDone, nudgeBlock, insertPasted,
+  toggleDone, nudgeBlock, insertPasted, insertClip,
 } from '../../utils/notebookModel'
 import { applyRows, currentRoomCtx, requestFocus, teleportToRoom, useNotebookStore } from './notebookStore'
+import { readNotebookClip } from './notebookClipboard'
 import { RoughBox, RoughCheck, RoughDash, RoughRing, Grip } from './Rough'
 import { lineDataUri } from './roughUtils'
 import {
@@ -18,7 +19,7 @@ function NotebookRowImpl({
   row, pageId, prevId, nextId, readOnly = false, structureLocked = false, dim = false,
   flagName = null, flagStart = false, flagAlive = false, flagCurrent = false, flagColor = null,
   progressDone = 0, progressTotal = 0, hiddenCount = 0, width = 0, fontsReady = false,
-  rowRef, rowStyle, handleProps, dragging = false,
+  rowRef, rowStyle, handleProps, dragging = false, selected = false,
 }) {
   const taRef = useRef(null)
   const [anim, setAnim] = useState(false)
@@ -105,6 +106,15 @@ function NotebookRowImpl({
 
   const onPaste = (e) => {
     if (readOnly) return
+    // Defterden kopyalanan satırlar: boş satırın yerine, imleç baştaysa önüne, değilse ardına
+    const clip = readNotebookClip(e.clipboardData)
+    if (clip) {
+      e.preventDefault()
+      const caret = e.currentTarget.selectionStart
+      const key = useNotebookStore.getState().key
+      apply(rows => insertClip(rows, clip.rows, { atId: row.id, before: caret === 0, keepRooms: !!key && clip.key === key }, currentRoomCtx()))
+      return
+    }
     const text = e.clipboardData?.getData('text/plain') ?? ''
     if (!/\r?\n/.test(text.replace(/\s+$/, ''))) return
     e.preventDefault()
@@ -141,6 +151,7 @@ function NotebookRowImpl({
         paddingLeft: row.depth * INDENT,
         opacity: dim ? 0.42 : 1,
         ...(dragging ? s.rowDragging : null),
+        ...(selected ? s.rowSelected : null),
         ...rowStyle,
       }}
     >
@@ -251,6 +262,12 @@ const s = {
     display: 'flex',
     alignItems: 'flex-start',
     boxSizing: 'border-box',
+  },
+  // Seçili satır: fosforlu kalem
+  rowSelected: {
+    background: 'rgba(244,211,94,0.42)',
+    boxShadow: '0 0 0 1px rgba(201,160,30,0.35)',
+    borderRadius: 3,
   },
   rowDragging: {
     zIndex: 5,

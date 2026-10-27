@@ -261,7 +261,8 @@ export default function NotebookOverlay() {
           <dl style={s.keys}>
             {[
               ['[] ', 'yapılacak'], ['# ', 'başlık'], ['- ', 'not'],
-              ['Tab', 'alt görev'], ['Alt ↑↓', 'taşı'], ['Ctrl ↵', 'bitir'], ['Esc', 'kapat'],
+              ['Tab', 'alt görev'], ['Alt ↑↓', 'taşı'], ['Ctrl ↵', 'bitir'],
+              ['Sürükle', 'satır seç'], ['Ctrl C/X', 'kopyala / kes'], ['Esc', 'kapat'],
             ].map(([k, v]) => (
               <div key={k} style={s.keyRow}>
                 <dt style={s.kbd}>{k}</dt>

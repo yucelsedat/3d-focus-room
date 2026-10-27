@@ -196,6 +196,10 @@ function getService() {
     fence: '```', emDelimiter: '*', strongDelimiter: '**', linkStyle: 'inlined',
   })
 
+  // Metindeki "<b>", "</div>" gibi ifadeler Markdown'da ham HTML sayılıp kaybolmasın
+  const baseEscape = td.escape.bind(td)
+  td.escape = (s) => baseEscape(s).replace(/<(?=[A-Za-z/!?])/g, '\\<')
+
   // Liste maddesi: turndown varsayılanı "-   " (3 boşluk) yerine "- " / "1. "; alt içerik işaret genişliği kadar girintilenir
   td.addRule('listItem', {
     filter: 'li',
