@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import CanvasMesh from '../components/CanvasMesh'
+import { NotebookHost } from '../components/notebook/NotebookHost'
 import { useStore } from '../store/useStore'
 
 // /canvas — oyundaki canvas tile'ın birebir aynısı (CanvasMesh standalone), tam ekran.
@@ -87,58 +88,62 @@ export default function CanvasPage() {
   const activeMode = tileClipboard?.id === media.id ? tileClipboard.mode : null
 
   return (
-    <CanvasMesh
-      id={media.id} content={media.content} width={media.width} height={media.height}
-      syncGroupId={media.syncGroupId} syncCount={media.syncCount}
-      standalone readOnly={readOnly} onOpenRoom={openRoom}
-      toolbarStart={
-        <div style={{ ...stickySlot, left: 0, marginRight: 6 }}>
-          <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); goBack() }} title="Geri" aria-label="Geri" style={iconBtn}>
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M19 12H5" /><path d="M12 19l-7-7 7-7" />
-            </svg>
-          </button>
-        </div>
-      }
-      toolbarEnd={
-        <div style={{ ...stickySlot, right: 0, marginLeft: 6, gap: 10 }}>
-          <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); toggleRead() }}
-            title={readOnly ? 'Düzenleme moduna dön' : 'Okuma modu (salt okunur)'} aria-label="Okuma modu" aria-pressed={readOnly}
-            style={{ ...iconBtn, ...(readOnly ? iconBtnOn : {}) }}>
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z" />
-              <path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z" />
-            </svg>
-          </button>
-          <button data-cvpage-menu-btn onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); setMenuOpen(v => !v) }}
-            title="Canvas işlemleri" aria-label="Canvas işlemleri" aria-haspopup="menu" aria-expanded={menuOpen}
-            style={{ ...iconBtn, ...(menuOpen || activeMode ? iconBtnOn : {}) }}>
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" />
-            </svg>
-          </button>
-        </div>
-      }
-      overlay={menuOpen && (
-        <div ref={menuRef} role="menu" onMouseDown={stopEvt} onClick={stopEvt} style={menuBox}>
-          {CLIP_ACTIONS.map(a => {
-            const on = activeMode === a.mode
-            return (
-              <button key={a.mode} role="menuitem" onClick={() => pick(a.mode)} style={{ ...menuItem, ...(on ? menuItemOn : {}) }}>
-                <span style={{ fontWeight: 800, fontSize: 14 }}>{on ? `✓ ${a.done}` : a.label}</span>
-                <span style={{ fontWeight: 200, fontSize: 12, color: on ? '#bfdbfe' : '#94a3b8' }}>{on ? 'Tekrar tıkla: iptal' : a.hint}</span>
-              </button>
-            )
-          })}
-          <div style={menuFoot}>
-            {activeMode
-              ? 'Oyunda bir duvar tile\'ı seçip açılan pencerede Yapıştır\'a bas.'
-              : 'Seçtiğin işlemle bu canvas bir odanın duvarına eklenir.'}
-            {media.syncGroupId && <div style={{ marginTop: 6, color: '#fca5a5', fontWeight: 800, letterSpacing: 1 }}>SENKRON · {media.syncCount || '?'} kopya</div>}
+    <>
+      <CanvasMesh
+        id={media.id} content={media.content} width={media.width} height={media.height}
+        syncGroupId={media.syncGroupId} syncCount={media.syncCount}
+        standalone readOnly={readOnly} onOpenRoom={openRoom}
+        toolbarStart={
+          <div style={{ ...stickySlot, left: 0, marginRight: 6 }}>
+            <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); goBack() }} title="Geri" aria-label="Geri" style={iconBtn}>
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M19 12H5" /><path d="M12 19l-7-7 7-7" />
+              </svg>
+            </button>
           </div>
-        </div>
-      )}
-    />
+        }
+        toolbarEnd={
+          <div style={{ ...stickySlot, right: 0, marginLeft: 6, gap: 10 }}>
+            <button onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); toggleRead() }}
+              title={readOnly ? 'Düzenleme moduna dön' : 'Okuma modu (salt okunur)'} aria-label="Okuma modu" aria-pressed={readOnly}
+              style={{ ...iconBtn, ...(readOnly ? iconBtnOn : {}) }}>
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z" />
+                <path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z" />
+              </svg>
+            </button>
+            <button data-cvpage-menu-btn onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); setMenuOpen(v => !v) }}
+              title="Canvas işlemleri" aria-label="Canvas işlemleri" aria-haspopup="menu" aria-expanded={menuOpen}
+              style={{ ...iconBtn, ...(menuOpen || activeMode ? iconBtnOn : {}) }}>
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" />
+              </svg>
+            </button>
+          </div>
+        }
+        overlay={menuOpen && (
+          <div ref={menuRef} role="menu" onMouseDown={stopEvt} onClick={stopEvt} style={menuBox}>
+            {CLIP_ACTIONS.map(a => {
+              const on = activeMode === a.mode
+              return (
+                <button key={a.mode} role="menuitem" onClick={() => pick(a.mode)} style={{ ...menuItem, ...(on ? menuItemOn : {}) }}>
+                  <span style={{ fontWeight: 800, fontSize: 14 }}>{on ? `✓ ${a.done}` : a.label}</span>
+                  <span style={{ fontWeight: 200, fontSize: 12, color: on ? '#bfdbfe' : '#94a3b8' }}>{on ? 'Tekrar tıkla: iptal' : a.hint}</span>
+                </button>
+              )
+            })}
+            <div style={menuFoot}>
+              {activeMode
+                ? 'Oyunda bir duvar tile\'ı seçip açılan pencerede Yapıştır\'a bas.'
+                : 'Seçtiğin işlemle bu canvas bir odanın duvarına eklenir.'}
+              {media.syncGroupId && <div style={{ marginTop: 6, color: '#fca5a5', fontWeight: 800, letterSpacing: 1 }}>SENKRON · {media.syncCount || '?'} kopya</div>}
+            </div>
+          </div>
+        )}
+      />
+      {/* defter kartından "elime al": defter bu sayfada açılır, oda etiketi oyuna götürür */}
+      <NotebookHost onOpenRoom={openRoom} />
+    </>
   )
 }
 

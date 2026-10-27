@@ -7,6 +7,13 @@ function readTileClipboard() {
   try { return JSON.parse(localStorage.getItem(TILE_CLIP_KEY)) || null } catch { return null }
 }
 
+// Elimdeki defter: canvas'taki defter kartından "elime al" denince B tuşu oda defteri
+// yerine bunu açar; oda değişse de, /canvas ↔ /game geçişinde de elde kalır.
+const HELD_BOOK_KEY = 'nb:held'
+function readHeldNotebook() {
+  try { return localStorage.getItem(HELD_BOOK_KEY) || null } catch { return null }
+}
+
 export const useStore = create((set) => ({
   activeModal: false,
   canvasEditorOpen: false,
@@ -19,6 +26,8 @@ export const useStore = create((set) => ({
   roomModal: false,
   menuModal: true,    // uygulama açılışında menü göster
   notebookOpen: false, // B — oda defteri (kök odaya ait not/todo sayfası)
+  notebookRelock: false,
+  heldNotebook: readHeldNotebook(), // 'book:<id>' | 'room:<kökId>' | null — B bunu açar
   hiddenWalls: [],        // iç duvar gizli tile ID'leri
   hiddenOuterWalls: [],   // 1. bahçe duvarı (±30) gizli tile ID'leri
   hiddenOuterWalls2: [],  // 2. bahçe duvarı (±40) gizli tile ID'leri
@@ -55,8 +64,14 @@ export const useStore = create((set) => ({
   openMenuModal:  () => set({ menuModal: true }),
   closeMenuModal: () => set({ menuModal: false }),
 
-  openNotebook:  () => set({ notebookOpen: true }),
+  // Kapanınca imleç yalnızca defter oyundan (kilitliyken, B ile) açıldıysa yeniden kilitlenir;
+  // karttan açıldıysa kilit canvas düzenleme modunu kapatırdı
+  openNotebook:  () => set({ notebookOpen: true, notebookRelock: typeof document !== 'undefined' && !!document.pointerLockElement }),
   closeNotebook: () => set({ notebookOpen: false }),
+  setHeldNotebook: (key) => {
+    try { key ? localStorage.setItem(HELD_BOOK_KEY, key) : localStorage.removeItem(HELD_BOOK_KEY) } catch {}
+    set({ heldNotebook: key || null })
+  },
 
   setHoveredTile: (tile) => set({ hoveredTile: tile }),
   setWorldMedia: (media) => set({ worldMedia: media }),

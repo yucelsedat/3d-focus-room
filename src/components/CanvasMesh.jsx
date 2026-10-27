@@ -12,8 +12,11 @@ import {
   HANDLES, MAX_IMG_W, getImageNaturalSize, a4MaxH, getBounds, resizeItems, imageOrder,
   saveImageItem, copyImageToClipboard, isInstaUrl, buildInstaItem, disposePoolAudio,
   getCanvasClipboard, setCanvasClipboard, copyItemAssets, placeClipItems, buildPasteItems, pasteMsgView, urlsToViewerImages,
+  makeNotebookItem, NOTEBOOK_CARD,
 } from './canvas/canvasUtils'
-import { ImageItem, LinkCard, InstaCard, MusicCard, PdfCard, YoutubeCard, RoomChip, NoteCard } from './canvas/cards'
+import { ImageItem, LinkCard, InstaCard, MusicCard, PdfCard, YoutubeCard, RoomChip, NoteCard, NotebookCard } from './canvas/cards'
+import { NotebookShelfMenu, NotebookCardDialog } from './canvas/NotebookShelf'
+import { takeNotebook } from './notebook/shelfStore'
 import { ItemBody } from './canvas/ItemBody'
 import { ImageViewer } from './canvas/ImageViewer'
 import { ArrowLayer } from './canvas/ArrowLayer'
@@ -60,7 +63,11 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const viewerItemIdRef                     = useRef(null)
   const [noteEditId, setNoteEditId]         = useState(null) // not balonu düzenleyicisinde açık not
   const [noteGallery, setNoteGallery]       = useState(null) // { images:[url], index } — not resimleri tam ekran
-  // Not editörü / galerisi kendi klavye, wheel ve paste'ini yönetir → canvas dinleyicileri susar
+  const [showShelf, setShowShelf]           = useState(false) // kitaplık menüsü (defter kartı ekle)
+  const [notebookEditId, setNotebookEditId] = useState(null)  // ayarları açık defter kartı
+  const notebookOpen                        = useStore(s => s.notebookOpen)
+  // Not editörü / galerisi, defter ayarları ve açık defter kendi klavye, wheel ve paste'ini
+  // yönetir → canvas dinleyicileri susar
   const noteOverlayRef                      = useRef(false)
   const closeViewerRef                      = useRef(null)
   const stepViewerRef                       = useRef(null)
@@ -170,7 +177,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   }, [isFullscreen])
   useEffect(() => { readerItemIdRef.current = readerItemId }, [readerItemId])
   useEffect(() => { viewerItemIdRef.current = viewerItemId }, [viewerItemId])
-  useEffect(() => { noteOverlayRef.current = !!(noteEditId || noteGallery) }, [noteEditId, noteGallery])
+  useEffect(() => { noteOverlayRef.current = !!(noteEditId || noteGallery || notebookEditId || notebookOpen) }, [noteEditId, noteGallery, notebookEditId, notebookOpen])
   useEffect(() => { showColorPickerRef.current = showColorPicker }, [showColorPicker])
   // Yalnız gerçek değişimde kaydet: mount'ta (ref zaten aynı değer) boş kayıt atılmasın —
   // /canvas düzenleme modunda açıldığından aksi halde her açılış bir PUT gönderiyordu.
@@ -791,6 +798,28 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     loadRoom(found.id, found.name).catch(() => alert('Oda yüklenemedi'))
   }
 
+  // ── Defter kartları ───────────────────────────────────────────────────────
+  // edit: yeni açılan defterde ad/kapak penceresi hemen açılır
+  const addNotebookItem = (meta, { edit = false } = {}) => {
+    const c = centerSurface()
+    const ni = makeNotebookItem(meta, { x: c.x - NOTEBOOK_CARD.w / 2, y: c.y - NOTEBOOK_CARD.h / 2 })
+    setItems(prev => { const next = [...prev, ni]; scheduleSave(next, bgRef.current); return next })
+    setSelectedIds(new Set([ni.id])); setShowShelf(false)
+    if (edit) setNotebookEditId(ni.id)
+  }
+  // Aynı deftere bakan kartların kopyası (ad/kapak) da tazelensin
+  const syncNotebookCards = (src, meta) => {
+    setItems(prev => {
+      if (!prev.some(it => it.type === 'notebook' && it.src === src)) return prev
+      const next = prev.map(it => it.type === 'notebook' && it.src === src ? { ...it, src: meta.key, name: meta.name, cover: meta.cover } : it)
+      scheduleSave(next, bgRef.current); return next
+    })
+  }
+  const removeNotebookCards = (src) => {
+    setItems(prev => { const next = prev.filter(it => !(it.type === 'notebook' && it.src === src)); scheduleSave(next, bgRef.current); return next })
+    setSelectedIds(new Set()); setNotebookEditId(null)
+  }
+
   const duplicateSelected = (e) => {
     if (e) stop(e)
     const offset = 30
@@ -914,6 +943,10 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     ? (items.find(it => selectedIds.has(it.id) && it.type === 'note') || null)
     : null
   const noteEditItem = noteEditId ? items.find(it => it.id === noteEditId && it.type === 'note') : null
+  const selNotebookItem = selectedIds.size === 1
+    ? (items.find(it => selectedIds.has(it.id) && it.type === 'notebook') || null)
+    : null
+  const notebookEditItem = notebookEditId ? items.find(it => it.id === notebookEditId && it.type === 'notebook') : null
 
   // tam ekran resim görüntüleyici: okuma sırasındaki tüm resimler + açık olanın indeksi
   const viewerImages = viewerItemId ? viewerImagesOf(items) : []
@@ -990,6 +1023,10 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
           <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}
             onMouseDown={stop} onClick={(e) => { stop(e); navigateToRoom(item) }}>
             <RoomChip item={item} />
+          </div>
+        ) : item.type === 'notebook' ? (
+          <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, zIndex: 5 }}>
+            <NotebookCard item={item} clickable onOpen={() => takeNotebook(item.src)} />
           </div>
         ) : null
       )}
@@ -1078,8 +1115,10 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
               {toolbarStart}
               <button onMouseDown={stop} onClick={addText} style={tbBtn}>✏️ Metin</button>
               <button onMouseDown={stop} onClick={addNote} title="Resimli, tarihli zengin not balonu" style={tbBtn}>📝 Not</button>
-              <button onMouseDown={stop} onClick={(e) => { stop(e); setShowUrlInput(v => !v); setUrlValue(''); setShowRoomSearch(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showUrlInput ? act : {}) }}>🖼️ Resim</button>
-              <button onMouseDown={stop} onClick={(e) => { stop(e); setShowRoomSearch(v => !v); setRoomSearchText(''); setShowUrlInput(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showRoomSearch ? act : {}) }}>🏠 Oda</button>
+              <button onMouseDown={stop} onClick={(e) => { stop(e); setShowUrlInput(v => !v); setUrlValue(''); setShowRoomSearch(false); setShowShelf(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showUrlInput ? act : {}) }}>🖼️ Resim</button>
+              <button onMouseDown={stop} onClick={(e) => { stop(e); setShowRoomSearch(v => !v); setRoomSearchText(''); setShowUrlInput(false); setShowShelf(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showRoomSearch ? act : {}) }}>🏠 Oda</button>
+              <button onMouseDown={stop} onClick={(e) => { stop(e); setShowShelf(v => !v); setShowRoomSearch(false); setShowUrlInput(false); setDrawMode(null) }}
+                title="Kitaplıktan defter kartı ekle" style={{ ...tbBtn, ...(showShelf ? act : {}) }}>📓 Defter</button>
 
               <div style={div} />
 
@@ -1171,6 +1210,13 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                     <button onMouseDown={stop} onClick={(e) => { stop(e); setNoteEditId(selNoteItem.id) }} title="Notu düzenle (çift tık)" style={tbBtn}>✎ Notu düzenle</button>
                   )}
 
+                  {selNotebookItem && (
+                    <>
+                      <button onMouseDown={stop} onClick={(e) => { stop(e); takeNotebook(selNotebookItem.src) }} title="Defteri aç; B tuşu artık bu defteri açar" style={tbBtn}>📓 Elime al</button>
+                      <button onMouseDown={stop} onClick={(e) => { stop(e); setNotebookEditId(selNotebookItem.id) }} title="Ad ve kapak (çift tık)" style={tbBtn}>✎ Ad / kapak</button>
+                    </>
+                  )}
+
                   {/* image download & copy-as-image buttons — only when a single image is selected */}
                   {selImageItem && (
                     <>
@@ -1214,7 +1260,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                 </>
               )}
 
-              {drawMode && !showUrlInput && !showRoomSearch && (
+              {drawMode && !showUrlInput && !showRoomSearch && !showShelf && (
                 <span style={{ fontSize: 22, color: 'rgba(96,165,250,0.7)', marginLeft: 4 }}>
                   {drawMode === 'arrow' ? 'Ok için sürükle' : 'Çizgi için sürükle'}
                 </span>
@@ -1271,6 +1317,13 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                   )}
                 </div>
               </div>
+            )}
+
+            {/* ── Kitaplık menüsü ───────────────────────────────────────── */}
+            {showShelf && (
+              <NotebookShelfMenu u={isFullscreen ? 2 * FS_TB_ZOOM : 2}
+                style={{ position: 'absolute', top: tbH, left: 20, zIndex: 30, borderTop: 'none', borderRadius: '0 0 20px 20px' }}
+                onPick={(meta) => addNotebookItem(meta)} onCreate={(meta) => addNotebookItem(meta, { edit: true })} />
             )}
 
             {/* ── Color picker panel ────────────────────────────────────── */}
@@ -1348,7 +1401,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                     onMouseDown={e => onItemMouseDown(e, item)}
                     onMouseEnter={() => !drawMode && setHoveredItemId(item.id)}
                     onMouseLeave={() => setHoveredItemId(null)}
-                    onDoubleClick={e => { stop(e); if (drawMode) return; if (item.type === 'text') setEditingItemId(item.id); else if (item.type === 'note') setNoteEditId(item.id); else if (item.type === 'image' && item.url) openViewer(item.id) }}
+                    onDoubleClick={e => { stop(e); if (drawMode) return; if (item.type === 'text') setEditingItemId(item.id); else if (item.type === 'note') setNoteEditId(item.id); else if (item.type === 'notebook') setNotebookEditId(item.id); else if (item.type === 'image' && item.url) openViewer(item.id) }}
                   >
                     {renderBoxContent(item)}
                   </div>
@@ -1395,7 +1448,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
               {items.length === 0 && !drawingLine && (
                 <div style={{ position: 'absolute', top: 180, left: 0, right: 0, color: 'rgba(255,255,255,0.12)', fontSize: 38, textAlign: 'center', pointerEvents: 'none' }}>
-                  Metin, resim, oda, çizgi veya ok ekleyin<br />
+                  Metin, resim, oda, defter, çizgi veya ok ekleyin<br />
                   <span style={{ fontSize: 26 }}>Kaydır · scroll ile zoom · Ctrl+sürükle: çoklu seç</span>
                 </div>
               )}
@@ -1424,6 +1477,13 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         {noteEditItem && (
           <NoteEditor key={noteEditItem.id} note={noteEditItem} uploadKey={id}
             onSave={saveNote} onDelete={() => deleteNote(noteEditItem.id)} onClose={() => setNoteEditId(null)} />
+        )}
+        {notebookEditItem && (
+          <NotebookCardDialog key={notebookEditItem.id} item={notebookEditItem}
+            onClose={() => setNotebookEditId(null)}
+            onSaved={(meta) => syncNotebookCards(notebookEditItem.src, meta)}
+            onTake={() => { setNotebookEditId(null); takeNotebook(notebookEditItem.src) }}
+            onDeleted={() => removeNotebookCards(notebookEditItem.src)} />
         )}
         {noteGallery && createPortal(
           <ImageViewer ownKeys images={urlsToViewerImages(noteGallery.images)} index={noteGallery.index}

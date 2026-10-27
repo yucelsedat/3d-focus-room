@@ -1,5 +1,7 @@
-// B ile açılan oda defteri. Defter en üstteki kök odaya aittir; ağaçtaki tüm
-// alt odalar aynı defteri görür.
+// B ile açılan defter. Elde bir defter yoksa oda defteri açılır: en üstteki kök
+// odaya aittir, ağaçtaki tüm alt odalar aynı defteri görür. Canvas'taki defter
+// kartından "elime al" denince (heldNotebook) B o defteri açar; "yere bırak" ile
+// yeniden oda defterine dönülür.
 //
 // Pointer lock: drei PointerLockControls document'e gelen HER tıklamada lock()
 // çağırır (enabled=false olsa bile). Bu yüzden kökte click yayılımı durdurulur ve
@@ -18,8 +20,9 @@ import {
 } from '../../utils/notebookModel'
 import {
   useNotebookStore, loadNotebook, applyDoc, showToast, undoToast, dismissToast,
-  closeNotebookOverlay,
+  closeNotebookOverlay, notebookInGame,
 } from './notebookStore'
+import { useShelf } from './shelfStore'
 import { NotebookBook } from './NotebookBook'
 import { RoughCircle } from './Rough'
 import { lineDataUri } from './roughUtils'
@@ -70,24 +73,48 @@ function ArchiveNote({ archive, onRestore }) {
 }
 
 export default function NotebookOverlay() {
-  const currentRoomId = useStore(st => st.currentRoomId)
+  const inGame = notebookInGame()
+  const currentRoomId = useStore(st => (inGame ? st.currentRoomId : null))
   const currentRoomName = useStore(st => st.currentRoomName)
-  const { doc, rootId, rootName, tree, loadState, saveState, savedAt, toast } = useNotebookStore(useShallow(st => ({
-    doc: st.doc, rootId: st.rootId, rootName: st.rootName, tree: st.tree, loadState: st.loadState,
+  const held = useStore(st => st.heldNotebook)
+  const setHeld = useStore(st => st.setHeldNotebook)
+  const { doc, key, rootId, rootName, loadedMeta, tree, loadState, saveState, savedAt, toast } = useNotebookStore(useShallow(st => ({
+    doc: st.doc, key: st.key, rootId: st.rootId, rootName: st.rootName, loadedMeta: st.meta, tree: st.tree, loadState: st.loadState,
     saveState: st.saveState, savedAt: st.savedAt, toast: st.toast,
   })))
+  // Ad / kapak canvas'tan değişebilir: kitaplıktaki güncel kayıt önce gelir
+  const meta = useShelf(st => (key ? st.byKey[key] : null)) ?? loadedMeta
+  const src = held || (currentRoomId ? `room:${currentRoomId}` : null)
 
-  const [filter, setFilter] = useState(() => (readLS('nb:filter') === 'room' ? 'room' : 'all'))
+  const [filterPref, setFilter] = useState(() => (readLS('nb:filter') === 'room' ? 'room' : 'all'))
+  const filter = currentRoomId ? filterPref : 'all'
   const [selected, setSelected] = useState(null)
   const [editingId, setEditingId] = useState(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
   const draggingRef = useRef(false)
   const editingRef = useRef(false)
 
-  useEffect(() => { loadNotebook(currentRoomId) }, [currentRoomId])
+  useEffect(() => {
+    if (src) loadNotebook(src)
+    else closeNotebookOverlay()
+  }, [src])
+
+  // Elimdeki defter başka yerden silinmiş: bırak, oda defterine dön (sayfada kapan)
+  useEffect(() => {
+    if (loadState !== 'missing' || !held) return
+    setHeld(null)
+    showToast('Bu defter kitaplıktan kaldırılmış — oda defterine dönüldü')
+  }, [loadState, held, setHeld])
+
+  const putDown = () => {
+    setHeld(null)
+    if (!inGame) closeNotebookOverlay()
+  }
 
   const treeById = useMemo(() => new Map(tree.map(r => [r.id, r])), [tree])
-  const storedActive = useMemo(() => (rootId ? readLS(`nb:active:${rootId}`) : null), [rootId])
+  // Seçili sayfa defter başına hatırlanır (oda defterinde eski anahtar: kök id)
+  const activeLS = key ? `nb:active:${key.startsWith('room:') ? rootId : key}` : null
+  const storedActive = useMemo(() => (activeLS ? readLS(activeLS) : null), [activeLS])
   const pages = doc?.pages ?? []
   const activeId = [selected, storedActive].find(id => id && pages.some(p => p.id === id)) ?? pages[0]?.id
   const archivable = useMemo(
@@ -97,7 +124,7 @@ export default function NotebookOverlay() {
 
   const selectPage = (id) => {
     setSelected(id)
-    if (rootId) writeLS(`nb:active:${rootId}`, id)
+    if (activeLS) writeLS(activeLS, id)
   }
   const setFilterMode = (mode) => {
     setFilter(mode)
@@ -175,7 +202,7 @@ export default function NotebookOverlay() {
       className="nb-root"
       role="dialog"
       aria-modal="true"
-      aria-label={`Oda defteri — ${rootName || 'yükleniyor'}`}
+      aria-label={`${held ? 'Defter' : 'Oda defteri'} — ${meta?.name || rootName || 'yükleniyor'}`}
       style={s.backdrop}
       onClick={stop}
       onMouseDown={stop}
@@ -187,14 +214,23 @@ export default function NotebookOverlay() {
       <div style={s.stage}>
         <aside className="nb-rail" style={s.rail}>
           <div>
-            <div style={s.eyebrow}>Oda defteri</div>
-            <div style={s.rootName} title="Bu defter kök odaya ait; tüm alt odalar aynı defteri görür">
-              {rootName || '…'}
+            {meta?.cover && <img src={meta.cover} alt="" draggable={false} referrerPolicy="no-referrer" style={s.cover} />}
+            <div style={s.eyebrow}>{held ? 'Elindeki defter' : 'Oda defteri'}</div>
+            <div style={s.rootName}
+              title={key?.startsWith('room:') ? 'Bu defter kök odaya ait; tüm alt odalar aynı defteri görür' : 'Kitaplıktaki bağımsız defter; her odada aynı'}>
+              {meta?.name || rootName || '…'}
             </div>
-            <div style={s.here}>şu an: <b style={s.hereName}>{currentRoomName}</b></div>
+            {currentRoomId && <div style={s.here}>şu an: <b style={s.hereName}>{currentRoomName}</b></div>}
           </div>
 
-          <div role="radiogroup" aria-label="Görünüm" style={s.segment}>
+          {held && (
+            <button type="button" onClick={putDown} style={s.action}
+              title={inGame ? 'B yeniden bu odanın defterini açar; defter kitaplıkta ve kartında kalır' : 'Defter kitaplıkta ve kartında kalır'}>
+              Yere bırak
+            </button>
+          )}
+
+          {currentRoomId && <div role="radiogroup" aria-label="Görünüm" style={s.segment}>
             {[['all', 'Tüm ağaç'], ['room', 'Bu oda']].map(([mode, label]) => (
               <button
                 key={mode}
@@ -207,7 +243,7 @@ export default function NotebookOverlay() {
                 {label}
               </button>
             ))}
-          </div>
+          </div>}
 
           <div style={s.actions}>
             <button type="button" disabled={!archivable} onClick={onArchive} style={{ ...s.action, opacity: archivable ? 1 : 0.4 }}>
@@ -267,7 +303,7 @@ export default function NotebookOverlay() {
               {loadState === 'error' ? 'defter açılamadı…' : 'defter açılıyor…'}
             </div>
             {loadState === 'error' && (
-              <button type="button" onClick={() => loadNotebook(currentRoomId)} style={s.retry}>tekrar dene</button>
+              <button type="button" onClick={() => src && loadNotebook(src)} style={s.retry}>tekrar dene</button>
             )}
           </div>
         )}
@@ -365,6 +401,15 @@ const s = {
     lineHeight: 1,
     color: 'rgba(247,242,228,0.92)',
     paddingBottom: 4,
+  },
+  cover: {
+    display: 'block',
+    width: '100%',
+    aspectRatio: '4 / 3',
+    objectFit: 'cover',
+    borderRadius: 4,
+    marginBottom: 14,
+    boxShadow: '0 10px 22px -12px rgba(0,0,0,0.8)',
   },
   eyebrow: {
     fontFamily: SANS,
