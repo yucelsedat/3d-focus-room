@@ -3,6 +3,7 @@
 // hattını ve aynı panoyu paylaşır: bir yüzeyde kopyalanan öğe diğerine yapıştırılabilir.
 import { parseMd } from '../../utils/markdownRender'
 import { clipboardToMarkdown } from '../../utils/richTextToMarkdown'
+import { ensureGoogleEmail } from '../../utils/googleAccount'
 
 // 8 bounding-box handle descriptors
 export const HANDLES = [
@@ -442,7 +443,8 @@ export async function buildPasteItems(cd, { uploadKey, center, onLoading = () =>
   // Generic link — Open Graph görsel + başlıktan kart oluştur
   const linkCard = async () => {
     const meta = await fetchLinkMeta(text)
-    return { id: crypto.randomUUID(), type: 'link', x: pt.x, y: pt.y, w: 480, h: 300, url: text, ...meta }
+    const googleEmail = ensureGoogleEmail()
+    return { id: crypto.randomUUID(), type: 'link', x: pt.x, y: pt.y, w: 480, h: 300, url: text, ...meta, ...(googleEmail ? { googleEmail } : {}) }
   }
   if (isImgUrl) {
     onLoading()
