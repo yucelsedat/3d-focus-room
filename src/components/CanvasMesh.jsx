@@ -22,6 +22,7 @@ import { ImageViewer } from './canvas/ImageViewer'
 import { ArrowLayer } from './canvas/ArrowLayer'
 import { TextItemBox } from './canvas/TextItem'
 import { NoteEditor } from './canvas/NoteEditor'
+import { askGoogleEmail, getGoogleEmail, setGoogleEmail } from '../utils/googleAccount'
 
 // Senkron canvas işareti: öğelerin üstünde kırmızı çerçeve + üye sayısı rozeti
 const SYNC_RED = '#ef4444'
@@ -947,6 +948,26 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     ? (items.find(it => selectedIds.has(it.id) && it.type === 'notebook') || null)
     : null
   const notebookEditItem = notebookEditId ? items.find(it => it.id === notebookEditId && it.type === 'notebook') : null
+  const selLinkItem = selectedIds.size === 1
+    ? (items.find(it => selectedIds.has(it.id) && it.type === 'link') || null)
+    : null
+
+  // Link kartının Google hesabını değiştir; girilen mail bu tarayıcının varsayılanı da olur
+  const editLinkEmail = (e) => {
+    stop(e)
+    const it = selLinkItem; if (!it) return
+    const v = askGoogleEmail(it.googleEmail || getGoogleEmail())
+    if (v === null) return
+    if (v) setGoogleEmail(v)
+    setItems(prev => {
+      const next = prev.map(x => {
+        if (x.id !== it.id) return x
+        const rest = { ...x }; delete rest.googleEmail
+        return v ? { ...rest, googleEmail: v } : rest
+      })
+      scheduleSave(next, bgRef.current); return next
+    })
+  }
 
   // tam ekran resim görüntüleyici: okuma sırasındaki tüm resimler + açık olanın indeksi
   const viewerImages = viewerItemId ? viewerImagesOf(items) : []
@@ -1208,6 +1229,10 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
                   {selNoteItem && (
                     <button onMouseDown={stop} onClick={(e) => { stop(e); setNoteEditId(selNoteItem.id) }} title="Notu düzenle (çift tık)" style={tbBtn}>✎ Notu düzenle</button>
+                  )}
+
+                  {selLinkItem && (
+                    <button onMouseDown={stop} onClick={editLinkEmail} title="Linkin Google hesabı (Google linklerine authuser olarak eklenir)" style={tbBtn}>✉ {selLinkItem.googleEmail ? 'Hesabı değiştir' : 'Hesap ekle'}</button>
                   )}
 
                   {selNotebookItem && (

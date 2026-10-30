@@ -8,6 +8,7 @@ import { formatRange, formatRangeShort, statusOf } from '../../utils/timelineMod
 import { stopEvt, parseInstaTitle, formatBytes, audioPool, getPoolAudio, togglePoolAudio, releasePoolAudio } from './canvasUtils'
 import { useStore } from '../../store/useStore'
 import { useShelf, ensureShelf, clothOf } from '../notebook/shelfStore'
+import { withAuthUser } from '../../utils/googleAccount'
 
 // Canvas'a özgü stiller (ortak .cvmd markdown stilleri utils/markdownRender'da)
 if (typeof document !== 'undefined' && !document.getElementById('cv-styles')) {
@@ -40,7 +41,7 @@ export const LinkCard = ({ item, clickable = false }) => {
   const hasImg = !!item.thumbUrl && imgOk
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: 4, overflow: 'hidden', background: '#3a3f47', cursor: clickable ? 'pointer' : 'inherit', boxSizing: 'border-box' }}
-      {...(clickable ? { onMouseDown: stopEvt, onClick: (e) => { stopEvt(e); navigator.clipboard?.writeText(item.url).catch(() => {}) } } : {})}>
+      {...(clickable ? { onMouseDown: stopEvt, onClick: (e) => { stopEvt(e); navigator.clipboard?.writeText(withAuthUser(item.url, item.googleEmail)).catch(() => {}) } } : {})}>
       {hasImg ? (
         <img src={item.thumbUrl} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImgOk(false)}
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
@@ -56,6 +57,10 @@ export const LinkCard = ({ item, clickable = false }) => {
         </div>
         {item.siteName && (
           <div style={{ fontSize: 20, marginTop: 6, opacity: 0.7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.siteName}</div>
+        )}
+        {/* linkin eklendiği tarayıcının Google hesabı */}
+        {item.googleEmail && (
+          <div title="Bu linkin eklendiği Google hesabı" style={{ fontSize: 18, marginTop: 4, opacity: 0.6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>✉ {item.googleEmail}</div>
         )}
       </div>
     </div>
