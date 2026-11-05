@@ -275,8 +275,9 @@ export const YoutubeCard = ({ item, clickable = false }) => (
 )
 
 // ── Oda çipi ─────────────────────────────────────────────────────────────────
+// item.bgColor: metin öğeleriyle aynı arka plan paleti (yoksa varsayılan mavi ton)
 export const RoomChip = ({ item }) => (
-  <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.35)', borderRadius: 8, cursor: 'inherit', boxSizing: 'border-box', pointerEvents: 'none' }}>
+  <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', background: item.bgColor ?? 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.35)', borderRadius: 8, cursor: 'inherit', boxSizing: 'border-box', pointerEvents: 'none' }}>
     <span style={{ fontSize: 30 }}>🏠</span>
     <span style={{ color: '#93c5fd', fontSize: 28, textDecoration: 'underline', textUnderlineOffset: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.roomName}</span>
   </div>

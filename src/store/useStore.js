@@ -93,6 +93,10 @@ export const useStore = create((set) => ({
   removeOuterDoor2: (ids) => set((state) => ({ hiddenOuterWalls2: state.hiddenOuterWalls2.filter(id => !ids.includes(id)) })),
 
   setCurrentRoom: (id, name, type = 'room') => set({ currentRoomId: id, currentRoomName: name, currentRoomType: type }),
+  // Senkron canvas'taki oda linki: { roomId, syncGroupId, fromId } — hedef oda yüklenince
+  // Player aynı grubun canvas'ının önüne ışınlar ve temizler (bkz. utils/syncSpawn)
+  syncSpawn: null,
+  setSyncSpawn: (syncSpawn) => set({ syncSpawn }),
   addToHistory: (id, name) => set(state => {
     const filtered = state.roomHistory.filter(r => r.id !== id)
     return { roomHistory: [...filtered, { id, name }].slice(-30) }
