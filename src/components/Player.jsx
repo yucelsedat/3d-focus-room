@@ -4,6 +4,7 @@ import { PointerLockControls, useKeyboardControls } from '@react-three/drei'
 import { useStore } from '../store/useStore'
 import { loadRoom } from '../utils/loadRoom'
 import { ROOM_CONFIGS, encodeWallId, decodeWallId } from '../utils/roomConfig'
+import { spawnInFrontOf, findSyncTarget } from '../utils/syncSpawn'
 import * as THREE from 'three'
 
 function isTyping() {
@@ -80,6 +81,9 @@ export function Player() {
   const outerRoomLinks2    = useStore((state) => state.outerRoomLinks2)
   const currentRoomType    = useStore((state) => state.currentRoomType)
   const rooms              = useStore((state) => state.rooms)
+  const worldMedia         = useStore((state) => state.worldMedia)
+  const currentRoomId      = useStore((state) => state.currentRoomId)
+  const syncSpawn          = useStore((state) => state.syncSpawn)
 
   // Geçiş mantığı açısından özel kapı ile bağlantı kapısı aynıdır (anchorId + targetRoomId);
   // fark yalnızca DB ilişkisinde ve renkte. Katman başına tek listede birleştirilirler.
@@ -109,7 +113,7 @@ export function Player() {
   const hiddenOuterSetRef     = useRef(new Set())
   const hiddenOuter2SetRef    = useRef(new Set())
   const teleporting           = useRef(false)
-  const pendingTeleport       = useRef(null)   // F ile seçilen [x, z] hedefi; ilk karede uygulanır
+  const pendingTeleport       = useRef(null)   // F ile seçilen [x, z] (+ isteğe bağlı bakış [x, y, z]) hedefi; ilk karede uygulanır
   const innerPortalsRef       = useRef([])   // iç duvar: özel kapılar + bağlantı kapıları
   const outerPortalsRef       = useRef([])
   const outer2PortalsRef      = useRef([])
@@ -142,6 +146,16 @@ export function Player() {
     )
   }, [subscribeKeys])
 
+  // Senkron canvas'taki oda linki: hedef oda yüklenince (currentRoomId + worldMedia aynı
+  // set'te güncellenir) grubun o odadaki canvas'ının önüne ışınlan ve ona bak.
+  useEffect(() => {
+    if (!syncSpawn || syncSpawn.roomId !== currentRoomId) return
+    useStore.getState().setSyncSpawn(null)
+    const target = findSyncTarget(worldMedia, syncSpawn.syncGroupId, syncSpawn.fromId)
+    const spawn = target && spawnInFrontOf(target)
+    if (spawn) pendingTeleport.current = [spawn.pos[0], spawn.pos[1], spawn.look]
+  }, [syncSpawn, currentRoomId, worldMedia])
+
   useFrame((state, delta) => {
     // Defter açıkken sahne donuk: WASD/Space/Shift defterin tuşlarıyla çakışmasın
     if (teleporting.current || isTyping() || useStore.getState().notebookOpen) {
@@ -152,12 +166,13 @@ export function Player() {
 
     // --- F ile zemin tile'ına ışınlanma ---
     if (pendingTeleport.current) {
-      const [tx, tz] = pendingTeleport.current
+      const [tx, tz, look] = pendingTeleport.current
       pendingTeleport.current = null
       flyY.current         = GROUND_Y
       flyVelocityY.current = 0
       isFalling.current    = false
       state.camera.position.set(tx, GROUND_Y, tz)
+      if (look) state.camera.lookAt(look[0], look[1], look[2])
       return
     }
 

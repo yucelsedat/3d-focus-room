@@ -103,6 +103,8 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const [urlValue, setUrlValue]             = useState('')
   const [showRoomSearch, setShowRoomSearch] = useState(false)
   const [roomSearchText, setRoomSearchText] = useState('')
+  const [roomActiveIdx, setRoomActiveIdx]   = useState(0)   // klavye/hover ile vurgulanan öneri
+  const roomListRef = useRef(null)
 
   // draw mode
   const [drawMode, setDrawMode]             = useState(null)
@@ -690,6 +692,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     '#c084fc', '#818cf8', '#60a5fa', '#22d3ee',
     '#4ade80', '#a3e635', '#34d399', '#000000',
   ]
+  const BG_TYPES = new Set(['text', 'room'])   // arka plan rengi alabilen öğeler
   const BG_COLORS = [
     'transparent',
     '#0f172a', '#1e293b', '#1e1b4b', '#14532d',
@@ -709,7 +712,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
 
   const applyBgColor = (bgColor) => {
     setItems(prev => {
-      const next = prev.map(it => selectedIds.has(it.id) && it.type === 'text' ? { ...it, bgColor } : it)
+      const next = prev.map(it => selectedIds.has(it.id) && BG_TYPES.has(it.type) ? { ...it, bgColor } : it)
       scheduleSave(next, bgRef.current)
       return next
     })
@@ -795,6 +798,8 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const navigateToRoom = (item) => {
     const found = rooms.find(r => r.id === item.roomId) || (item.roomId ? { id: item.roomId, name: item.roomName } : null)
     if (!found) { alert(`"${item.roomName}" odası bulunamadı.`); return }
+    // senkron canvas: hedef odada grubun bir üyesi varsa Player onun önüne ışınlar
+    useStore.getState().setSyncSpawn(syncGroupId ? { roomId: found.id, syncGroupId, fromId: id } : null)
     if (onOpenRoom) { onOpenRoom(found); return }
     loadRoom(found.id, found.name).catch(() => alert('Oda yüklenemedi'))
   }
@@ -928,7 +933,10 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const selTextItems    = items.filter(it => selectedIds.has(it.id) && it.type === 'text')
   const hasTextSel      = selTextItems.length > 0
   const commonTextColor = selTextItems.length > 0 && selTextItems.every(it => it.color === selTextItems[0].color) ? (selTextItems[0].color || '#e2e8f0') : null
-  const commonBgColor   = selTextItems.length > 0 && selTextItems.every(it => it.bgColor === selTextItems[0].bgColor) ? (selTextItems[0].bgColor ?? null) : null
+  // arka plan rengi metin + oda linki öğelerinde ortak
+  const selBgItems      = items.filter(it => selectedIds.has(it.id) && BG_TYPES.has(it.type))
+  const hasBgSel        = selBgItems.length > 0
+  const commonBgColor   = hasBgSel && selBgItems.every(it => it.bgColor === selBgItems[0].bgColor) ? (selBgItems[0].bgColor ?? null) : null
   const markdownActive  = selTextItems.length > 0 && selTextItems.every(it => it.markdown)
 
   // canvas'ta resim varsa toolbar'da toplu indirme butonu görünür (seçili resim varsa onları indirir)
@@ -1004,6 +1012,25 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   // ── Room search ───────────────────────────────────────────────────────────
   const filteredRooms = rooms.filter(r => !roomSearchText || r.name.toLowerCase().includes(roomSearchText.toLowerCase()))
   const noMatch = roomSearchText.trim() && filteredRooms.length === 0
+  // seçilebilir öneriler: eşleşen odalar, yoksa "oluştur ve ekle"
+  const roomOptions = noMatch ? [{ create: true, name: roomSearchText.trim() }] : filteredRooms
+  const roomActive = Math.min(roomActiveIdx, roomOptions.length - 1)
+  const pickRoomOption = (opt) => opt.create ? addRoomItem(null, opt.name) : addRoomItem(opt.id, opt.name)
+  const onRoomSearchKey = (e) => {
+    e.stopPropagation()
+    if (e.key === 'Escape') { setShowRoomSearch(false); setRoomSearchText(''); return }
+    const n = roomOptions.length
+    if (!n) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const next = e.key === 'ArrowDown' ? (roomActive + 1) % n : (roomActive - 1 + n) % n
+      setRoomActiveIdx(next)
+      roomListRef.current?.children[next]?.scrollIntoView({ block: 'nearest' })
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      pickRoomOption(roomOptions[Math.max(0, roomActive)])
+    }
+  }
 
   // Render modu öğeleri: duvardaki tile ve /canvas okuma görünümü aynı tıklanabilir kartları gösterir
   const readItems = (
@@ -1137,7 +1164,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
               <button onMouseDown={stop} onClick={addText} style={tbBtn}>✏️ Metin</button>
               <button onMouseDown={stop} onClick={addNote} title="Resimli, tarihli zengin not balonu" style={tbBtn}>📝 Not</button>
               <button onMouseDown={stop} onClick={(e) => { stop(e); setShowUrlInput(v => !v); setUrlValue(''); setShowRoomSearch(false); setShowShelf(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showUrlInput ? act : {}) }}>🖼️ Resim</button>
-              <button onMouseDown={stop} onClick={(e) => { stop(e); setShowRoomSearch(v => !v); setRoomSearchText(''); setShowUrlInput(false); setShowShelf(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showRoomSearch ? act : {}) }}>🏠 Oda</button>
+              <button onMouseDown={stop} onClick={(e) => { stop(e); setShowRoomSearch(v => !v); setRoomSearchText(''); setRoomActiveIdx(0); setShowUrlInput(false); setShowShelf(false); setDrawMode(null) }} style={{ ...tbBtn, ...(showRoomSearch ? act : {}) }}>🏠 Oda</button>
               <button onMouseDown={stop} onClick={(e) => { stop(e); setShowShelf(v => !v); setShowRoomSearch(false); setShowUrlInput(false); setDrawMode(null) }}
                 title="Kitaplıktan defter kartı ekle" style={{ ...tbBtn, ...(showShelf ? act : {}) }}>📓 Defter</button>
 
@@ -1189,16 +1216,16 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                   <div style={div} />
                   <span style={{ fontSize: 22, color: 'rgba(148,163,184,0.6)', flexShrink: 0 }}>{selectedIds.size} seçili</span>
 
-                  {/* text color & bg color buttons — only when text items are selected */}
+                  {/* text color button — only when text items are selected */}
                   {hasTextSel && (
-                    <>
-                      {/* text color button */}
                       <button onMouseDown={stop} onClick={(e) => { stop(e); setShowColorPicker(v => v === 'text' ? null : 'text') }}
                         style={{ ...tbBtn, position: 'relative', padding: '0 14px', gap: 0, background: showColorPicker === 'text' ? 'rgba(96,165,250,0.18)' : tbBtn.background, borderColor: showColorPicker === 'text' ? 'rgba(96,165,250,0.5)' : tbBtn.borderColor }}>
                         <span style={{ fontSize: 26, fontWeight: 800, color: commonTextColor || '#e2e8f0', lineHeight: 1, display: 'block', paddingBottom: 5 }}>A</span>
                         <span style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', width: 18, height: 3, borderRadius: 2, background: commonTextColor || '#e2e8f0' }} />
                       </button>
-                      {/* bg color button */}
+                  )}
+                  {/* bg color button — text + room link items */}
+                  {hasBgSel && (
                       <button onMouseDown={stop} onClick={(e) => { stop(e); setShowColorPicker(v => v === 'bg' ? null : 'bg') }}
                         style={{ ...tbBtn, padding: '0 12px', gap: 6, background: showColorPicker === 'bg' ? 'rgba(96,165,250,0.18)' : tbBtn.background, borderColor: showColorPicker === 'bg' ? 'rgba(96,165,250,0.5)' : tbBtn.borderColor }}>
                         <span style={{ width: 22, height: 22, borderRadius: 4, flexShrink: 0, display: 'inline-block',
@@ -1208,6 +1235,9 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                         }} />
                         <span style={{ fontSize: 20, color: 'rgba(148,163,184,0.7)' }}>↓</span>
                       </button>
+                  )}
+                  {hasTextSel && (
+                    <>
                       {/* markdown toggle button */}
                       <button onMouseDown={stop} onClick={(e) => { stop(e); toggleMarkdown() }}
                         title={markdownActive ? 'Markdown kapat' : 'Markdown olarak göster'}
@@ -1313,25 +1343,25 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
               <div style={{ position: 'absolute', top: tbH, left: 20, width: 720, background: 'rgba(8,8,20,0.97)', border: '1px solid rgba(96,165,250,0.3)', borderTop: 'none', borderRadius: '0 0 12px 12px', zIndex: 30, overflow: 'hidden' }}
                 onMouseDown={stop}>
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-                  <input autoFocus type="text" value={roomSearchText} onChange={e => setRoomSearchText(e.target.value)}
-                    onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') { setShowRoomSearch(false); setRoomSearchText('') } }}
+                  <input autoFocus type="text" value={roomSearchText} onChange={e => { setRoomSearchText(e.target.value); setRoomActiveIdx(0) }}
+                    onKeyDown={onRoomSearchKey}
                     onMouseDown={stop} onClick={stop} placeholder="Oda ara…"
                     style={{ width: '100%', height: 56, padding: '0 18px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(96,165,250,0.4)', borderRadius: 8, color: '#fff', fontSize: 26, outline: 'none', boxSizing: 'border-box' }} />
                 </div>
-                <div style={{ maxHeight: 380, overflowY: 'auto' }}>
-                  {filteredRooms.map(room => (
+                <div ref={roomListRef} style={{ maxHeight: 380, overflowY: 'auto' }}>
+                  {filteredRooms.map((room, i) => (
                     <div key={room.id} onClick={() => addRoomItem(room.id, room.name)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.04)', color: '#e2e8f0', fontSize: 26 }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(96,165,250,0.12)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      onMouseEnter={() => setRoomActiveIdx(i)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.04)', color: '#e2e8f0', fontSize: 26,
+                        background: i === roomActive ? 'rgba(96,165,250,0.12)' : 'transparent' }}>
                       <span>🏠</span><span>{room.name}</span>
                     </div>
                   ))}
                   {noMatch && (
                     <div onClick={() => addRoomItem(null, roomSearchText.trim())}
-                      style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', color: '#94a3b8', fontSize: 26 }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(148,163,184,0.1)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      onMouseEnter={() => setRoomActiveIdx(0)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', color: '#94a3b8', fontSize: 26,
+                        background: roomActive === 0 ? 'rgba(148,163,184,0.1)' : 'transparent' }}>
                       <span>🏠</span>
                       <span style={{ textDecoration: 'underline', color: '#cbd5e1' }}>{roomSearchText.trim()}</span>
                       <span style={{ fontSize: 22, color: '#64748b' }}>— oluştur ve ekle</span>
@@ -1352,7 +1382,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
             )}
 
             {/* ── Color picker panel ────────────────────────────────────── */}
-            {showColorPicker && hasTextSel && !drawMode && (
+            {((showColorPicker === 'text' && hasTextSel) || (showColorPicker === 'bg' && hasBgSel)) && !drawMode && (
               <div onMouseDown={stop}
                 style={{ position: 'absolute', top: tbH + 10, left: 20, zIndex: 35, background: 'rgba(8,8,22,0.97)', border: '1px solid rgba(96,165,250,0.25)', borderRadius: 14, padding: 16, boxShadow: '0 8px 32px rgba(0,0,0,0.6)', backdropFilter: 'blur(12px)', minWidth: 280 }}>
                 {/* header */}
@@ -1361,8 +1391,8 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                     {showColorPicker === 'text' ? 'YAZI RENGİ' : 'ARKA PLAN'}
                   </span>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <button onMouseDown={stop} onClick={() => setShowColorPicker('text')}
-                      style={{ padding: '4px 12px', borderRadius: 6, border: `1px solid ${showColorPicker === 'text' ? 'rgba(96,165,250,0.6)' : 'rgba(255,255,255,0.1)'}`, background: showColorPicker === 'text' ? 'rgba(96,165,250,0.18)' : 'transparent', color: showColorPicker === 'text' ? '#93c5fd' : 'rgba(148,163,184,0.5)', fontSize: 20, cursor: 'pointer', fontWeight: 700 }}>A</button>
+                    {hasTextSel && <button onMouseDown={stop} onClick={() => setShowColorPicker('text')}
+                      style={{ padding: '4px 12px', borderRadius: 6, border: `1px solid ${showColorPicker === 'text' ? 'rgba(96,165,250,0.6)' : 'rgba(255,255,255,0.1)'}`, background: showColorPicker === 'text' ? 'rgba(96,165,250,0.18)' : 'transparent', color: showColorPicker === 'text' ? '#93c5fd' : 'rgba(148,163,184,0.5)', fontSize: 20, cursor: 'pointer', fontWeight: 700 }}>A</button>}
                     <button onMouseDown={stop} onClick={() => setShowColorPicker('bg')}
                       style={{ padding: '4px 10px', borderRadius: 6, border: `1px solid ${showColorPicker === 'bg' ? 'rgba(96,165,250,0.6)' : 'rgba(255,255,255,0.1)'}`, background: showColorPicker === 'bg' ? 'rgba(96,165,250,0.18)' : 'transparent', color: showColorPicker === 'bg' ? '#93c5fd' : 'rgba(148,163,184,0.5)', fontSize: 20, cursor: 'pointer' }}>▭</button>
                   </div>
