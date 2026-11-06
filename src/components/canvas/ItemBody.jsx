@@ -20,7 +20,7 @@ export function ItemBody({ item, width, editing, onOpenImages, onOpenLink, onTex
       // içeriğe göre uzat, A4 yüksekliğinde durdur → fazlası textarea içinde scroll
       return editing
         ? <TextItemEditor item={item} onHeight={onTextHeight} onCommit={onTextCommit} onMarkdown={onTextMarkdown} />
-        : <TextItemBox item={item} defaultBg="rgba(0,0,0,0.38)" />
+        : <TextItemBox item={item} />
     default: return null
   }
 }

@@ -20,7 +20,7 @@ import { takeNotebook } from './notebook/shelfStore'
 import { ItemBody } from './canvas/ItemBody'
 import { ImageViewer } from './canvas/ImageViewer'
 import { ArrowLayer } from './canvas/ArrowLayer'
-import { TextItemBox } from './canvas/TextItem'
+import { TextItemBox, TEXT_DEFAULT_BG } from './canvas/TextItem'
 import { NoteEditor } from './canvas/NoteEditor'
 import { askGoogleEmail, getGoogleEmail, setGoogleEmail } from '../utils/googleAccount'
 
@@ -696,7 +696,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const BG_COLORS = [
     'transparent',
     '#0f172a', '#1e293b', '#1e1b4b', '#14532d',
-    '#450a0a', '#422006', '#1c1917', '#0f0f23',
+    '#450a0a', '#422006', '#1c1917', TEXT_DEFAULT_BG,
     '#312e81', '#1d4ed8', '#0f766e', '#166534',
     '#fbbf24', '#ef4444', '#ffffff',
   ]
@@ -936,7 +936,9 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   // arka plan rengi metin + oda linki öğelerinde ortak
   const selBgItems      = items.filter(it => selectedIds.has(it.id) && BG_TYPES.has(it.type))
   const hasBgSel        = selBgItems.length > 0
-  const commonBgColor   = hasBgSel && selBgItems.every(it => it.bgColor === selBgItems[0].bgColor) ? (selBgItems[0].bgColor ?? null) : null
+  // rengi seçilmemiş metin varsayılan griyle görünür → paletteki gri aktif sayılır
+  const effBg           = (it) => it.bgColor ?? (it.type === 'text' ? TEXT_DEFAULT_BG : null)
+  const commonBgColor   = hasBgSel && selBgItems.every(it => effBg(it) === effBg(selBgItems[0])) ? effBg(selBgItems[0]) : null
   const markdownActive  = selTextItems.length > 0 && selTextItems.every(it => it.markdown)
 
   // canvas'ta resim varsa toolbar'da toplu indirme butonu görünür (seçili resim varsa onları indirir)
@@ -1065,7 +1067,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
             <NoteCard item={item} />
           </div>
         ) : item.type === 'text' ? (
-          <TextItemBox key={item.id} item={item} defaultBg="transparent"
+          <TextItemBox key={item.id} item={item}
             style={{ position: 'absolute', left: item.x, top: item.y, width: item.w }} />
         ) : item.type === 'room' ? (
           <div key={item.id} style={{ position: 'absolute', left: item.x, top: item.y, width: item.w, height: item.h, pointerEvents: 'auto', zIndex: 5 }}
