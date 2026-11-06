@@ -276,12 +276,19 @@ export const YoutubeCard = ({ item, clickable = false }) => (
 
 // ── Oda çipi ─────────────────────────────────────────────────────────────────
 // item.bgColor: metin öğeleriyle aynı arka plan paleti (yoksa varsayılan mavi ton)
-export const RoomChip = ({ item }) => (
-  <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', background: item.bgColor ?? 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.35)', borderRadius: 8, cursor: 'inherit', boxSizing: 'border-box', pointerEvents: 'none' }}>
-    <span style={{ fontSize: 30 }}>🏠</span>
-    <span style={{ color: '#93c5fd', fontSize: 28, textDecoration: 'underline', textUnderlineOffset: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.roomName}</span>
-  </div>
-)
+// İçinde bulunulan odanın linki yeşil kenarlıkla işaretlenir ("buradasın")
+export const RoomChip = ({ item }) => {
+  const here = useStore(st => !!item.roomId && st.currentRoomId === item.roomId)
+  return (
+    <div title={here ? 'Şu an bu odadasın' : undefined}
+      style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', background: item.bgColor ?? 'rgba(96,165,250,0.1)',
+        border: here ? '2px solid #22c55e' : '1px solid rgba(96,165,250,0.35)', boxShadow: here ? '0 0 0 1px rgba(34,197,94,0.35), 0 0 14px rgba(34,197,94,0.45)' : 'none',
+        borderRadius: 8, cursor: 'inherit', boxSizing: 'border-box', pointerEvents: 'none' }}>
+      <span style={{ fontSize: 30 }}>🏠</span>
+      <span style={{ color: '#93c5fd', fontSize: 28, textDecoration: 'underline', textUnderlineOffset: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.roomName}</span>
+    </div>
+  )
+}
 
 // ── Defter kartı ─────────────────────────────────────────────────────────────
 // Kitaplıktaki bir defterin kapağı (item.src = 'book:<id>' | 'room:<kökId>'). Ad ve

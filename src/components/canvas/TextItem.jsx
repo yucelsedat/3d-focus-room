@@ -5,8 +5,11 @@ import { parseMd } from '../../utils/markdownRender'
 import { pasteRichTextAsMarkdown } from '../../utils/richTextToMarkdown'
 import { a4MaxH } from './canvasUtils'
 
-// defaultBg: bgColor tanımsızken arka plan (düzenleme modunda yarı saydam, duvarda şeffaf)
-export function TextItemBox({ item, defaultBg, style }) {
+// Rengi seçilmemiş (bgColor tanımsız) metinlerin arka planı — duvarda ve düzenlemede aynı
+export const TEXT_DEFAULT_BG = '#374151'
+
+// defaultBg: bgColor tanımsızken arka plan
+export function TextItemBox({ item, defaultBg = TEXT_DEFAULT_BG, style }) {
   const st = {
     width: '100%', height: 'auto',
     minHeight: Math.min(item.h || 60, a4MaxH(item.w)), maxHeight: a4MaxH(item.w),
