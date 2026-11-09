@@ -105,6 +105,13 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   const [roomSearchText, setRoomSearchText] = useState('')
   const [roomActiveIdx, setRoomActiveIdx]   = useState(0)   // klavye/hover ile vurgulanan öneri
   const roomListRef = useRef(null)
+  const roomSearchInputRef = useRef(null)
+  // var olmayan oda linki oluşturulurken tür seçimi: { name, choice: 'child' | 'detached' }
+  const [roomKind, setRoomKind]             = useState(null)
+  const roomKindRef                         = useRef(null)
+  const roomKindKeyRef                      = useRef(null)
+  const currentRoomId                       = useStore(s => s.currentRoomId)
+  const currentRoomName                     = useStore(s => s.currentRoomName)
 
   // draw mode
   const [drawMode, setDrawMode]             = useState(null)
@@ -304,6 +311,8 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     if (!isEditMode) return
     const onKey = e => {
       if (noteOverlayRef.current) return
+      // Oda türü seçimi açıkken tüm tuşları o yönetir (←/→ seçim, Enter onay, Esc vazgeç)
+      if (roomKindRef.current) { e.stopPropagation(); roomKindKeyRef.current?.(e); return }
       // Resim görüntüleyici açıkken tüm tuşları o yönetir (Delete vb. canvas kısayolları çalışmasın)
       if (viewerItemIdRef.current) {
         e.stopPropagation()
@@ -447,6 +456,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     setViewerItemId(null); setNoteEditId(null); setNoteGallery(null)
     setShowUrlInput(false); setUrlValue('')
     setShowRoomSearch(false); setRoomSearchText('')
+    roomKindRef.current = null; setRoomKind(null)
     setIsPanning(false); setDragState(null); setResizeState(null)
     setDrawMode(null); setDrawingLine(null); setSelRect(null)
     setSelectedIds(new Set())
@@ -779,14 +789,15 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
     setSelectedIds(new Set([ni.id])); setShowUrlInput(false); setUrlValue('')
   }
 
-  const addRoomItem = async (roomId, roomName) => {
+  // parentId: yeni oluşturulan oda bu odanın child'ı olur (null → ayrık/kök oda)
+  const addRoomItem = async (roomId, roomName, { parentId = null } = {}) => {
     let finalId = roomId, finalName = roomName
     if (!finalId) {
       try {
-        const r = await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: roomName.trim(), roomType: 'room' }) })
+        const r = await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: roomName.trim(), roomType: 'room', parentId }) })
         if (!r.ok) { const d = await r.json(); alert(d.error || 'Oda oluşturulamadı'); return }
         const created = await r.json(); finalId = created.id; finalName = created.name
-        setRooms([...rooms, created])
+        setRooms([...useStore.getState().rooms, created])
       } catch (err) { alert('Oda oluşturulamadı: ' + err.message); return }
     }
     const pt = centerSurface()
@@ -1017,7 +1028,33 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   // seçilebilir öneriler: eşleşen odalar, yoksa "oluştur ve ekle"
   const roomOptions = noMatch ? [{ create: true, name: roomSearchText.trim() }] : filteredRooms
   const roomActive = Math.min(roomActiveIdx, roomOptions.length - 1)
-  const pickRoomOption = (opt) => opt.create ? addRoomItem(null, opt.name) : addRoomItem(opt.id, opt.name)
+  // Var olmayan oda: oyundaki tile'da önce child/ayrık seçimi sorulur. /canvas sayfası
+  // bir odaya ait olmadığından (gizli sistem odası) orada oda doğrudan ayrık oluşturulur.
+  const roomParent = standalone ? null : { id: currentRoomId, name: currentRoomName }
+  // ref state ile birlikte güncellenir: capture dinleyicisi render beklemeden doğru değeri görür
+  const putRoomKind = (rk) => { roomKindRef.current = rk; setRoomKind(rk) }
+  const createRoomLink = (name) => roomParent ? putRoomKind({ name, choice: 'child' }) : addRoomItem(null, name)
+  const pickRoomOption = (opt) => opt.create ? createRoomLink(opt.name) : addRoomItem(opt.id, opt.name)
+  const confirmRoomKind = (choice) => {
+    const rk = roomKindRef.current
+    if (!rk) return
+    putRoomKind(null)   // önce kapat: çift Enter/tık iki oda açmasın
+    addRoomItem(null, rk.name, { parentId: (choice ?? rk.choice) === 'child' ? roomParent?.id : null })
+  }
+  const cancelRoomKind = () => {
+    putRoomKind(null)
+    requestAnimationFrame(() => roomSearchInputRef.current?.focus())
+  }
+  const onRoomKindKey = (e) => {
+    const rk = roomKindRef.current
+    const other = rk.choice === 'child' ? 'detached' : 'child'
+    const next = e.key === 'ArrowLeft' ? 'child' : e.key === 'ArrowRight' ? 'detached' : e.key === 'Tab' ? other : null
+    if (next) { e.preventDefault(); putRoomKind({ ...rk, choice: next }); return }
+    if (e.key === 'Enter')  { e.preventDefault(); if (!e.repeat) confirmRoomKind(); return }
+    if (e.key === 'Escape') { e.preventDefault(); if (!e.repeat) cancelRoomKind(); return }
+    if (!e.ctrlKey && !e.metaKey) e.preventDefault()   // arkadaki arama kutusuna yazılmasın
+  }
+  useEffect(() => { roomKindKeyRef.current = onRoomKindKey })
   const onRoomSearchKey = (e) => {
     e.stopPropagation()
     if (e.key === 'Escape') { setShowRoomSearch(false); setRoomSearchText(''); return }
@@ -1345,7 +1382,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
               <div style={{ position: 'absolute', top: tbH, left: 20, width: 720, background: 'rgba(8,8,20,0.97)', border: '1px solid rgba(96,165,250,0.3)', borderTop: 'none', borderRadius: '0 0 12px 12px', zIndex: 30, overflow: 'hidden' }}
                 onMouseDown={stop}>
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-                  <input autoFocus type="text" value={roomSearchText} onChange={e => { setRoomSearchText(e.target.value); setRoomActiveIdx(0) }}
+                  <input ref={roomSearchInputRef} autoFocus type="text" value={roomSearchText} onChange={e => { setRoomSearchText(e.target.value); setRoomActiveIdx(0) }}
                     onKeyDown={onRoomSearchKey}
                     onMouseDown={stop} onClick={stop} placeholder="Oda ara…"
                     style={{ width: '100%', height: 56, padding: '0 18px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(96,165,250,0.4)', borderRadius: 8, color: '#fff', fontSize: 26, outline: 'none', boxSizing: 'border-box' }} />
@@ -1360,7 +1397,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                     </div>
                   ))}
                   {noMatch && (
-                    <div onClick={() => addRoomItem(null, roomSearchText.trim())}
+                    <div onClick={() => createRoomLink(roomSearchText.trim())}
                       onMouseEnter={() => setRoomActiveIdx(0)}
                       style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', color: '#94a3b8', fontSize: 26,
                         background: roomActive === 0 ? 'rgba(148,163,184,0.1)' : 'transparent' }}>
@@ -1372,6 +1409,45 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                   {!roomSearchText && rooms.length === 0 && (
                     <div style={{ padding: '20px', color: '#64748b', fontSize: 24, textAlign: 'center' }}>Henüz oda yok</div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* ── Yeni oda türü: child / ayrık ──────────────────────────── */}
+            {roomKind && (
+              <div onMouseDown={(e) => { stop(e); e.preventDefault() }} onClick={(e) => { stop(e); if (e.target === e.currentTarget) cancelRoomKind() }}
+                style={{ position: 'absolute', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(3,3,10,0.62)', backdropFilter: 'blur(3px)' }}>
+                <div role="dialog" aria-modal="true" aria-label="Yeni oda türü"
+                  style={{ zoom: isFullscreen ? FS_TB_ZOOM : 1, width: 860, padding: '34px 36px 26px', background: 'rgba(8,8,20,0.98)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 18, boxShadow: '0 24px 80px rgba(0,0,0,0.65)', color: '#e2e8f0', cursor: 'default' }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '0.14em', color: 'rgba(148,163,184,0.6)' }}>YENİ ODA</div>
+                  <div style={{ marginTop: 8, fontSize: 40, fontWeight: 800, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{roomKind.name}</div>
+                  <div style={{ marginTop: 6, fontSize: 24, fontWeight: 200, color: '#94a3b8' }}>Bu oda nasıl oluşturulsun?</div>
+                  <div role="radiogroup" style={{ display: 'flex', gap: 18, marginTop: 28 }}>
+                    {[
+                      { key: 'child',    icon: '↳', label: 'Child oda', hint: `“${roomParent?.name ?? ''}” odasının altında` },
+                      { key: 'detached', icon: '◇', label: 'Ayrık oda', hint: 'Bağımsız, kendi başına bir oda' },
+                    ].map(opt => {
+                      const on = roomKind.choice === opt.key
+                      return (
+                        <button key={opt.key} type="button" role="radio" aria-checked={on} tabIndex={-1}
+                          onMouseEnter={() => putRoomKind({ ...roomKind, choice: opt.key })}
+                          onClick={(e) => { stop(e); confirmRoomKind(opt.key) }}
+                          style={{ flex: 1, textAlign: 'left', padding: '22px 24px', borderRadius: 14, cursor: 'pointer', outline: 'none', font: 'inherit',
+                            background: on ? 'rgba(96,165,250,0.16)' : 'rgba(255,255,255,0.03)',
+                            border: `2px solid ${on ? 'rgba(96,165,250,0.85)' : 'rgba(255,255,255,0.08)'}`,
+                            boxShadow: on ? '0 0 0 4px rgba(96,165,250,0.15)' : 'none', color: '#e2e8f0', transition: 'background .12s, border-color .12s' }}>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                            <span style={{ fontSize: 30, color: on ? '#93c5fd' : '#64748b' }}>{opt.icon}</span>
+                            <span style={{ fontSize: 30, fontWeight: 800 }}>{opt.label}</span>
+                          </div>
+                          <div style={{ marginTop: 8, fontSize: 21, fontWeight: 200, color: on ? '#cbd5e1' : '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.hint}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div style={{ marginTop: 22, fontSize: 19, fontWeight: 200, color: 'rgba(148,163,184,0.55)', textAlign: 'center' }}>
+                    ← → seç · Enter oluştur · Esc vazgeç
+                  </div>
                 </div>
               </div>
             )}
