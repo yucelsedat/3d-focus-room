@@ -422,11 +422,16 @@ app.post('/api/rooms/:id/activate', async (req, res) => {
   if (!existing || id === CANVAS_PAGE_ROOM_ID) return res.status(404).json({ error: 'Oda bulunamadı' });
 
   // lastActiveAt'i güncelle → oda ana sayfada en başa geçer (son kullanılan kuyruğu).
-  const room = await prisma.room.update({
-    where: { id },
-    data: { lastActiveAt: new Date() },
-    include: roomInclude,
-  });
+  // { touch: false }: istemci kendi ziyaret geçmişini tutuyor (mobil, cihazda) —
+  // web'in "son kullanılan" sırası başka istemcinin ziyaretleriyle değişmesin.
+  const touch = req.body?.touch !== false;
+  const room = touch
+    ? await prisma.room.update({
+        where: { id },
+        data: { lastActiveAt: new Date() },
+        include: roomInclude,
+      })
+    : await prisma.room.findUnique({ where: { id }, include: roomInclude });
 
   activeRoomId   = id;
   activeRoomType = room.roomType ?? 'room';
