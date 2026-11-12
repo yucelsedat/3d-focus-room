@@ -13,6 +13,7 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 import { sanitizeNotebook, createEmptyDoc, resolveRoot, planNotebookReconcile, cleanBookName, cleanCover, NB_LIMITS } from './src/utils/notebookModel.js';
+import { getGifFrames } from './server/gifFrames.js';
 import { sanitizeTimeline, createEmptyTimeline, sanitizeTimelineName, noteToText, itemAssetUrls, TL_LIMITS } from './src/utils/timelineModel.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -122,6 +123,24 @@ app.use(express.json());
 // Kart kodu API + coverImage ile bu URL'lere doğrudan istek atıyor;
 // bu olmadan /uploads/... 404 döner ve kapak resmi siyah görünür.
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+
+// Kimlik yoklaması: mobil uygulama yerel ağı tararken (focus-room-mobile reposu: src/api/discovery.js)
+// 5001 portunda gerçekten bu sunucunun olduğunu buradan anlar.
+app.get('/api/ping', (req, res) => {
+  res.json({ app: 'focus-room', ok: true });
+});
+
+// GIF kareleri (mobil istemci için): expo-gl GIF oynatamaz. GIF bir kez çözülür,
+// her kare public/uploads/gif-frames/<key>/ altına ayrı dosya olarak yazılır.
+// Üretim arka planda sürer; yanıttaki `ready` o ana kadar hazır kare sayısıdır.
+// ?src=/uploads/... — yalnız uploads klasörü içi kabul edilir (bkz. server/gifFrames.js).
+app.get('/api/gif-frames', async (req, res) => {
+  try {
+    res.json(await getGifFrames(path.join(__dirname, 'public'), String(req.query.src || '')));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
 
 // Ensure upload dirs exist
 const ensureDir = (dir) => {
@@ -1246,6 +1265,37 @@ app.delete('/api/room-links/:id', async (req, res) => {
   res.json({ success: true, roomLinks: links.map(l => serializeRoomLink(l)) });
 });
 
+// İki oda arasındaki tüm bağları koparır (mobil oda menüsü "Bağlantıyı sil"):
+// iki yöndeki özel kapılar ve bağlantı kapıları + aralarındaki parent/child ilişkisi.
+// Odalar ve içerikleri kalır; aktif odaya bağlı değildir (odalar açıkça verilir).
+app.post('/api/rooms/:id/disconnect', async (req, res) => {
+  const { id } = req.params;
+  const otherId = req.body?.otherId;
+  if (!otherId || otherId === id) return res.status(400).json({ error: 'Bağlantısı silinecek oda gerekli' });
+  const [a, b] = await Promise.all([
+    prisma.room.findUnique({ where: { id } }),
+    prisma.room.findUnique({ where: { id: otherId } }),
+  ]);
+  if (!a || !b) return res.status(404).json({ error: 'Oda bulunamadı' });
+
+  const pair = { OR: [{ roomId: id, targetRoomId: otherId }, { roomId: otherId, targetRoomId: id }] };
+  const [doors, links, parent] = await prisma.$transaction([
+    prisma.specialDoor.deleteMany({ where: pair }),
+    prisma.roomLink.deleteMany({ where: pair }),
+    prisma.room.updateMany({
+      where: { OR: [{ id: otherId, parentId: id }, { id, parentId: otherId }] },
+      data: { parentId: null },
+    }),
+  ]);
+  if (parent.count) await reconcileNotebooks();   // kopan alt ağaç kendi defterine
+  const allRooms = await prisma.room.findMany({ where: VISIBLE_ROOMS, orderBy: { lastActiveAt: 'desc' }, include: roomInclude });
+  res.json({
+    success: true,
+    removed: { specialDoors: doors.count, roomLinks: links.count, parent: parent.count },
+    rooms: allRooms.map(serializeRoom),
+  });
+});
+
 // ─── Media API ────────────────────────────────────────────────────────────────
 
 app.get('/api/media', async (req, res) => {
@@ -1256,6 +1306,9 @@ app.get('/api/media', async (req, res) => {
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     const { tileId, type, width, height, position, rotation, url } = req.body;
+    // Mobil istemci odayı açıkça gönderir: sunucunun aktif odası bilgisayardaki web
+    // arayüzünde başka odaya geçilince değişir. Gönderilmezse eski davranış.
+    const roomId = req.body.roomId || activeRoomId;
 
     let mediaUrl = url;
     if (req.file) {
@@ -1270,7 +1323,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const media = await prisma.media.create({
       data: {
         id,
-        roomId: activeRoomId,
+        roomId,
         tileId,
         type,
         url: mediaUrl || null,
@@ -1395,6 +1448,8 @@ app.post('/api/fetch-url', async (req, res) => {
 app.post('/api/add-text', async (req, res) => {
   try {
     const { tileId, content, width, height, position, rotation } = req.body;
+    // Mobil istemci odayı açıkça gönderir (bkz. /api/upload); yoksa eski davranış
+    const roomId = req.body.roomId || activeRoomId;
     const pos = JSON.parse(position);
     const rot = JSON.parse(rotation);
     const id = BigInt(Date.now());
@@ -1402,7 +1457,7 @@ app.post('/api/add-text', async (req, res) => {
     const media = await prisma.media.create({
       data: {
         id,
-        roomId: activeRoomId,
+        roomId,
         tileId,
         type: 'markdown',
         content,
@@ -1428,6 +1483,8 @@ app.post('/api/add-text', async (req, res) => {
 app.post('/api/canvas', async (req, res) => {
   try {
     const { tileId, width, height, position, rotation, bg = '#1a1a2e' } = req.body;
+    // Mobil istemci odayı açıkça gönderir (bkz. /api/upload); yoksa eski davranış
+    const roomId = req.body.roomId || activeRoomId;
     const pos = JSON.parse(position);
     const rot = JSON.parse(rotation);
     const id = BigInt(Date.now());
@@ -1436,7 +1493,7 @@ app.post('/api/canvas', async (req, res) => {
     const media = await prisma.media.create({
       data: {
         id,
-        roomId: activeRoomId,
+        roomId,
         tileId,
         type: 'canvas',
         url: null,
@@ -1682,6 +1739,9 @@ app.put('/api/media/:id', async (req, res) => {
 
 app.post('/api/media/clone', async (req, res) => {
   const { sourceId, tileId, position, rotation } = req.body;
+  // Mobil yapıştırırken bulunduğu odayı açıkça gönderir (web başka odaya geçince
+  // global activeRoomId değişir); gönderilmezse eski davranış.
+  const roomId = req.body.roomId || activeRoomId;
   // mode: 'copy' (bağımsız derin kopya) | 'sync' (senkron kopya, yalnız canvas) | 'move' (kesilen senkron canvas, bağ korunur)
   const mode = ['sync', 'move'].includes(req.body.mode) ? req.body.mode : 'copy';
   let source;
@@ -1710,7 +1770,7 @@ app.post('/api/media/clone', async (req, res) => {
   const media = await prisma.media.create({
     data: {
       id: BigInt(Date.now()),
-      roomId: activeRoomId,
+      roomId,
       tileId,
       type: source.type,
       url: newUrl,
