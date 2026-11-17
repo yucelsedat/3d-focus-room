@@ -902,6 +902,25 @@ export default function WorldSelect() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
           <button
+            onClick={() => navigate('/')}
+            title="Defterlerin durduğu kitaplık (ana sayfa)"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 14px', borderRadius: 10, background: 'transparent',
+              border: '1px solid #262626', color: '#ddd', fontSize: 14, fontWeight: 700,
+              cursor: 'pointer', letterSpacing: 0.3,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#ff8a1f'; e.currentTarget.style.color = '#fff' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#262626'; e.currentTarget.style.color = '#ddd' }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3.5" y="3.5" width="4" height="17" rx="1" />
+              <rect x="9" y="5.5" width="4" height="15" rx="1" />
+              <path d="M14.3 6.6l3.4-1.1 4 13.4-3.4 1.1z" />
+            </svg>
+            Kitaplık
+          </button>
+          <button
             onClick={() => navigate('/timeline')}
             title="Ne yaptık, ne planlıyoruz — zaman ekseni"
             style={{
