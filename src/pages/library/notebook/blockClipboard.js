@@ -5,7 +5,7 @@ import { useSyncExternalStore } from 'react'
 
 import { deleteAttachmentFile, duplicateAttachmentFile } from './attachments.js'
 import { parseMarks, serializeMarks, shiftBoxTimes, shiftMarks } from './marks.js'
-import { parseContent, serializeContent } from './noteContent.js'
+import { hasFile, parseContent, serializeContent } from './noteContent.js'
 
 // Bir bloğun sayfadan bağımsız kısmı: yazı, ekler, boyalar, yazı renkleri ve saatler
 export function blockOf(note) {
@@ -14,7 +14,7 @@ export function blockOf(note) {
 }
 
 export function attachmentNames(content) {
-  return parseContent(content).flatMap((s) => (s.type === 'text' ? [] : [s.name]))
+  return parseContent(content).flatMap((s) => (hasFile(s) ? [s.name] : []))
 }
 
 // Bloğun eklerinin dosyaları yeni adlarla çoğaltılır: her dosyayı tek bir blok kullanır
@@ -23,7 +23,7 @@ export async function withCopiedFiles(block) {
   const segments = parseContent(block.content)
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i]
-    if (segment.type === 'text') continue
+    if (!hasFile(segment)) continue
     const name = await duplicateAttachmentFile(segment.name).catch(() => null)
     if (!name) continue
     const next = parseContent(current.content)
@@ -49,12 +49,12 @@ export function deleteContentFiles(contents) {
   for (const name of contents.flatMap(attachmentNames)) deleteAttachmentFile(name)
 }
 
-// Blokların düz yazısı (başka uygulamalara yapıştırmak için): ekler atlanır
+// Blokların düz yazısı (başka uygulamalara yapıştırmak için): ekler atlanır, linkler adresiyle girer
 export function blocksText(blocks) {
   return blocks
     .map((b) =>
       parseContent(b.content)
-        .flatMap((s) => (s.type === 'text' && s.text !== '' ? [s.text] : []))
+        .flatMap((s) => (s.type === 'text' && s.text !== '' ? [s.text] : s.type === 'link' ? [s.url] : []))
         .join('\n'),
     )
     .join('\n')

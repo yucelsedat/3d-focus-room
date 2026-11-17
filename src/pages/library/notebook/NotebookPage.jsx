@@ -69,7 +69,8 @@ import {
   shiftMarks,
   marksIn,
 } from './marks.js'
-import { insertAttachment, parseContent, serializeContent } from './noteContent.js'
+import { hasFile, insertAttachment, parseContent, serializeContent } from './noteContent.js'
+import { linkAttachment } from './linkCards.js'
 import { ImageViewer } from './ImageViewer.jsx'
 import { lineOrder, moveLine, toggleCheckLine, toggleNumberLine } from './noteLists.js'
 import { NoteEntry } from './NoteEntry.jsx'
@@ -1364,7 +1365,8 @@ export function NotebookPage({
 
   // Eki sayfadan kaldırma sorusu; kalkınca dosyası da silinir
   function confirmRemoveAttachment(attachment, remove) {
-    const what = attachment.type === 'image' ? 'Bu resim' : `"${attachment.label}"`
+    const what =
+      attachment.type === 'image' ? 'Bu resim' : attachment.type === 'link' ? `"${attachment.title || attachment.url}" linki` : `"${attachment.label}"`
     setConfirm({
       title: 'Eki sil',
       message: `${what} sayfadan kaldırılsın mı?`,
@@ -1372,7 +1374,7 @@ export function NotebookPage({
       run: () => {
         remove()
         setEditingImage(null)
-        deleteAttachmentFile(attachment.name)
+        if (hasFile(attachment)) deleteAttachmentFile(attachment.name)
       },
     })
   }
@@ -1636,6 +1638,11 @@ export function NotebookPage({
               onOpenImage={openImage}
               onConfirmRemove={confirmRemoveAttachment}
               onPasteImage={(segment, file) => attach(() => imageAttachment(file))}
+              onPasteLink={(segment, url) => {
+                const loading = 'Link kartı hazırlanıyor…'
+                setNotice(loading)
+                attach(() => linkAttachment(url)).then(() => setNotice((n) => (n === loading ? null : n)))
+              }}
               hand={hand}
               onMoveLine={(segment, from, to) => moveNoteLine(note.id, segment, from, to)}
             />

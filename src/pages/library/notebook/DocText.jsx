@@ -16,6 +16,7 @@ import { markdownEnter, toggleTask } from './richText/markdownEdit.js'
 import { BLANK_BLOCK, parseMarkdown, unitAt, unitPrefix } from './richText/markdownUnits.js'
 
 import { DOC_RENDERED_PAD } from './docLayout.js'
+import { pastedLink } from './linkCards.js'
 
 const NO_MARKS = []
 
@@ -52,6 +53,7 @@ function RawDocText({
   onBackspaceAtStart,
   onPasteMarkdown,
   onPasteImage,
+  onPasteLink,
   ...layout
 }) {
   const inputRef = useRef(null)
@@ -147,7 +149,7 @@ function RawDocText({
             report(e.target)
           }}
           onSelect={(e) => report(e.currentTarget)}
-          onPaste={(e) => richPaste(e, onPasteMarkdown, onPasteImage)}
+          onPaste={(e) => richPaste(e, onPasteMarkdown, onPasteImage, onPasteLink)}
           onFocus={() => {
             setEditing(true)
             onFocus()
@@ -206,6 +208,7 @@ function LiveDocText({
   onBackspaceAtStart,
   onPasteMarkdown,
   onPasteImage,
+  onPasteLink,
   ...layout
 }) {
   const parsed = parseMarkdown(value)
@@ -391,6 +394,7 @@ function LiveDocText({
         onSubmit={(end) => enter((live.current?.start ?? unit.start) + end)}
         onPasteMarkdown={onPasteMarkdown}
         onPasteImage={onPasteImage}
+        onPasteLink={onPasteLink}
         onBackspaceAtStart={() => backspaceAtStart(unit)}
         onFocus={onFocus}
         onBlur={(node) => {
@@ -503,6 +507,7 @@ function UnitInput({
   onBlur,
   onPasteMarkdown,
   onPasteImage,
+  onPasteLink,
 }) {
   const ref = useRef(null)
   const applied = useRef(null)
@@ -593,7 +598,7 @@ function UnitInput({
         onFocus={onFocus}
         onBlur={() => onBlur(ref.current)}
         onPaste={(e) => {
-          if (richPaste(e, onPasteMarkdown, onPasteImage)) return
+          if (richPaste(e, onPasteMarkdown, onPasteImage, onPasteLink)) return
           // Düz yazı olduğu gibi girer (biçimler, görseller alana girmez)
           e.preventDefault()
           const plain = e.clipboardData.getData('text/plain')
@@ -623,12 +628,19 @@ function UnitInput({
 // Yapıştırılan şey biçimli metinse (Google Docs, Word, web sayfası, ChatGPT, kod editörü) Markdown
 // karşılığı imlecin yerine girer, blok hemen biçimli görünür; true döner. Düz metinse false: alan
 // kendisi yapıştırır.
-function richPaste(e, onPasteMarkdown, onPasteImage) {
+function richPaste(e, onPasteMarkdown, onPasteImage, onPasteLink) {
   // Panodaki resim imlecin olduğu yere fotoğraf olarak girer
   const image = [...(e.clipboardData.files ?? [])].find((f) => f.type.startsWith('image/'))
   if (image && onPasteImage) {
     e.preventDefault()
     onPasteImage(image)
+    return true
+  }
+  // Tek başına bir link imlecin yerine kart olarak girer (canvas tile'daki link kartı gibi)
+  const link = onPasteLink ? pastedLink(e.clipboardData) : null
+  if (link) {
+    e.preventDefault()
+    onPasteLink(link)
     return true
   }
   if (!onPasteMarkdown) return false

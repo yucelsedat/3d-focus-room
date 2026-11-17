@@ -10,6 +10,7 @@ import { HandCheckbox } from '../TornPaperMenu.jsx'
 import { fonts, HAND_TAIL, inkOf, notebook } from '../theme.js'
 import { HighlightLayer } from './HighlightStroke.jsx'
 import { BOX, BOX_DONE, boxOffsets, continueList, enterAction, toggleBox } from './noteLists.js'
+import { pastedLink } from './linkCards.js'
 
 const LH = notebook.lineHeight
 // Fosforlu kalemin satırdaki şeridi: harflerin gövdesinden tabanına kadar
@@ -70,6 +71,7 @@ export function HandText({
   onEnter,
   onBackspaceAtStart,
   onPasteImage,
+  onPasteLink,
 }) {
   const wrapRef = useRef(null)
   const mirrorRef = useRef(null)
@@ -261,6 +263,12 @@ export function HandText({
               if (image && onPasteImage) {
                 e.preventDefault()
                 onPasteImage(image)
+                return
+              }
+              const link = onPasteLink ? pastedLink(e.clipboardData) : null
+              if (link) {
+                e.preventDefault()
+                onPasteLink(link)
               }
             }}
             onKeyDown={(e) => {

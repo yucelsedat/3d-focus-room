@@ -146,6 +146,14 @@
 .nb-file-tag:hover {
   background-color: #f3eedf !important;
 }
+.nb-link-card {
+  transition: box-shadow 120ms ease-out, filter 120ms ease-out;
+}
+.nb-link-card:hover {
+  filter: brightness(1.06);
+  box-shadow: 1px 3px 8px rgba(59, 47, 26, 0.34) !important;
+}
+.nb-link-card:focus-visible,
 .nb-photo:focus-visible {
   outline: 2px solid rgba(11, 92, 173, 0.5);
   outline-offset: 2px;
