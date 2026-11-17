@@ -220,6 +220,45 @@ export const buildInstaItem = async (url, pt) => {
   return { id: crypto.randomUUID(), type: 'insta', x: pt.x, y: pt.y, w: 320, h: 560, url, thumbUrl, title, siteName }
 }
 
+// YouTube video kimliği (youtube.com/watch?v=… | youtu.be/…); değilse null
+export const youtubeIdOf = (text) => {
+  try {
+    const u = new URL(text)
+    if (u.hostname.includes('youtube.com')) return u.searchParams.get('v')
+    if (u.hostname === 'youtu.be') return u.pathname.slice(1).split('?')[0] || null
+  } catch {}
+  return null
+}
+
+// Tek başına bir web adresi mi (http/https + noktalı alan adı); değilse null
+export const parseWebUrl = (text) => {
+  const t = (text || '').trim()
+  if (!t || /\s/.test(t)) return null
+  try { const u = new URL(t); return /^https?:$/.test(u.protocol) && u.hostname.includes('.') ? u : null } catch { return null }
+}
+
+// Linkin kart verisi — canvas ve defter aynı sınıflandırmayı kullanır:
+// YouTube → 'youtube', Instagram gönderi/reel → 'insta', diğerleri → 'link' (Open Graph)
+export const linkCardData = async (url) => {
+  const videoId = youtubeIdOf(url)
+  if (videoId) {
+    let title = '', thumbUrl = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+    try {
+      const r = await fetch(`/api/youtube-meta?url=${encodeURIComponent(url)}`)
+      if (r.ok) { const d = await r.json(); title = d.title || ''; if (d.thumbnail_url) thumbUrl = d.thumbnail_url }
+    } catch {}
+    return { kind: 'youtube', url, videoId, title, thumbUrl, siteName: 'YouTube' }
+  }
+  if (isInstaUrl(url)) {
+    const { title, thumbUrl, siteName } = await buildInstaItem(url, { x: 0, y: 0 })
+    return { kind: 'insta', url, title, thumbUrl, siteName }
+  }
+  const meta = await fetchLinkMeta(url)
+  // Doğrudan görsel adresi: başlığı yoksa görselin kendisi kapak olur
+  if (!meta.thumbUrl && /\.(jpe?g|png|gif|webp|svg|bmp|avif)$/i.test(parseWebUrl(url)?.pathname || '')) meta.thumbUrl = url
+  return { kind: 'link', url, ...meta }
+}
+
 // Open Graph başlık + görsel (link kartı ve not linki ortak)
 export const fetchLinkMeta = async (url) => {
   let host = ''
@@ -419,16 +458,11 @@ export async function buildPasteItems(cd, { uploadKey, center, onLoading = () =>
   if (!text) return null
 
   // YouTube link
-  const ytId = (() => { try { const u = new URL(text); if (u.hostname.includes('youtube.com')) return u.searchParams.get('v'); if (u.hostname === 'youtu.be') return u.pathname.slice(1).split('?')[0] } catch {} return null })()
-  if (ytId) {
+  if (youtubeIdOf(text)) {
     onLoading()
     const pt = center()
-    let title = '', thumbUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`
-    try {
-      const r = await fetch(`/api/youtube-meta?url=${encodeURIComponent(text)}`)
-      if (r.ok) { const d = await r.json(); title = d.title || ''; if (d.thumbnail_url) thumbUrl = d.thumbnail_url }
-    } catch {}
-    return { items: [{ id: crypto.randomUUID(), type: 'youtube', x: pt.x, y: pt.y, w: 480, h: 270, url: text, videoId: ytId, thumbUrl, title }], msg: 'ok', ms: 1200 }
+    const { videoId, thumbUrl, title } = await linkCardData(text)
+    return { items: [{ id: crypto.randomUUID(), type: 'youtube', x: pt.x, y: pt.y, w: 480, h: 270, url: text, videoId, thumbUrl, title }], msg: 'ok', ms: 1200 }
   }
 
   // Instagram reel/gönderi linki → dikey mobil kart (og görsel + başlık)

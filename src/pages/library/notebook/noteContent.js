@@ -3,17 +3,33 @@
 //   resim: "önceki yazı￼img-123.jpg|800|600|3|0|0.5|2￼sonraki yazı"
 //          (ad|genişlik|yükseklik|satır|açı|yatay yer|notun kaçıncı satırında; yeri değişmemişse yazılmaz)
 //   dosya: "önceki yazı￼file|file-123.pdf|Rapor.pdf￼sonraki yazı"
+//   link:  "önceki yazı￼link|youtube|<url>|<başlık>|<kapak>|<site>￼sonraki yazı"
+//          (focus-room eklentisi; kart canvas tile'daki link kartının aynısı, dosyası yoktur)
 // Böylece içerik her zaman metin, ek, metin, ek, metin ... şeklinde sıralanır.
 const MARK = '￼'
+
+export const LINK_KINDS = ['link', 'youtube', 'insta']
 
 export const DEFAULT_IMAGE_LINES = 3
 // Kâğıda elle yapıştırılmış gibi hafif yamuk
 export const DEFAULT_IMAGE_ROTATION = -1.2
 
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value ?? '')
+  } catch {
+    return value ?? ''
+  }
+}
+
 export function parseContent(content) {
   return content.split(MARK).map((part, i) => {
     if (i % 2 === 0) return { type: 'text', text: part }
     const fields = part.split('|')
+    if (fields[0] === 'link') {
+      const [, kind, url, title, thumbUrl, siteName] = fields.map((f, k) => (k < 2 ? f : safeDecode(f)))
+      return { type: 'link', kind: LINK_KINDS.includes(kind) ? kind : 'link', url, title, thumbUrl, siteName }
+    }
     if (fields[0] === 'file') {
       return { type: 'file', name: fields[1], label: decodeURIComponent(fields[2] ?? '') }
     }
@@ -45,12 +61,19 @@ function serializeSegment(s) {
       return `${MARK}${[s.name, s.width, s.height, s.lines, s.rotation, ...placement(s)].join('|')}${MARK}`
     case 'file':
       return `${MARK}file|${s.name}|${encodeURIComponent(s.label)}${MARK}`
+    case 'link':
+      return `${MARK}${['link', s.kind, ...[s.url, s.title, s.thumbUrl, s.siteName].map((f) => encodeURIComponent(f ?? ''))].join('|')}${MARK}`
   }
   return ''
 }
 
 export function serializeContent(segments) {
   return segments.map(serializeSegment).join('')
+}
+
+// Eki sunucuda bir dosyası olan bölümler (resim, dosya); linkin dosyası yoktur
+export function hasFile(segment) {
+  return segment.type === 'image' || segment.type === 'file'
 }
 
 // Metin bölümünü imleç konumundan ikiye ayırıp araya eki koyar

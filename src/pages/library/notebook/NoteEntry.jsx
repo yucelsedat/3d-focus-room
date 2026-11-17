@@ -12,6 +12,7 @@ import { flowAround, imageRect, intersects, layoutBlockImages } from './imageLay
 import { marksIn, parseMarks } from './marks.js'
 import { parseContent, removeAttachment, serializeContent } from './noteContent.js'
 import { NoteFile, NoteImage } from './NoteImage.jsx'
+import { NoteLink } from './NoteLink.jsx'
 
 const LH = notebook.lineHeight
 
@@ -57,6 +58,7 @@ export function NoteEntry({
   onOpenImage,
   onConfirmRemove,
   onPasteImage,
+  onPasteLink,
   // Not defteri / ajanda: kâğıda el yazısı, kenarda bloğun saati; kutulu satırlar taşınabilir
   hand = false,
   onMoveLine,
@@ -287,6 +289,7 @@ export function NoteEntry({
                 inks={marksIn(inks, starts[i], starts[i] + segment.text.length)}
                 onPasteMarkdown={hand ? undefined : onPasteMarkdown}
                 onPasteImage={onPasteImage ? (file) => onPasteImage(i, file) : undefined}
+                onPasteLink={onPasteLink ? (url) => onPasteLink(i, url) : undefined}
                 times={hand ? marksIn(times, starts[i], starts[i] + segment.text.length) : undefined}
                 firstInNote={i === 0}
                 onMoveLine={hand && onMoveLine ? (from, to) => onMoveLine(i, from, to) : undefined}
@@ -298,6 +301,16 @@ export function NoteEntry({
           // Resmin içerikteki yerinde yalnızca yerini bildiren boş bir işaret kalır; resmin kendisi
           // bloğun üstüne çizilir
           return <div key={`i-${segment.name}`} ref={part(`a:${segment.name}`)} />
+        }
+        if (segment.type === 'link') {
+          // Linkin dosyası yok, adı da yok: anahtar yeri
+          const key = `l-${i}`
+          const flow = flowOf(key)
+          return (
+            <div key={key} ref={hasImages ? part(key) : undefined} data-push={flow.push} style={flowStyle(flow)}>
+              <NoteLink hand={hand} link={segment} onLongPress={readOnly ? undefined : () => confirmRemove(i)} />
+            </div>
+          )
         }
         const key = `f-${segment.name}`
         const flow = flowOf(key)
