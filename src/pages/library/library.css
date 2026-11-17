@@ -149,3 +149,17 @@
     animation: none;
   }
 }
+
+/* Ayraç kartı */
+.lib-favorite:active {
+  background-color: rgba(56, 56, 61, 0.06) !important;
+}
+@media (hover: hover) {
+  .lib-favorite:hover {
+    background-color: rgba(56, 56, 61, 0.035);
+  }
+}
+.lib-favorite:focus-visible {
+  outline: 2px solid #c8553d;
+  outline-offset: -2px;
+}

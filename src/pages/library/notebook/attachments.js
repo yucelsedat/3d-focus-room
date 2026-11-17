@@ -33,6 +33,8 @@ export function openAttachment(name) {
 }
 
 const DEFAULT_IMAGE_LINES = 3
+// Not defterine yapıştırılan fotoğraf hafif yamuk durur (PDF'te düz basılır)
+export const DEFAULT_IMAGE_ROTATION = -1.2
 
 // Tarayıcının dosya penceresi; seçilmezse null
 function chooseFile({ accept, capture } = {}) {
@@ -66,7 +68,7 @@ function imageSize(blob) {
 // Resim dosyası sunucuya yüklenir, fotoğraf eki olarak döner. PDF'te resim kâğıda düz basılır.
 export async function imageAttachment(file) {
   const [size, uploaded] = await Promise.all([imageSize(file), uploadAttachment(file)])
-  return { type: 'image', name: uploaded.name, width: size.width, height: size.height, lines: DEFAULT_IMAGE_LINES, rotation: 0, x: 0 }
+  return { type: 'image', name: uploaded.name, width: size.width, height: size.height, lines: DEFAULT_IMAGE_LINES, rotation: DEFAULT_IMAGE_ROTATION, x: 0 }
 }
 
 // Resim seçilirse fotoğraf olarak, diğer dosyalar ataçlı etiket olarak eklenir

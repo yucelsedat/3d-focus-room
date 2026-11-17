@@ -1,12 +1,12 @@
 # Graph Report - focus-room-main  (2026-11-17)
 
 ## Corpus Check
-- 124 files · ~210,884 words
+- 133 files · ~223,441 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1101 nodes · 1896 edges · 39 communities detected
-- Extraction: 82% EXTRACTED · 18% INFERRED · 0% AMBIGUOUS · INFERRED: 347 edges (avg confidence: 0.8)
+- 1187 nodes · 2078 edges · 39 communities detected
+- Extraction: 80% EXTRACTED · 20% INFERRED · 0% AMBIGUOUS · INFERRED: 412 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
@@ -38,29 +38,29 @@
 - [[_COMMUNITY_Community 25|Community 25]]
 - [[_COMMUNITY_Community 26|Community 26]]
 - [[_COMMUNITY_Community 27|Community 27]]
-- [[_COMMUNITY_Community 28|Community 28]]
 - [[_COMMUNITY_Community 29|Community 29]]
-- [[_COMMUNITY_Community 33|Community 33]]
+- [[_COMMUNITY_Community 30|Community 30]]
+- [[_COMMUNITY_Community 34|Community 34]]
 - [[_COMMUNITY_Community 40|Community 40]]
 - [[_COMMUNITY_Community 47|Community 47]]
 - [[_COMMUNITY_Community 55|Community 55]]
-- [[_COMMUNITY_Community 65|Community 65]]
 - [[_COMMUNITY_Community 66|Community 66]]
-- [[_COMMUNITY_Community 70|Community 70]]
-- [[_COMMUNITY_Community 73|Community 73]]
+- [[_COMMUNITY_Community 67|Community 67]]
+- [[_COMMUNITY_Community 71|Community 71]]
 - [[_COMMUNITY_Community 74|Community 74]]
+- [[_COMMUNITY_Community 75|Community 75]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `join()` - 56 edges
-2. `replace()` - 40 edges
-3. `test()` - 37 edges
-4. `call()` - 34 edges
-5. `PersistentSession` - 22 edges
-6. `indexOf()` - 21 edges
+1. `join()` - 59 edges
+2. `replace()` - 41 edges
+3. `call()` - 40 edges
+4. `test()` - 39 edges
+5. `indexOf()` - 24 edges
+6. `PersistentSession` - 22 edges
 7. `clipboardToMarkdown()` - 17 edges
 8. `normalizeDepths()` - 15 edges
 9. `formatRange()` - 14 edges
-10. `NotebookPage()` - 12 edges
+10. `NotebookPage()` - 13 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `PersistentSession` --references--> `Senaryo: roomchat-3turn (3 turluk sohbet)`  [INFERRED]
@@ -71,8 +71,8 @@
   server.js → bench/FAZ3.md
 - `parseNotebook()` --calls--> `sanitizeNotebook()`  [INFERRED]
   server.js → src/utils/notebookModel.js
-- `cliArgValue()` --calls--> `indexOf()`  [INFERRED]
-  server.js → src/utils/notebookModel.js
+- `dateOfKey()` --calls--> `test()`  [INFERRED]
+  src/pages/library/notebookLayout.js → scripts/verify-notebook-model.mjs
 
 ## Hyperedges (group relationships)
 - **Token/Parite Faz Pipeline (baseline → faz2 → faz3 → parite kapanışı)** — baseline_faz1_baseline, faz2_cache_prefix_sabitleme, faz3_transport_hijyeni, parite_yetenek_tablosu, method_kanitla_ilerleme [EXTRACTED 1.00]
@@ -83,87 +83,87 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.03
-Nodes (81): frameDelayMs(), getGifFrames(), planGif(), pump(), status(), LibraryPage(), migrate(), readJson() (+73 more)
+Nodes (76): LibraryPage(), migrate(), readJson(), resolveRoot(), addUsage(), assignTaskIds(), blueprintSkill(), bootMigrate() (+68 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.05
-Nodes (76): cardShell(), NoteCard(), NoteCardNarrow(), MonthGrid(), NoteChip(), chipBtn(), NoteEditor(), parseTimeline() (+68 more)
+Cohesion: 0.04
+Nodes (83): measureTextItemH(), pasteMsgView(), richPaste(), looksMojibake(), cellAlign(), cleanup(), clipboardToMarkdown(), closestTag() (+75 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.06
-Nodes (72): pasteMsgView(), saveImageItem(), richPaste(), looksMojibake(), cellAlign(), cleanup(), clipboardToMarkdown(), closestTag() (+64 more)
+Nodes (67): cardShell(), NoteCard(), NoteCardNarrow(), mdTileWidth(), measureMdCols(), parseMd(), MonthGrid(), NoteChip() (+59 more)
 
 ### Community 3 - "Community 3"
 Cohesion: 0.05
-Nodes (37): ArrowLayer(), CanvasMesh(), a4MaxH(), buildInstaItem(), buildPasteItems(), copyImageToClipboard(), copyItemAssets(), disposePoolAudio() (+29 more)
+Nodes (57): CalendarPage(), CategoryManager(), FavoriteCard(), headingOf(), pageKeyOf(), previewOf(), DayCell(), HabitPage() (+49 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.08
-Nodes (46): addPage(), appendRow(), archiveCompleted(), backspaceAt(), childProgressMap(), cleanBookName(), cleanClip(), cleanCover() (+38 more)
+Cohesion: 0.05
+Nodes (44): deleteAttachmentFile(), duplicateAttachmentFile(), attachmentNames(), blocksText(), clearClipboard(), deleteBlockFiles(), deleteContentFiles(), putOnClipboard() (+36 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.06
-Nodes (36): duplicateAttachmentFile(), attachmentNames(), withCopiedFiles(), headingMetrics(), leadingHeadingCenter(), diff(), inkText(), moveLineMarks() (+28 more)
+Cohesion: 0.08
+Nodes (49): fitMdCols(), addPage(), appendRow(), archiveCompleted(), backspaceAt(), childProgressMap(), cleanBookName(), cleanClip() (+41 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.06
-Nodes (33): attachmentUrl(), chooseFile(), clipboardHasImage(), cropAttachmentImage(), fileAttachment(), imageAttachment(), imageSize(), openAttachment() (+25 more)
+Cohesion: 0.04
+Nodes (37): ArrowLayer(), CanvasMesh(), a4MaxH(), buildInstaItem(), buildPasteItems(), copyImageToClipboard(), copyItemAssets(), disposePoolAudio() (+29 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.1
-Nodes (43): call(), createCategory(), createNote(), createNotebook(), deleteCategory(), deleteEmptyNotes(), deleteNote(), deleteNotebook() (+35 more)
+Cohesion: 0.05
+Nodes (38): attachmentUrl(), chooseFile(), clipboardHasImage(), cropAttachmentImage(), fileAttachment(), imageAttachment(), imageSize(), openAttachment() (+30 more)
 
 ### Community 8 - "Community 8"
-Cohesion: 0.07
-Nodes (23): BookCover(), bayLeft(), Bookshelf(), contentHeight(), measure(), previewSlot(), ShelfBook(), slotLeft() (+15 more)
+Cohesion: 0.09
+Nodes (49): call(), clearHabits(), createCategory(), createHabit(), createNote(), createNotebook(), deleteCategory(), deleteEmptyNotes() (+41 more)
 
 ### Community 9 - "Community 9"
-Cohesion: 0.08
-Nodes (25): loadRoom(), parseBookKey(), clock(), NotebookOverlay(), pad2(), SaveStatus(), applyDoc(), applyRows() (+17 more)
+Cohesion: 0.05
+Nodes (25): useClipboardBlocks(), DocText(), LiveDocText(), pointAt(), RawDocText(), signature(), UnitInput(), wrapperStyle() (+17 more)
 
 ### Community 10 - "Community 10"
 Cohesion: 0.06
 Nodes (7): EditModal(), MarkdownMesh(), relTime(), SessionMesh(), TextureErrorBoundary, YoutubeMesh(), useSpeechToText()
 
 ### Community 11 - "Community 11"
-Cohesion: 0.07
-Nodes (20): deleteAttachmentFile(), blocksText(), clearClipboard(), deleteBlockFiles(), deleteContentFiles(), putOnClipboard(), replaceClipboard(), takeFromClipboard() (+12 more)
+Cohesion: 0.08
+Nodes (25): loadRoom(), parseBookKey(), clock(), NotebookOverlay(), pad2(), SaveStatus(), applyDoc(), applyRows() (+17 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.1
-Nodes (17): DocText(), LiveDocText(), pointAt(), RawDocText(), signature(), UnitInput(), wrapperStyle(), writeSelection() (+9 more)
+Cohesion: 0.07
+Nodes (20): BookCover(), bayLeft(), Bookshelf(), contentHeight(), measure(), previewSlot(), ShelfBook(), slotLeft() (+12 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.1
-Nodes (26): BASELINE — Faz 1 Ground Truth (optimizasyon öncesi), processedTotal Metriği (input+cacheWrite+cacheRead+output), --bare Erteleme Gerekçesi: OAuth kurulumu keychain okuyamaz, FAZ 2 — Cache-Prefix Sabitleme, Cache TTL Env (FORCE_PROMPT_CACHING_5M / ENABLE_PROMPT_CACHING_1H), --exclude-dynamic-system-prompt-sections (6 spawn noktası), Rol Bazlı Tool Kısma (roomchat/review tool setleri), Idle ↔ TTL Hizalama (1H → 30 dk idle, 5M → 15 dk) (+18 more)
+Nodes (13): BottomBar(), Column(), initialValue(), pad(), TimeMenu(), DocumentBar(), boxTilt(), HandText() (+5 more)
 
 ### Community 14 - "Community 14"
 Cohesion: 0.1
-Nodes (9): CategoryManager(), cleanCategoryName(), hasNumberedPages(), isDocumentPaper(), NotebookScreen(), OpenNotebook(), usePosition(), writtenPageIndices() (+1 more)
+Nodes (26): BASELINE — Faz 1 Ground Truth (optimizasyon öncesi), processedTotal Metriği (input+cacheWrite+cacheRead+output), --bare Erteleme Gerekçesi: OAuth kurulumu keychain okuyamaz, FAZ 2 — Cache-Prefix Sabitleme, Cache TTL Env (FORCE_PROMPT_CACHING_5M / ENABLE_PROMPT_CACHING_1H), --exclude-dynamic-system-prompt-sections (6 spawn noktası), Rol Bazlı Tool Kısma (roomchat/review tool setleri), Idle ↔ TTL Hizalama (1H → 30 dk idle, 5M → 15 dk) (+18 more)
 
 ### Community 15 - "Community 15"
+Cohesion: 0.11
+Nodes (10): drawColorOf(), drawWidthOf(), segmentDistance2(), strokeHit(), strokesBottom(), strokesBounds(), DrawingActions(), DrawingBar() (+2 more)
+
+### Community 16 - "Community 16"
 Cohesion: 0.13
 Nodes (12): DoorPlane(), doorWorldPos(), applyRingCollision(), canPassThrough(), canPassThroughRing(), decodeWallId(), encodeWallId(), getDoorInstanceIds() (+4 more)
 
-### Community 16 - "Community 16"
-Cohesion: 0.12
-Nodes (9): drawColorOf(), drawWidthOf(), segmentDistance2(), strokeHit(), strokesBounds(), DrawingActions(), DrawingBar(), DrawingSurface() (+1 more)
-
 ### Community 17 - "Community 17"
-Cohesion: 0.15
-Nodes (7): clipToHtml(), clipToPlain(), esc(), itemHtml(), readNotebookClip(), writeNotebookClip(), Paths()
+Cohesion: 0.16
+Nodes (8): formatClock(), clampPpd(), clampZoom(), loadView(), NowPill(), storeView(), TimelinePage(), viewKey()
 
 ### Community 18 - "Community 18"
-Cohesion: 0.22
-Nodes (6): frameSize(), imageFrame(), imageLeft(), imageRect(), layoutBlockImages(), NoteImage()
-
-### Community 19 - "Community 19"
 Cohesion: 0.29
 Nodes (7): insideFence(), lineEnd(), linePrefixFor(), lineStart(), markdownEnter(), toggleLines(), toggleTask()
 
-### Community 20 - "Community 20"
+### Community 19 - "Community 19"
 Cohesion: 0.22
 Nodes (3): ContextCard(), hashIndex(), WorldSelect()
+
+### Community 20 - "Community 20"
+Cohesion: 0.2
+Nodes (1): Paths()
 
 ### Community 21 - "Community 21"
 Cohesion: 0.39
@@ -193,15 +193,15 @@ Nodes (3): paperShape(), seeded(), tornEdge()
 Cohesion: 0.4
 Nodes (2): rangeRects(), textPoint()
 
-### Community 28 - "Community 28"
+### Community 29 - "Community 29"
 Cohesion: 0.53
 Nodes (6): Focus Room Application, Hero Image - Isometric Room Layers, React JavaScript Library, React Logo SVG, Vite Logo SVG, Vite Build Tool
 
-### Community 29 - "Community 29"
+### Community 30 - "Community 30"
 Cohesion: 0.5
 Nodes (2): decodeRole(), downscale()
 
-### Community 33 - "Community 33"
+### Community 34 - "Community 34"
 Cohesion: 0.5
 Nodes (2): seeded(), stripShape()
 
@@ -217,23 +217,23 @@ Nodes (2): seeded(), strokePaths()
 Cohesion: 0.67
 Nodes (3): Smart Aspect Ratio Locking, Dynamic Grid & Raycasting System, In-Game Media Editor Modal (E tuşu)
 
-### Community 65 - "Community 65"
+### Community 66 - "Community 66"
 Cohesion: 1.0
 Nodes (2): Git Push/Merge Onay Kuralı, Graphify Kullanım Kuralları
 
-### Community 66 - "Community 66"
+### Community 67 - "Community 67"
 Cohesion: 1.0
 Nodes (2): Native GIF Rendering via HTML Portals, YouTube Embed Support (iframe in 3D)
 
-### Community 70 - "Community 70"
+### Community 71 - "Community 71"
 Cohesion: 1.0
 Nodes (1): SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)
 
-### Community 73 - "Community 73"
+### Community 74 - "Community 74"
 Cohesion: 1.0
 Nodes (1): Multer Dosya Adı Sanitizasyonu (path traversal düzeltmesi)
 
-### Community 74 - "Community 74"
+### Community 75 - "Community 75"
 Cohesion: 1.0
 Nodes (1): Eşikli Regresyon-Guard Önerisi (bench --assert)
 
@@ -244,27 +244,29 @@ Nodes (1): Eşikli Regresyon-Guard Önerisi (bench --assert)
 ## Knowledge Gaps
 - **25 isolated node(s):** `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`, `Hero Image - Isometric Room Layers`, `Git Push/Merge Onay Kuralı`, `Graphify Kullanım Kuralları`, `First Person Navigation (WASD + Pointer Lock)` (+20 more)
   These have ≤1 connection - possible missing edges or undocumented components.
+- **Thin community `Community 20`** (10 nodes): `Grip()`, `Paths()`, `RoughBar()`, `RoughBox()`, `RoughCheck()`, `RoughCircle()`, `RoughDash()`, `RoughLine()`, `RoughRing()`, `Rough.jsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 23`** (7 nodes): `App()`, `SceneErrorBoundary`, `.componentDidCatch()`, `.constructor()`, `.getDerivedStateFromError()`, `.render()`, `App.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 27`** (6 nodes): `byLine()`, `HighlightLayer()`, `HighlightStroke()`, `rangeRects()`, `textPoint()`, `HighlightStroke.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 29`** (5 nodes): `decodeRole()`, `downscale()`, `encodeRole()`, `frameName()`, `gifFramesWorker.js`
+- **Thin community `Community 30`** (5 nodes): `decodeRole()`, `downscale()`, `encodeRole()`, `frameName()`, `gifFramesWorker.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 33`** (5 nodes): `PageSidebar()`, `seeded()`, `SidebarRow()`, `stripShape()`, `PageSidebar.jsx`
+- **Thin community `Community 34`** (5 nodes): `PageSidebar()`, `seeded()`, `SidebarRow()`, `stripShape()`, `PageSidebar.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 40`** (4 nodes): `configForLayer()`, `parseWallId()`, `RoomModal()`, `RoomModal.jsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 47`** (3 nodes): `seeded()`, `strokePaths()`, `highlightPaths.js`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 65`** (2 nodes): `Git Push/Merge Onay Kuralı`, `Graphify Kullanım Kuralları`
+- **Thin community `Community 66`** (2 nodes): `Git Push/Merge Onay Kuralı`, `Graphify Kullanım Kuralları`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 66`** (2 nodes): `Native GIF Rendering via HTML Portals`, `YouTube Embed Support (iframe in 3D)`
+- **Thin community `Community 67`** (2 nodes): `Native GIF Rendering via HTML Portals`, `YouTube Embed Support (iframe in 3D)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 70`** (1 nodes): `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`
+- **Thin community `Community 71`** (1 nodes): `SCENARIOS sabiti (scripts/bench.mjs A/B bench düzeneği)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 73`** (1 nodes): `Multer Dosya Adı Sanitizasyonu (path traversal düzeltmesi)`
+- **Thin community `Community 74`** (1 nodes): `Multer Dosya Adı Sanitizasyonu (path traversal düzeltmesi)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 74`** (1 nodes): `Eşikli Regresyon-Guard Önerisi (bench --assert)`
+- **Thin community `Community 75`** (1 nodes): `Eşikli Regresyon-Guard Önerisi (bench --assert)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
@@ -272,15 +274,15 @@ _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `Git Push/Merge Onay Kuralı` and `Graphify Kullanım Kuralları`?**
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `join()` connect `Community 0` to `Community 33`, `Community 2`, `Community 1`, `Community 3`, `Community 5`, `Community 6`, `Community 11`, `Community 12`, `Community 17`, `Community 19`, `Community 21`?**
-  _High betweenness centrality (0.171) - this node is a cross-community bridge._
-- **Why does `replace()` connect `Community 2` to `Community 0`, `Community 3`, `Community 4`, `Community 5`, `Community 6`, `Community 10`, `Community 14`, `Community 16`, `Community 17`, `Community 21`?**
-  _High betweenness centrality (0.151) - this node is a cross-community bridge._
-- **Why does `test()` connect `Community 2` to `Community 0`, `Community 1`, `Community 3`, `Community 4`, `Community 6`, `Community 12`, `Community 19`, `Community 21`, `Community 22`?**
-  _High betweenness centrality (0.081) - this node is a cross-community bridge._
-- **Are the 55 inferred relationships involving `join()` (e.g. with `unlinkUploads()` and `copyUpload()`) actually correct?**
-  _`join()` has 55 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 36 inferred relationships involving `replace()` (e.g. with `diskName()` and `decodeHtmlEntities()`) actually correct?**
-  _`replace()` has 36 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 36 inferred relationships involving `test()` (e.g. with `fetchHtmlHead()` and `cliModel()`) actually correct?**
-  _`test()` has 36 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `join()` connect `Community 0` to `Community 1`, `Community 34`, `Community 3`, `Community 4`, `Community 2`, `Community 6`, `Community 7`, `Community 9`, `Community 12`, `Community 13`, `Community 18`, `Community 20`, `Community 21`?**
+  _High betweenness centrality (0.197) - this node is a cross-community bridge._
+- **Why does `replace()` connect `Community 1` to `Community 0`, `Community 2`, `Community 3`, `Community 4`, `Community 5`, `Community 6`, `Community 7`, `Community 10`, `Community 15`, `Community 21`?**
+  _High betweenness centrality (0.138) - this node is a cross-community bridge._
+- **Why does `test()` connect `Community 1` to `Community 0`, `Community 2`, `Community 3`, `Community 5`, `Community 6`, `Community 7`, `Community 18`, `Community 21`, `Community 22`?**
+  _High betweenness centrality (0.100) - this node is a cross-community bridge._
+- **Are the 58 inferred relationships involving `join()` (e.g. with `unlinkUploads()` and `copyUpload()`) actually correct?**
+  _`join()` has 58 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 37 inferred relationships involving `replace()` (e.g. with `diskName()` and `decodeHtmlEntities()`) actually correct?**
+  _`replace()` has 37 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 38 inferred relationships involving `test()` (e.g. with `fetchHtmlHead()` and `cliModel()`) actually correct?**
+  _`test()` has 38 INFERRED edges - model-reasoned connections that need verification._

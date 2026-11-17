@@ -81,7 +81,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg'
 
 // PDF'te fosforlu kalemin boyası: yazının arkasında, satır satır elle çekilmiş şeritler. Katman
 // çizimden sonra DOM'dan ölçülüp doğrudan SVG'ye yazılır; yazı ya da genişlik değişince yenilenir.
-export function HighlightLayer({ rootRef, highlights, version }) {
+// rows: defterdeki gibi satır çizgisine oturan şerit — { lineHeight, top, height }: şerit satırın
+// üstünden top kadar aşağıda, height boyunda (verilmezse yazının satır kutusuna göre)
+export function HighlightLayer({ rootRef, highlights, version, rows }) {
   const svgRef = useRef(null)
 
   useLayoutEffect(() => {
@@ -96,10 +98,11 @@ export function HighlightLayer({ rootRef, highlights, version }) {
         for (const line of byLine(rangeRects(root, h.start, h.end))) {
           const width = line.right - line.left + 6
           // Defterdeki oranla: satırın üstünden %24 aşağıda başlar, satırın %70'i boyunca
-          const height = Math.round(line.height * 0.7)
+          const slot = rows ? Math.floor((line.top - base.top + line.height / 2) / rows.lineHeight) * rows.lineHeight : 0
+          const height = rows ? rows.height : Math.round(line.height * 0.7)
           if (width < 4 || height < 2) continue
           const x = line.left - base.left - 3
-          const y = line.top - base.top + line.height * 0.24
+          const y = rows ? slot + rows.top : line.top - base.top + line.height * 0.24
           const g = document.createElementNS(SVG_NS, 'g')
           g.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`)
           for (const d of strokePaths(width, height, Math.round(x) * 7 + Math.round(y) + 1)) {
@@ -121,7 +124,7 @@ export function HighlightLayer({ rootRef, highlights, version }) {
       ro.disconnect()
       document.fonts?.removeEventListener?.('loadingdone', draw)
     }
-  }, [rootRef, highlights, version])
+  }, [rootRef, highlights, version, rows])
 
   return (
     <svg

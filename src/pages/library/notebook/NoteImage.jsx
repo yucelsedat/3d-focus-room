@@ -228,7 +228,8 @@ export function NoteImage({ image, maxWidth, readOnly = false, editing, onPress,
 }
 
 // Sayfaya ataçla tutturulmuş küçük kâğıt etiket; satır düzeni bozulmasın diye 2 satır yüksekliğinde
-export function NoteFile({ file, onPress, onLongPress }) {
+// hand: not defterinde etiketin adı el yazısıyla
+export function NoteFile({ file, onPress, onLongPress, hand = false }) {
   return (
     <div style={styles.fileBlock}>
       <button
@@ -247,7 +248,7 @@ export function NoteFile({ file, onPress, onLongPress }) {
         className="nb-file-tag"
         style={styles.tag}
       >
-        <span style={styles.fileLabel}>{file.label}</span>
+        <span style={hand ? { ...styles.fileLabel, ...styles.handLabel } : styles.fileLabel}>{file.label}</span>
         <span style={styles.clip} />
       </button>
     </div>
@@ -349,6 +350,11 @@ const styles = {
     transform: 'rotate(-0.8deg)',
     boxShadow: '1px 1px 2px rgba(59, 47, 26, 0.18)',
     cursor: 'pointer',
+  },
+  handLabel: {
+    ...fonts.handBold,
+    fontSize: 20,
+    color: notebook.graphite,
   },
   fileLabel: {
     display: 'block',

@@ -1,7 +1,9 @@
-// Seyir defteri: components/notebook/NotebookPage.tsx — PDF defterinin bir sayfası (belge modu):
-// düz beyaz kâğıt, en az A4/Letter oranı kadar boylu; üstte el çizimi düğmeler (blok seçimi, okuma
-// modu, ayraç, sayfalarda arama, çizim, sayfa ayarları), kâğıdın başında elle yazılan başlık,
-// altında Markdown bloklar; en altta biçim çubuğu.
+// Seyir defteri: components/notebook/NotebookPage.tsx — defterin bir sayfası. Üstte el çizimi
+// düğmeler (blok seçimi, okuma modu, ayraç, sayfalarda arama, çizim, sayfa ayarları), altında elle
+// yazılan başlık ve bloklar.
+// PDF (belge modu): düz beyaz kâğıt, en az A4/Letter oranı kadar boylu, Markdown bloklar, biçim çubuğu.
+// Not defteri: dokulu kâğıt (çizgili, oxford, düz, kareli, noktalı), el yazısı bloklar, kenarda
+// blokların saati; alt çubukta saat, yapılacak satırı ve numaralı liste.
 //
 // page: { notebookId, kind: 'page', ref }
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
@@ -20,7 +22,7 @@ import {
 } from '../api.js'
 import { DOCUMENT_PAPERS, isDocumentPaper } from '../model.js'
 import { TornPaperMenu } from '../TornPaperMenu.jsx'
-import { docPage, fonts, highlightFill, notebook, notebookFills } from '../theme.js'
+import { docPage, fonts, HAND_TAIL, highlightFill, notebook, notebookFills } from '../theme.js'
 import {
   clipboardHasImage,
   cropAttachmentImage,
@@ -32,6 +34,7 @@ import {
   takePhoto,
 } from './attachments.js'
 import { BlockSelection, PasteButton, SelectionBar } from './BlockSelection.jsx'
+import { BottomBar, TimeMenu } from './BottomBar.jsx'
 import {
   blockOf,
   blocksText,
@@ -42,7 +45,7 @@ import {
   useClipboardBlocks,
   withCopiedFiles,
 } from './blockClipboard.js'
-import { DOC_ROW_LEFT } from './docLayout.js'
+import { DOC_ROW_LEFT, HAND_ROW_LEFT, HAND_ROW_RIGHT } from './docLayout.js'
 import { DEFAULT_DRAW_PEN, moveStrokes, strokesBottom, strokesBounds } from './drawing.js'
 import { DrawingActions, DrawingBar, DrawingSurface, DrawPenMenu, StrokeLayer } from './DrawingMode.jsx'
 import { clearStrokeClipboard, putStrokesOnClipboard, takeStrokesFromClipboard, useClipboardStrokes } from './strokeClipboard.js'
@@ -50,9 +53,12 @@ import { usePageDrawing } from './usePageDrawing.js'
 import { DocumentBar } from './DocumentBar.jsx'
 import { setRawMarkdown, useRawMarkdown } from './documentSettings.js'
 import { HandIcon } from './HandIcon.jsx'
+import { MarginTime } from './HandText.jsx'
 import {
+  clockTime,
   DEFAULT_PEN,
   inkText,
+  moveLineMarks,
   paintHighlight,
   parseMarks,
   serializeMarks,
@@ -64,10 +70,12 @@ import {
 } from './marks.js'
 import { insertAttachment, parseContent, serializeContent } from './noteContent.js'
 import { ImageViewer } from './ImageViewer.jsx'
-import { lineOrder } from './noteLists.js'
+import { lineOrder, moveLine, toggleCheckLine, toggleNumberLine } from './noteLists.js'
 import { NoteEntry } from './NoteEntry.jsx'
 import { PageHeading, PageTopBar } from './PageHeading.jsx'
+import { pageHeading, paperSeed } from './pageHeadings.js'
 import { PageSidebar } from './PageSidebar.jsx'
+import { Paper, RuledLines } from './Paper.jsx'
 import { PenMenu } from './PenMenu.jsx'
 import { clipboardToMarkdown, looksLikeHtml, padForInsertion } from './richText/htmlToMarkdown.js'
 import { insertCodeBlock, toggleInline, toggleLines } from './richText/markdownEdit.js'
@@ -127,6 +135,10 @@ export function NotebookPage({
   reading = false,
   onReadingChange,
   onSearchPress,
+  // Ajandada takvim yaprağı ve sayfa filtresi
+  onCalendarPress,
+  filtering = false,
+  onFilterPress,
   pen = DEFAULT_PEN,
   onPenChange,
   folio,
@@ -135,7 +147,9 @@ export function NotebookPage({
   // Yazarken değil; blok seçimi, sürükleme ya da çizim modu açıkken defterin sayfası çevrilmez
   onLockChange,
 }) {
-  const docPaper = isDocumentPaper(paper) ? paper : 'a4'
+  // PDF'in kâğıdı (a4 / letter); not defterinde null: sayfa el yazısıyla yazılır
+  const docPaper = isDocumentPaper(paper) ? paper : null
+  const hand = docPaper === null
   const rawMarkdown = useRawMarkdown()
   const paperRef = useRef(null)
   const scrollRef = useRef(null)
@@ -200,7 +214,9 @@ export function NotebookPage({
     onError: (message) => setNotice(message),
   })
 
-  const sheetMinHeight = paperWidth * DOCUMENT_PAPERS[docPaper].ratio
+  const sheetMinHeight = docPaper ? paperWidth * DOCUMENT_PAPERS[docPaper].ratio : 0
+  // Saati elle ayarlanan blok: { noteId, time, refocus }
+  const [timeEdit, setTimeEdit] = useState(null)
 
   useLayoutEffect(() => {
     const el = paperRef.current
@@ -279,16 +295,20 @@ export function NotebookPage({
 
   // ─── Yükleme ─────────────────────────────────────────────────────────────────
   const notifyReady = useEffectEvent(() => onReady?.())
-  const meta = `Sayfa ${page.ref} · Not defteri`
+  // Başlık yalnızca not defterinin (ve PDF'in) sayfasına elle yazılır; ajandanın sayfaları adlıdır
+  const canTitle = page.kind === 'page'
 
   useEffect(() => {
     let cancelled = false
+    const titled = page.kind === 'page'
     deleteEmptyNotes(page)
       .catch(() => {})
-      .then(() => Promise.all([getPageTitle(page.notebookId, page.ref), getPageNotes(page), isFavorite(page).catch(() => false)]))
+      .then(() =>
+        Promise.all([titled ? getPageTitle(page.notebookId, page.ref) : '', getPageNotes(page), isFavorite(page).catch(() => false)]),
+      )
       .then(([title, list, fav]) => {
         if (cancelled) return
-        setHeading({ title, meta, now: null, hint: 'Yazmaya başla' })
+        setHeading(pageHeading(page, title))
         setFavoriteState(fav)
         notesRef.current = list
         setNotes(list)
@@ -296,13 +316,13 @@ export function NotebookPage({
       })
       .catch(() => {
         if (cancelled) return
-        setHeading({ title: '', meta, now: null, hint: 'Yazmaya başla' })
+        setHeading(pageHeading(page))
         setLoaded(true)
       })
     return () => {
       cancelled = true
     }
-  }, [page, meta])
+  }, [page])
 
   useEffect(() => {
     if (!loaded) return
@@ -535,6 +555,104 @@ export function NotebookPage({
     } else {
       saveNote({ ...note, inks: serializeMarks(setInk(parseMarks(note.inks), start, end, next.ink)) })
     }
+  }
+
+  // ─── Not defteri: saat, yapılacak satırı, numaralı liste ─────────────────────
+  // Saatin gireceği blok: imlecin son durduğu blok, yoksa sayfanın son bloğu
+  function timeTargetNote() {
+    const activeId = active.current?.noteId
+    return notesRef.current.find((n) => n.id === activeId) ?? notesRef.current[notesRef.current.length - 1]
+  }
+
+  // Sayfa boşsa saatli ilk blok açılır
+  async function timeTargetOrNew() {
+    const note = timeTargetNote()
+    if (note) return note
+    const created = await createAndShowNote()
+    if (created) setFocusRequest({ noteId: created.id, segment: 0 })
+    return created
+  }
+
+  // Kenarda görünen saat: bloğun saati, yoksa blok kutulu bir satırla başlıyorsa o satırın saati
+  function shownTime(note) {
+    return note.time ?? parseMarks(note.times).find((m) => m.start === 0)?.color ?? null
+  }
+
+  // Bloğun saati kalkar, kenarda yeniden çizgi olur (ilk kutulu satırın saati de gider)
+  function withoutTime(note) {
+    return { ...note, time: null, times: serializeMarks(parseMarks(note.times).filter((m) => m.start !== 0)) }
+  }
+
+  // Saat: imlecin olduğu bloğun çizgisi yerine o anki saat gelir; saati varsa yeniden çizgi olur.
+  // Hiçbir bloğa dokunulmadıysa sayfanın son bloğuna konur, sayfa boşsa saatli ilk blok açılır.
+  async function toggleTime() {
+    if (reading) return
+    setEditingImage(null)
+    const note = await timeTargetOrNew()
+    if (!note) return
+    saveNote(shownTime(note) ? withoutTime(note) : { ...note, time: clockTime() })
+  }
+
+  // Saat ayarı: saati düğmeyle aynı bloğa, ama elle seçilerek yazılır; bloğun saati varsa menü
+  // onunla açılır. Sayfa boşsa blok menü kapanınca açılır.
+  function openTimeMenu() {
+    if (reading) return
+    setAttachMenu(null)
+    setEditingImage(null)
+    const note = timeTargetNote()
+    // Saat yazılınca imleç yazıyorsa kaldığı yere döner
+    const writing = document.activeElement?.closest?.('.nb-paper') && document.activeElement.tagName === 'TEXTAREA'
+    const refocus = writing && active.current ? { ...active.current } : null
+    document.activeElement?.blur?.()
+    setTimeEdit({ noteId: note?.id ?? null, time: note ? shownTime(note) : null, refocus })
+  }
+
+  // Menü kapandı: ayarlanan saat bloğa yazılır, imleç kaldığı yere döner
+  async function saveEditedTime(time) {
+    const edit = timeEdit
+    setTimeEdit(null)
+    if (!edit) return
+    const note = notesRef.current.find((n) => n.id === edit.noteId) ?? (await timeTargetOrNew())
+    if (!note) return
+    saveNote({ ...note, time })
+    if (edit.refocus?.noteId === note.id) setFocusRequest({ ...edit.refocus })
+  }
+
+  // Kutu / numara: imlecin olduğu satırın başına işaret koyar ya da kaldırır
+  async function toggleLine(toggle) {
+    if (reading) return
+    setAttachMenu(null)
+    setEditingImage(null)
+    endDictationHere()
+    const at = await cursorTarget()
+    if (!at) return
+    const { note, segments, index, cursor } = at
+    const text = segments[index]
+    if (text.type !== 'text') return
+    const edit = toggle(text.text, cursor)
+    changeNote(note.id, serializeContent(segments.map((s, i) => (i === index ? { ...text, text: edit.text } : s))))
+    active.current = { noteId: note.id, segment: index, cursor: edit.cursor }
+    setFocusRequest({ noteId: note.id, segment: index, cursor: edit.cursor })
+  }
+
+  // Kutulu satır kutusundan tutulup notun yazısında yukarı aşağı taşındı; boyası, kalem rengi ve
+  // saati satırla birlikte gider
+  function moveNoteLine(noteId, segment, from, to) {
+    const note = notesRef.current.find((n) => n.id === noteId)
+    if (!note) return
+    const segments = parseContent(note.content)
+    const text = segments[segment]
+    if (text?.type !== 'text') return
+    const at = serializeContent(segments.slice(0, segment)).length
+    const moved = moveLine(text.text, from, to)
+    saveNote({
+      ...note,
+      content: serializeContent(segments.map((s, i) => (i === segment ? { ...text, text: moved } : s))),
+      highlights: serializeMarks(moveLineMarks(parseMarks(note.highlights), at, text.text, from, to)),
+      inks: serializeMarks(moveLineMarks(parseMarks(note.inks), at, text.text, from, to)),
+      times: serializeMarks(moveLineMarks(parseMarks(note.times), at, text.text, from, to)),
+    })
+    active.current = null
   }
 
   // ─── Biçim düğmeleri, yapıştırma, sesle yazma ─────────────────────────────────
@@ -1202,6 +1320,8 @@ export function NotebookPage({
       return
     }
     if (!picked) return
+    // PDF'te resim kâğıda düz basılır, el yapıştırması gibi yamuk durmaz
+    if (docPaper && picked.type === 'image') picked = { ...picked, rotation: 0 }
     const at = await cursorTarget()
     if (!at) return
     const { note, segments, index, cursor } = at
@@ -1287,7 +1407,7 @@ export function NotebookPage({
 
   const pageEmpty = notes.length === 0 && pageDrawing.strokes.length === 0
   const settingsSections = [
-    {
+    ...(docPaper ? [{
       title: 'Yazı',
       items: [
         {
@@ -1302,7 +1422,7 @@ export function NotebookPage({
           },
         },
       ],
-    },
+    }] : []),
     {
       title: 'Sayfa',
       items: [
@@ -1327,7 +1447,22 @@ export function NotebookPage({
     },
   ]
 
-  const folioText = folio ? <div style={styles.docFolioText}>{`${folio.number} / ${folio.total}`}</div> : null
+  const folioText = folio ? (
+    hand ? (
+      <div style={styles.folioText}>{`sf. ${folio.number} / ${folio.total}` + HAND_TAIL}</div>
+    ) : (
+      <div style={styles.docFolioText}>{`${folio.number} / ${folio.total}`}</div>
+    )
+  ) : null
+  const headingView = (
+    <PageHeading
+      heading={heading}
+      onTitleChange={canTitle ? changeTitle : undefined}
+      onTitleSubmit={canTitle ? openFirstBlock : undefined}
+      readOnly={reading || drawingOn || selecting}
+      document={!hand}
+    />
+  )
 
   return (
     <div
@@ -1339,11 +1474,18 @@ export function NotebookPage({
       className="nb-paper"
       style={{
         ...styles.paper,
+        ...(hand ? styles.handPaper : null),
         // Fosforlu kalem açıkken seçim kalemin renginde: yazının üstünden kalem geçiyormuş gibi
         '--nb-selection': pen.active ? highlightFill(pen.color) : 'rgba(11, 92, 173, 0.25)',
       }}
     >
-      <PageTopBar onBack={onBack}>
+      <Surface hand={hand} seed={paperSeed(page)} oxford={paper === 'oxford'}>
+      <PageTopBar
+        onBack={onBack}
+        tight={
+          [!reading, !reading && clipboardBlocks > 0, true, true, onCalendarPress, onSearchPress, onFilterPress, !reading, true].filter(Boolean).length >= 8
+        }
+      >
         {drawingOn ? (
           <DrawingActions
             zoom={zoom}
@@ -1384,26 +1526,40 @@ export function NotebookPage({
           fill={favorite ? notebookFills.bookmarkFill : undefined}
           onPress={toggleFavorite}
         />
+        {onCalendarPress && <HandIcon shape="calendar" label="Takvim" size={28} onPress={onCalendarPress} />}
         {onSearchPress && <HandIcon shape="search" label="Sayfalarda ara" size={28} onPress={onSearchPress} />}
+        {onFilterPress && (
+          <HandIcon
+            shape="filter"
+            label={filtering ? 'Filtreyi değiştir' : 'Sayfaları filtrele'}
+            size={28}
+            selected={filtering}
+            fill={filtering ? notebookFills.filterFill : undefined}
+            onPress={onFilterPress}
+          />
+        )}
         {!reading && <HandIcon shape="brush" label="Çizim modu" size={28} onPress={() => changeDrawing(true)} />}
         <HandIcon shape="more" label="Sayfa ayarları" size={28} onPress={openSettings} />
         </>
         )}
       </PageTopBar>
+      {/* Not defterinde başlık kaymaz; PDF'te kâğıdın üstünde, yazıyla birlikte kayar */}
+      {hand && headingView}
 
       <div ref={scrollRef} className="nb-scroll" style={{ ...styles.scroll, overflowX: drawingOn && zoom > 1 ? 'auto' : 'hidden' }}>
         <div
           ref={ruledRef}
           style={{
             ...styles.ruled,
-            paddingBottom: docPage.lineHeight * 2,
+            ...(hand ? styles.handRuled : null),
+            paddingBottom: hand ? notebook.lineHeight * 2 : docPage.lineHeight * 2,
             // Çizim sayfanın sonundan aşağı taşarsa sayfa onu da içine alacak kadar uzar
             minHeight: Math.max(strokesBottom(pageDrawing.strokes), sheetMinHeight),
             // Çizim modunda sayfanın tamamı sol üst köşesinden büyür
             ...(drawingOn && zoom !== 1 ? { zoom } : null),
           }}
         >
-          <PageHeading heading={heading} onTitleChange={changeTitle} onTitleSubmit={openFirstBlock} readOnly={reading || drawingOn} />
+          {hand ? <RuledLines paper={paper} /> : headingView}
 
           {notes.map((note, index) => (
             <NoteEntry
@@ -1444,12 +1600,21 @@ export function NotebookPage({
               onOpenImage={openImage}
               onConfirmRemove={confirmRemoveAttachment}
               onPasteImage={(segment, file) => attach(() => imageAttachment(file))}
+              hand={hand}
+              onMoveLine={(segment, from, to) => moveNoteLine(note.id, segment, from, to)}
             />
           ))}
 
-          {heading && notes.length === 0 && loaded && !reading && (
-            <button type="button" onClick={startFirstBlock} className="nb-hint" style={styles.docHintRow} aria-label={heading.hint}>
-              <span style={styles.docHint}>{heading.hint}</span>
+          {heading && notes.length === 0 && loaded && !reading && !selecting && !drawingOn && (
+            // Boş sayfa soluk bir davetle başlar (not defterinde çizgili satırda, kenarında çizgi);
+            // tıklayınca ilk blok açılır
+            <button type="button" onClick={startFirstBlock} className="nb-hint" style={hand ? styles.hintRow : styles.docHintRow} aria-label={heading.hint}>
+              {hand && (
+                <span style={styles.hintMargin}>
+                  <MarginTime time={null} />
+                </span>
+              )}
+              <span style={hand ? styles.hint : styles.docHint}>{hand ? heading.hint + HAND_TAIL : heading.hint}</span>
             </button>
           )}
 
@@ -1533,6 +1698,24 @@ export function NotebookPage({
       ) : (
         <>
           {folioText && <div style={styles.folio}>{folioText}</div>}
+          {hand ? (
+            <BottomBar
+              listening={dictation.listening}
+              pen={pen}
+              onSwatchPress={() => {
+                setAttachMenu(null)
+                setColorMenuOpen(true)
+              }}
+              onHighlighterPress={() => changePen({ ...pen, active: !pen.active }, 'button')}
+              onMicPress={toggleDictation}
+              onClockPress={toggleTime}
+              onClockEditPress={openTimeMenu}
+              onCheckPress={() => toggleLine(toggleCheckLine)}
+              onNumberPress={() => toggleLine(toggleNumberLine)}
+              onClipPress={() => (attachMenu ? setAttachMenu(null) : openAttachMenu())}
+              notice={notice}
+            />
+          ) : (
           <DocumentBar
             listening={dictation.listening}
             pen={pen}
@@ -1549,6 +1732,7 @@ export function NotebookPage({
             onClipPress={() => (attachMenu ? setAttachMenu(null) : openAttachMenu())}
             notice={notice}
           />
+          )}
         </>
       )}
 
@@ -1589,6 +1773,8 @@ export function NotebookPage({
         onClose={() => setDrawMenuOpen(false)}
       />
 
+      <TimeMenu visible={timeEdit !== null} time={timeEdit?.time ?? null} onClose={saveEditedTime} />
+
       <PenMenu visible={colorMenuOpen} pen={pen} onChange={(next) => changePen(next, 'menu')} onClose={() => setColorMenuOpen(false)} />
 
       <PageSidebar
@@ -1617,7 +1803,18 @@ export function NotebookPage({
         ]}
         onClose={() => setConfirm(null)}
       />
+      </Surface>
     </div>
+  )
+}
+
+// Not defterinin dokulu kâğıdı (kırmızı kenar boşluğu yalnızca oxford'da); PDF'in sayfası düz beyaz
+function Surface({ hand, seed, oxford, children }) {
+  if (!hand) return children
+  return (
+    <Paper seed={seed} margin={oxford}>
+      {children}
+    </Paper>
   )
 }
 
@@ -1629,6 +1826,44 @@ const styles = {
     flexDirection: 'column',
     backgroundColor: docPage.sheet,
     color: docPage.ink,
+  },
+  handPaper: {
+    backgroundColor: notebook.paper,
+    color: notebook.graphite,
+  },
+  // Not defterinde satırlar en üstten başlar: çizgiler satırların altına denk gelir
+  handRuled: {
+    paddingTop: 0,
+  },
+  hintRow: {
+    position: 'relative',
+    display: 'block',
+    margin: 0,
+    padding: `0 ${HAND_ROW_RIGHT}px 0 ${HAND_ROW_LEFT}px`,
+    border: 0,
+    background: 'transparent',
+    textAlign: 'left',
+    cursor: 'text',
+  },
+  hintMargin: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: notebook.marginX - 8,
+    display: 'flex',
+    justifyContent: 'flex-end',
+  },
+  hint: {
+    ...fonts.hand,
+    fontSize: 21,
+    lineHeight: `${notebook.lineHeight}px`,
+    color: 'rgba(56, 56, 61, 0.35)',
+  },
+  folioText: {
+    ...fonts.hand,
+    fontSize: 19,
+    lineHeight: '28px',
+    color: 'rgba(56, 56, 61, 0.6)',
   },
   scroll: {
     flex: 1,

@@ -6,6 +6,7 @@ import { createNotebook, getCategories, getNotebook, updateNotebook } from './ap
 import { BookCover } from './BookCover.jsx'
 import { coverTitleStyle } from './coverStyle.js'
 import { CategoryManager } from './CategoryManager.jsx'
+import { FIRST_YEAR, LAST_YEAR, layoutOf } from './notebookLayout.js'
 import { Icon } from './icons.jsx'
 import {
   DEFAULT_DOCUMENT_PAPER,
@@ -15,15 +16,29 @@ import {
   KIND_DEFAULTS,
   MAX_TITLE,
 } from './model.js'
-import { bookColorOf, bookColors, colors, DEFAULT_BOOK_COLOR, fonts, shelf, type } from './theme.js'
+import { bookColorOf, bookColors, colors, DEFAULT_BOOK_COLOR, fonts, notebook, shelf, type } from './theme.js'
+
+const HABITS = [
+  { value: 'none', name: 'Yok', caption: 'Alışkanlık sayfası eklenmez' },
+  { value: 'month', name: 'Aylık', caption: 'Her ayın başında, ayın bütün günleri tek sayfada' },
+  { value: 'week', name: 'Haftalık', caption: 'Her haftanın başında, yedi gün tek sayfada' },
+]
+
+// Not defterinin kâğıtları
+const PAPERS = [
+  { value: 'ruled', name: 'Çizgili' },
+  { value: 'oxford', name: 'Oxford' },
+  { value: 'plain', name: 'Düz' },
+  { value: 'grid', name: 'Kareli' },
+  { value: 'dot', name: 'Noktalı' },
+]
 
 // Oluşturma ekranının adımları: defterin türü, kapağı (cilt, ad, renk) ve sayfaları
 const STEP_NAMES = { kind: 'Tür', cover: 'Kapak', pages: 'Sayfalar' }
 
-// İlk etapta yalnızca PDF açılır; ajanda ve not defteri sonraki fazlarda (ALL-BOOKS-PLAN.md)
 const KINDS = [
-  { value: 'agenda', name: 'Ajanda', caption: 'Lastikli; günlere, haftalara ve aylara bölünmüş, tek yıllık', sample: 'Ajanda', soon: true },
-  { value: 'notes', name: 'Not defteri', caption: 'Telli; numaralı sayfalar, takvimden bağımsız', sample: 'Notlar', soon: true },
+  { value: 'agenda', name: 'Ajanda', caption: 'Lastikli; günlere, haftalara ve aylara bölünmüş, tek yıllık', sample: 'Ajanda' },
+  { value: 'notes', name: 'Not defteri', caption: 'Telli; numaralı sayfalar, takvimden bağımsız', sample: 'Notlar' },
   { value: 'pdf', name: 'PDF', caption: 'Dosya; A4 sayfalar, basılı yazı, biçimli metin yapıştırma', sample: 'Belge' },
 ]
 
@@ -144,7 +159,7 @@ export function NotebookForm({ mode, initial, onSubmit }) {
   }
 
   const steps =
-    mode === 'create' ? ['kind', 'cover', 'pages'] : settings.kind === 'pdf' ? ['cover', 'pages'] : ['cover']
+    mode === 'create' ? ['kind', 'cover', 'pages'] : settings.kind !== 'agenda' ? ['cover', 'pages'] : ['cover']
   const [stepIndex, setStepIndex] = useState(0)
   const step = steps[stepIndex]
   const last = stepIndex === steps.length - 1
@@ -231,6 +246,8 @@ export function NotebookForm({ mode, initial, onSubmit }) {
                   onManageCategories={() => setManaging(true)}
                 />
               )}
+              {width > 0 && step === 'pages' && settings.kind === 'notes' && <PaperStep width={width} settings={settings} onChange={change} />}
+              {width > 0 && step === 'pages' && settings.kind === 'agenda' && <AgendaStep settings={settings} onChange={change} />}
               {width > 0 && step === 'pages' && settings.kind === 'pdf' && (
                 <DocumentPaperStep width={width} settings={settings} onChange={change} />
               )}
@@ -423,6 +440,198 @@ function CoverStep({ width, settings, categories, onChange, onSubmit, onManageCa
         </div>
       )}
     </div>
+  )
+}
+
+// 3. adım (ajanda): yıl, sayfa düzeni ve şablonlar
+function AgendaStep({ settings, onChange }) {
+  const year = settings.year ?? new Date().getFullYear()
+  const count = layoutOf(settings).count
+  const habit = HABITS.find((h) => h.value === settings.habits)
+
+  // Bir ayın sayfaları sırasıyla
+  const order = [
+    settings.month_goals && 'Ay hedefleri',
+    settings.habits === 'month' && 'Alışkanlıklar',
+    `4–5 hafta: ${[settings.weekly_pages && 'hedefler', settings.habits === 'week' && 'alışkanlıklar', '7 gün', settings.weekly_pages && 'değerlendirme']
+      .filter(Boolean)
+      .join(', ')}`,
+    settings.month_review && 'Ay değerlendirmesi',
+  ].filter(Boolean)
+
+  return (
+    <>
+      <Section title="Yıl" caption="Ajanda bu yılın ocak ayından aralık ayına kadar sürer">
+        <div style={styles.yearRow}>
+          <button
+            type="button"
+            onClick={() => onChange({ year: year - 1 })}
+            disabled={year <= FIRST_YEAR}
+            aria-label="Önceki yıl"
+            className="lib-card"
+            style={{ ...styles.yearButton, ...(year <= FIRST_YEAR ? styles.disabled : null) }}
+          >
+            <Icon name="chevron-back" size={24} color={colors.onInk} />
+          </button>
+          <span style={styles.year}>{year}</span>
+          <button
+            type="button"
+            onClick={() => onChange({ year: year + 1 })}
+            disabled={year >= LAST_YEAR}
+            aria-label="Sonraki yıl"
+            className="lib-card"
+            style={{ ...styles.yearButton, ...(year >= LAST_YEAR ? styles.disabled : null) }}
+          >
+            <Icon name="chevron-forward" size={24} color={colors.onInk} />
+          </button>
+        </div>
+      </Section>
+
+      <Section title="Sayfa düzeni">
+        <div>
+          <CheckRow label="Günlük sayfalar" caption="Her güne bir sayfa" checked disabled />
+          <CheckRow
+            label="Aylık hedefler"
+            caption="Her ayın başında"
+            checked={settings.month_goals === 1}
+            onPress={() => onChange({ month_goals: settings.month_goals ? 0 : 1 })}
+          />
+          <CheckRow
+            label="Haftalık hedefler ve değerlendirme"
+            caption="Her haftanın başında ve sonunda"
+            checked={settings.weekly_pages === 1}
+            onPress={() => onChange({ weekly_pages: settings.weekly_pages ? 0 : 1 })}
+          />
+          <CheckRow
+            label="Aylık değerlendirme"
+            caption="Her ayın sonunda"
+            checked={settings.month_review === 1}
+            onPress={() => onChange({ month_review: settings.month_review ? 0 : 1 })}
+          />
+        </div>
+      </Section>
+
+      <Section title="Şablonlar" caption="Alışkanlık takibi">
+        <div style={styles.choice} role="radiogroup" aria-label="Alışkanlık takibi">
+          {HABITS.map((option) => {
+            const selected = option.value === settings.habits
+            return (
+              <button
+                type="button"
+                key={option.value}
+                onClick={() => onChange({ habits: option.value })}
+                role="radio"
+                aria-checked={selected}
+                className="lib-card"
+                style={{ ...styles.choiceOption, ...(selected ? styles.choiceSelected : null) }}
+              >
+                <span style={selected ? styles.choiceTextSelected : styles.choiceText}>{option.name}</span>
+              </button>
+            )
+          })}
+        </div>
+        <p style={styles.caption}>{habit.caption}</p>
+      </Section>
+
+      <div style={styles.summary}>
+        <span style={styles.summaryTitle}>{`${year} · ${count} sayfa`}</span>
+        <span style={styles.summaryText}>{`Her ay: ${order.join(' → ')}`}</span>
+      </div>
+    </>
+  )
+}
+
+function CheckRow({ label, caption, checked, disabled, onPress }) {
+  return (
+    <button
+      type="button"
+      onClick={onPress}
+      disabled={disabled}
+      role="checkbox"
+      aria-checked={checked}
+      className="lib-card"
+      style={styles.checkRow}
+    >
+      <Icon
+        name={checked ? 'checkbox' : 'square-outline'}
+        size={24}
+        color={disabled ? 'rgba(244, 239, 230, 0.4)' : checked ? colors.accent : colors.onInk}
+      />
+      <span style={styles.checkText}>
+        <span style={{ ...styles.checkLabel, ...(disabled ? styles.checkLabelFixed : null) }}>{label}</span>
+        <span style={styles.caption}>{caption}</span>
+      </span>
+    </button>
+  )
+}
+
+// 3. adım (not defteri): sayfaların kâğıdı
+function PaperStep({ width, settings, onChange }) {
+  const tileWidth = (Math.min(width, 480) - 24 * 2 - 12 * 2) / 3
+
+  return (
+    <Section title="Sayfa yapısı" caption={`Defter ${FIRST_PAGE_COUNT} sayfayla başlar; son sayfayı çevirdikçe yeni sayfa eklenir.`}>
+      <div style={styles.paperGrid} role="radiogroup" aria-label="Sayfa yapısı">
+        {PAPERS.map((paper) => {
+          const selected = paper.value === settings.paper
+          return (
+            <button
+              type="button"
+              key={paper.value}
+              onClick={() => onChange({ paper: paper.value })}
+              role="radio"
+              aria-checked={selected}
+              aria-label={paper.name}
+              className="lib-card"
+              style={{ ...styles.paperTile, width: tileWidth, ...(selected ? styles.cardSelected : null) }}
+            >
+              <PaperSample paper={paper.value} width={tileWidth - 16} />
+              <span style={styles.paperName}>{paper.name}</span>
+            </button>
+          )
+        })}
+      </div>
+    </Section>
+  )
+}
+
+// Kâğıdın küçük örneği: defter sayfasıyla aynı renkler, ölçeği küçültülmüş
+function PaperSample({ paper, width }) {
+  const height = width * 1.3
+  const line = width / 7
+  const step = line / 2
+  const margin = width * 0.2
+  const rows = Math.floor(height / line)
+  const cols = Math.floor(width / step)
+  const gridRows = Math.floor(height / step)
+  return (
+    <svg width={width} height={height} aria-hidden="true" style={{ display: 'block' }}>
+      <rect width={width} height={height} rx={3} fill={notebook.paper} />
+      {(paper === 'ruled' || paper === 'oxford') &&
+        Array.from({ length: rows }, (_, i) => (
+          <line key={i} x1={0} x2={width} y1={(i + 1) * line} y2={(i + 1) * line} stroke={notebook.rule} strokeWidth={0.8} />
+        ))}
+      {paper === 'oxford' && (
+        <>
+          <line x1={margin} x2={margin} y1={0} y2={height} stroke={notebook.margin} strokeWidth={1} />
+          <line x1={margin + 2.5} x2={margin + 2.5} y1={0} y2={height} stroke={notebook.margin} strokeWidth={0.6} />
+        </>
+      )}
+      {paper === 'grid' && (
+        <>
+          {Array.from({ length: gridRows }, (_, i) => (
+            <line key={`r${i}`} x1={0} x2={width} y1={(i + 1) * step} y2={(i + 1) * step} stroke={notebook.rule} strokeWidth={0.6} />
+          ))}
+          {Array.from({ length: cols }, (_, i) => (
+            <line key={`c${i}`} x1={(i + 1) * step} x2={(i + 1) * step} y1={0} y2={height} stroke={notebook.rule} strokeWidth={0.6} />
+          ))}
+        </>
+      )}
+      {paper === 'dot' &&
+        Array.from({ length: gridRows * cols }, (_, i) => (
+          <circle key={i} cx={((i % cols) + 1) * step} cy={(Math.floor(i / cols) + 1) * step} r={0.9} fill={notebook.rule} />
+        ))}
+    </svg>
   )
 }
 
@@ -739,6 +948,102 @@ const styles = {
   chipTextSelected: {
     ...fonts.bodyBold,
     color: colors.ink,
+  },
+  yearRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 24,
+  },
+  yearButton: {
+    ...resetButton,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(244, 239, 230, 0.25)',
+  },
+  year: {
+    minWidth: 120,
+    textAlign: 'center',
+    ...fonts.displayBold,
+    fontSize: type.display,
+    color: colors.onInk,
+  },
+  checkRow: {
+    ...resetButton,
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 12,
+    width: '100%',
+    padding: '6px 0',
+    textAlign: 'left',
+    borderRadius: 8,
+  },
+  checkText: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+  },
+  checkLabel: {
+    ...fonts.bodyBold,
+    fontSize: type.body,
+    color: colors.onInk,
+  },
+  checkLabelFixed: {
+    opacity: 0.6,
+  },
+  choice: {
+    display: 'flex',
+    padding: 4,
+    gap: 4,
+    borderRadius: 12,
+    backgroundColor: 'rgba(244, 239, 230, 0.08)',
+  },
+  choiceOption: {
+    ...resetButton,
+    flex: 1,
+    height: 40,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+  },
+  choiceSelected: {
+    backgroundColor: colors.paper,
+  },
+  choiceText: {
+    ...fonts.bodyThin,
+    fontSize: type.body,
+    color: colors.onInk,
+  },
+  choiceTextSelected: {
+    ...fonts.bodyBold,
+    fontSize: type.body,
+    color: colors.ink,
+  },
+  summary: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: 14,
+    borderRadius: 12,
+    border: '1px dashed rgba(244, 239, 230, 0.3)',
+  },
+  summaryTitle: {
+    ...fonts.bodyBold,
+    fontSize: type.body,
+    color: colors.onInk,
+  },
+  summaryText: {
+    ...fonts.bodyThin,
+    fontSize: 13,
+    lineHeight: '19px',
+    color: colors.onInk,
   },
   paperGrid: {
     display: 'flex',

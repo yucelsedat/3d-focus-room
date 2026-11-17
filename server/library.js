@@ -6,9 +6,12 @@ import path from 'path'
 import { randomBytes } from 'crypto'
 import multer from 'multer'
 
+import { monthWeekMondays, weekOf } from '../src/pages/library/isoWeeks.js'
 import {
   BINDINGS,
   categoryNameTaken,
+  DATED_KINDS,
+  DAY_NAMES,
   cleanCategoryName,
   FIRST_PAGE_COUNT,
   GENERAL_CATEGORY_ID,
@@ -18,7 +21,14 @@ import {
   nextShelf,
   NOTEBOOK_KINDS,
   PAPER_STYLES,
+  refDate,
 } from '../src/pages/library/model.js'
+
+// Bir tarihin haftası (mobildeki weeks satırı): ISO kuralıyla ayı, yılı ve aydaki sırası
+function weekRow(iso) {
+  const { year, month, monday } = weekOf(iso)
+  return { year, month, monday, week_no: monthWeekMondays(year, month).indexOf(monday) + 1 }
+}
 
 // Mobildeki datetime('now', 'localtime') biçimi: "YYYY-AA-GG SS:DD:ss"
 function stamp(date) {
@@ -341,6 +351,7 @@ export function registerLibraryRoutes(app, prisma) {
       prisma.shelfPageTitle.deleteMany({ where: { bookId: id } }),
       prisma.shelfFavorite.deleteMany({ where: { bookId: id } }),
       prisma.shelfDrawing.deleteMany({ where: { bookId: id } }),
+      prisma.shelfHabit.deleteMany({ where: { bookId: id } }),
       prisma.shelfBook.deleteMany({ where: { id } }),
     ])
     res.json({ ok: true })
@@ -420,13 +431,16 @@ export function registerLibraryRoutes(app, prisma) {
     res.json({ ok: true })
   }))
 
-  // Defterin yazılı sayfaları (okuma modu, sayfa listesi): { kind, ref }
+  // Defterin yazılı sayfaları (okuma modu, sayfa filtresi, sayfa listesi): { kind, at, ref }.
+  // at: gün sayfasında tarih, haftanın sayfalarında pazartesi, alışkanlık sayfasında dönemi;
+  // ref: ayın ve not defterinin sayfalarında sayfanın kimliği (mobildeki WrittenPage)
   app.get(`${R}/books/:id/written`, wrap(async (req, res) => {
     const bookId = int(req.params.id)
     if (bookId === null) return res.status(400).json({ error: 'Geçersiz defter' })
-    const [rows, drawings] = await Promise.all([
+    const [rows, drawings, habits] = await Promise.all([
       prisma.shelfNote.findMany({ where: { bookId }, select: { kind: true, ref: true, content: true } }),
       prisma.shelfDrawing.findMany({ where: { bookId, NOT: { strokes: '' } }, select: { kind: true, pageId: true } }),
+      prisma.shelfHabit.findMany({ where: { bookId }, select: { period: true, name: true } }),
     ])
     const seen = new Set()
     const out = []
@@ -434,12 +448,62 @@ export function registerLibraryRoutes(app, prisma) {
       const key = `${kind}:${ref}`
       if (seen.has(key)) return
       seen.add(key)
-      out.push({ kind, at: null, ref })
+      out.push(DATED_KINDS.includes(kind) ? { kind, at: refDate(ref), ref: null } : { kind, at: null, ref })
     }
     for (const r of rows) if (r.content.trim() !== '') add(r.kind, r.ref)
     // Yalnızca çizilmiş sayfa da yazılıdır
     for (const d of drawings) add(d.kind, d.pageId)
+    for (const h of habits) {
+      const key = `habits:${h.period}`
+      if (h.name.trim() === '' || seen.has(key)) continue
+      seen.add(key)
+      out.push({ kind: 'habits', at: h.period, ref: null })
+    }
     res.json(out)
+  }))
+
+  // ─── Alışkanlık takibi (ajanda) ─────────────────────────────────────────────
+  const PERIOD = /^\d{4}-\d{2}(-\d{2})?$/
+  const habitOut = (h) => ({ id: h.id, name: h.name, done: h.done })
+
+  app.get(`${R}/books/:id/habits`, wrap(async (req, res) => {
+    const bookId = int(req.params.id)
+    const period = String(req.query.period ?? '')
+    if (bookId === null || !PERIOD.test(period)) return res.status(400).json({ error: 'Geçersiz dönem' })
+    const rows = await prisma.shelfHabit.findMany({ where: { bookId, period }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
+    res.json(rows.map(habitOut))
+  }))
+
+  app.post(`${R}/books/:id/habits`, wrap(async (req, res) => {
+    const bookId = int(req.params.id)
+    const period = String(req.body?.period ?? '')
+    if (bookId === null || !PERIOD.test(period)) return res.status(400).json({ error: 'Geçersiz dönem' })
+    const row = await prisma.shelfHabit.create({ data: { bookId, period } })
+    res.json(habitOut(row))
+  }))
+
+  app.put(`${R}/habits/:habitId`, wrap(async (req, res) => {
+    const id = int(req.params.habitId)
+    const name = typeof req.body?.name === 'string' ? req.body.name.slice(0, 40) : null
+    const done = typeof req.body?.done === 'string' && /^[\d,-]{0,400}$/.test(req.body.done) ? req.body.done : null
+    if (id === null || name === null || done === null) return res.status(400).json({ error: 'Geçersiz alışkanlık' })
+    await prisma.shelfHabit.updateMany({ where: { id }, data: { name, done } })
+    res.json({ ok: true })
+  }))
+
+  app.delete(`${R}/habits/:habitId`, wrap(async (req, res) => {
+    const id = int(req.params.habitId)
+    if (id !== null) await prisma.shelfHabit.deleteMany({ where: { id } })
+    res.json({ ok: true })
+  }))
+
+  // Alışkanlık sayfası temizlenince o dönemin bütün alışkanlıkları kalkar
+  app.delete(`${R}/books/:id/habits`, wrap(async (req, res) => {
+    const bookId = int(req.params.id)
+    const period = String(req.query.period ?? '')
+    if (bookId === null || !PERIOD.test(period)) return res.status(400).json({ error: 'Geçersiz dönem' })
+    await prisma.shelfHabit.deleteMany({ where: { bookId, period } })
+    res.json({ ok: true })
   }))
 
   // Not defterinin yazılı sayfalarındaki notlar, sayfa sırasıyla (sayfalarda arama için)
@@ -547,10 +611,60 @@ export function registerLibraryRoutes(app, prisma) {
     res.json({ ok: true })
   }))
 
-  // Bütün ayraçlar (Ayraçlar sekmesi): defter, sayfa, başlık ya da ilk yazı
+  // Bütün ayraçlar (Ayraçlar sekmesi), en son konan başta: defterin adı ve kapak rengi, sayfanın
+  // başlığı ve ilk yazılı bloğu (önizleme). Defteri silinmiş ayraç listelenmez.
   app.get(`${R}/favorites`, wrap(async (req, res) => {
-    const rows = await prisma.shelfFavorite.findMany({ orderBy: { createdAt: 'desc' } })
-    res.json(rows.map((f) => ({ id: f.id, notebook_id: f.bookId, kind: f.kind, page_id: f.pageId, created_at: stamp(f.createdAt) })))
+    const rows = await prisma.shelfFavorite.findMany({ orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] })
+    const bookIds = [...new Set(rows.map((f) => f.bookId))]
+    const [books, titles, notes] = await Promise.all([
+      prisma.shelfBook.findMany({ where: { id: { in: bookIds } }, select: { id: true, title: true, color: true } }),
+      prisma.shelfPageTitle.findMany({ where: { bookId: { in: bookIds } } }),
+      prisma.shelfNote.findMany({
+        where: { bookId: { in: bookIds }, NOT: { content: '' } },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        select: { bookId: true, kind: true, ref: true, content: true },
+      }),
+    ])
+    const book = new Map(books.map((b) => [b.id, b]))
+    const title = new Map(titles.map((t) => [`${t.bookId}:${t.ref}`, t.title]))
+    const preview = new Map()
+    for (const n of notes) {
+      const key = `${n.bookId}:${n.kind}:${n.ref}`
+      if (!preview.has(key) && n.content.trim() !== '') preview.set(key, n.content)
+    }
+    res.json(
+      rows
+        .filter((f) => book.has(f.bookId))
+        .map((f) => ({
+          id: f.id,
+          notebook_id: f.bookId,
+          kind: f.kind,
+          page_id: f.pageId,
+          created_at: stamp(f.createdAt),
+          notebook_title: book.get(f.bookId).title,
+          notebook_color: book.get(f.bookId).color,
+          page_title: f.kind === 'page' ? (title.get(`${f.bookId}:${f.pageId}`) ?? null) : null,
+          preview: preview.get(`${f.bookId}:${f.kind}:${f.pageId}`) ?? null,
+          ...datedFields(f),
+        })),
+    )
+  }))
+
+  // Gün sayfasında tarih ve gün adı; gün ve haftanın sayfalarında haftası (mobildeki days/weeks)
+  function datedFields(f) {
+    const empty = { date: null, day_name: null, monday: null, week_no: null, year: null, month: null }
+    if (!DATED_KINDS.includes(f.kind)) return empty
+    const date = refDate(f.pageId)
+    const week = weekRow(date)
+    if (f.kind !== 'day') return { ...empty, ...week }
+    const index = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7
+    return { ...week, date, day_name: DAY_NAMES[index] }
+  }
+
+  app.delete(`${R}/favorites/:favId`, wrap(async (req, res) => {
+    const id = int(req.params.favId)
+    if (id !== null) await prisma.shelfFavorite.deleteMany({ where: { id } })
+    res.json({ ok: true })
   }))
 
   // ─── Çizimler ─────────────────────────────────────────────────────────────────

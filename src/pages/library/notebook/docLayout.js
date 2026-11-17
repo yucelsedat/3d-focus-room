@@ -1,11 +1,15 @@
 // Belge modunun (PDF sayfası) ortak ölçüleri; bileşen dosyalarından ayrı ki hızlı yenileme çalışsın
 import { Lexer } from 'marked'
 
-import { docPage, fonts } from '../theme.js'
+import { docPage, fonts, notebook } from '../theme.js'
 
 // Belge modunda sayfa kenardan kenara yazıdır; yalnızca soldaki boşlukta bloğun tutamacı durur
 export const DOC_ROW_LEFT = docPage.gutter
 export const DOC_ROW_RIGHT = docPage.edge
+
+// Not defterinde satırlar kenar boşluğundan bu kadar içeride başlar, sağda bu kadar pay kalır
+export const HAND_ROW_LEFT = notebook.marginX + 12
+export const HAND_ROW_RIGHT = 20
 
 // Biçimli görünümün üstündeki ve altındaki boşluk
 export const DOC_RENDERED_PAD = 2
