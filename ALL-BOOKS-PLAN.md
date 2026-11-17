@@ -131,8 +131,18 @@ bire bir aynı çalışır. Ajanda ve not defteri türleri formda görünür ama
       `ref` (gün ve hafta = YYYYAAGG, ay = YYYYAA) mevcut `ShelfNote`/`ShelfFavorite`/`ShelfDrawing`'de;
       `ShelfHabit` tablosu (migration `20261118000000_add_shelf_habits`); `/written` mobildeki
       `{ kind, at, ref }` biçiminde, `/favorites` gün/hafta alanlarıyla; defter `?date=<slotKey>` ile açılır
-- [ ] 9.4 Takvim sekmesi (`/calendar`): yılın ayları, haftaları ve günleri; günden ajandaya
-- [ ] 9.5 Pano sekmesi (`/pano`): mantar pano, raptiyeyle tutturulmuş tek sayfalık notlar, sürükle-sırala
+- [x] 9.4 Takvim sekmesi (`/calendar`, `CalendarScreen.jsx`): yılın on iki ayı kartlarda (geniş
+      ekranda yan yana, en dar kart 340px), ay rengi sekmeli hafta numaraları ve `weekTint` şeritleri,
+      bugünün ayına kaydırır; güne / hafta numarasına tıklayınca en son açılan ajanda o günden / haftanın
+      hedeflerinden açılır (ajanda yoksa oluşturma ekranı); alt menüde sekme açıldı
+- [x] 9.5 Pano sekmesi (`/pano`, `/pano/:id`): mantar pano (`Cork`), raptiyeyle tutturulmuş eğik kartlar
+      (`BoardCard`, `Pushpin`), ızgara telefonda iki sütun / geniş ekranda daha çok (`BoardGrid`),
+      düzenlerken basılı tutup sürükleyerek sıralama (kenarda otomatik kaydırma, klavyede ok tuşları),
+      notlarda arama (Türkçe büyük/küçük harf), sağ tık: aç / panodan kaldır; not tek sayfalık
+      `NotebookPage` (`kind: 'board'`, başlık panoya yazılır, ayraç yok, boş açılınca yazmaya başlar).
+      Sunucu: `ShelfBoardNote` (migration `20261119000000_add_shelf_board`), blokları `ShelfNote`'ta
+      bookId 0; yazılmadan bırakılan notlar temizlenir (istemci önce bekleyen yazmaları bekler:
+      `api.js whenSaved`)
 
 ## Doğrulama
 - Her faz sonunda: `npm run lint`, `npm run build`, API uçları için izole DB kopyasında duman testi

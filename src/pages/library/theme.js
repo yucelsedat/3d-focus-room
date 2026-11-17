@@ -156,3 +156,74 @@ export const type = {
 // El yazısı sağa yatık; web kırpmadığı için mobildeki kuyruk payına gerek yok, ama yazılar
 // mobildeki gibi bölünmeyen bir boşlukla biter ki ölçüler aynı kalsın
 export const HAND_TAIL = ' '
+
+// Takvimde her ayın rengi: hafta numarasının sekmesi ve üstündeki yazı
+export const monthColors = [
+  { tab: '#8E2F3C', text: '#F4EFE6' },
+  { tab: '#D9A73E', text: '#14213D' },
+  { tab: '#8A8B4A', text: '#F4EFE6' },
+  { tab: '#5E7F4E', text: '#F4EFE6' },
+  { tab: '#2F5D4F', text: '#F4EFE6' },
+  { tab: '#2C4A6E', text: '#F4EFE6' },
+  { tab: '#7E5A82', text: '#F4EFE6' },
+  { tab: '#5C5A4C', text: '#F4EFE6' },
+  { tab: '#9AA08A', text: '#14213D' },
+  { tab: '#C8783D', text: '#F4EFE6' },
+  { tab: '#5B3F66', text: '#F4EFE6' },
+  { tab: '#B5643F', text: '#F4EFE6' },
+]
+
+// Haftanın şeridi: ayın rengi kart rengine karışır, ayın ilk haftası en açık, son haftası en koyu.
+// Üstündeki yazı, şeride karşı daha okunaklı olan koyu ya da açık renktir.
+export function weekTint(month, weekIndex, weekCount) {
+  const ratio = 0.16 + (0.42 * weekIndex) / Math.max(1, weekCount - 1)
+  const fill = mixHex(colors.card, monthColors[month - 1].tab, ratio)
+  const onFill = contrast(fill, colors.ink) >= contrast(fill, colors.onInk) ? colors.ink : colors.onInk
+  return { fill, text: onFill }
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function mixHex(from, to, ratio) {
+  const a = hexToRgb(from)
+  const b = hexToRgb(to)
+  return `#${a.map((c, i) => Math.round(c + (b[i] - c) * ratio).toString(16).padStart(2, '0')).join('')}`
+}
+
+// WCAG göreli parlaklık ve kontrast oranı
+function luminance(hex) {
+  const [r, g, b] = hexToRgb(hex).map((c) => {
+    const s = c / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function contrast(a, b) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+// Pano: ceviz çerçeve, mantar ve taneleri
+export const board = {
+  frame: '#563A24',
+  cork: '#B98A5B',
+  corkDark: '#7E5330',
+  corkLight: '#DDB582',
+}
+
+// Notları panoya tutturan raptiyelerin başları; bilinmeyen anahtar ilk renge düşer
+export const pinColors = {
+  red: { head: '#C8392B', rim: '#8E2118' },
+  blue: { head: '#2F62B5', rim: '#1C3E78' },
+  yellow: { head: '#E8B830', rim: '#A57C12' },
+  green: { head: '#2E8B57', rim: '#1B5A37' },
+  white: { head: '#F1ECE2', rim: '#B9B0A0' },
+}
+
+export function pinColorOf(key) {
+  return pinColors[key] ?? pinColors.red
+}

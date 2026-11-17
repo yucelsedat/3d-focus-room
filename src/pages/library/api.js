@@ -4,7 +4,24 @@
 const API = import.meta.env.VITE_API_URL ?? ''
 const R = `${API}/api/library`
 
-async function call(method, path, body) {
+// Yolda olan yazmalar: sayfadan çıkınca son yazılanlar kaydedilmeden (ör. pano boş notları
+// temizlerken) okunmasın diye beklenebilir
+const writes = new Set()
+
+export function whenSaved() {
+  return Promise.allSettled([...writes])
+}
+
+function call(method, path, body) {
+  const request = send(method, path, body)
+  if (method !== 'GET') {
+    writes.add(request)
+    request.catch(() => {}).finally(() => writes.delete(request))
+  }
+  return request
+}
+
+async function send(method, path, body) {
   const res = await fetch(`${R}${path}`, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -88,3 +105,14 @@ export const createHabit = (notebookId, period) => call('POST', `/books/${notebo
 export const updateHabit = (habit) => call('PUT', `/habits/${habit.id}`, { name: habit.name, done: habit.done })
 export const deleteHabit = (id) => call('DELETE', `/habits/${id}`)
 export const clearHabits = (notebookId, period) => call('DELETE', `/books/${notebookId}/habits?period=${period}`)
+
+// ─── Pano: tek sayfalık notlar; sayfaları { notebookId: 0, kind: 'board', ref: id } ──────────
+export const BOARD_NOTEBOOK_ID = 0
+export const boardPage = (id) => ({ notebookId: BOARD_NOTEBOOK_ID, kind: 'board', ref: id })
+export const getBoardNotes = () => call('GET', '/board')
+export const deleteEmptyBoardNotes = () => call('DELETE', '/board/empty')
+export const getBoardNote = (id) => call('GET', `/board/${id}`)
+export const createBoardNote = () => call('POST', '/board').then((r) => r.id)
+export const setBoardNoteOrder = (ids) => call('PUT', '/board/order', { ids })
+export const setBoardNoteTitle = (id, title) => call('PUT', `/board/${id}/title`, { title })
+export const deleteBoardNote = (id) => call('DELETE', `/board/${id}`).then((r) => r.contents)

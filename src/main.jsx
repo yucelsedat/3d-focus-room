@@ -9,6 +9,9 @@ import CanvasRoute from './pages/CanvasRoute.jsx'
 import LibraryPage from './pages/library/LibraryPage.jsx'
 import { EditNotebookPage, NewNotebookPage } from './pages/library/NotebookForm.jsx'
 import NotebookScreen from './pages/library/NotebookScreen.jsx'
+import BoardNoteScreen from './pages/library/BoardNoteScreen.jsx'
+import BoardScreen from './pages/library/BoardScreen.jsx'
+import CalendarScreen from './pages/library/CalendarScreen.jsx'
 import FavoritesPage from './pages/library/FavoritesPage.jsx'
 
 createRoot(document.getElementById('root')).render(
@@ -21,6 +24,9 @@ createRoot(document.getElementById('root')).render(
         <Route path="/edit-notebook/:id" element={<EditNotebookPage />} />
         <Route path="/notebook" element={<NotebookScreen />} />
         <Route path="/favorites" element={<FavoritesPage />} />
+        <Route path="/calendar" element={<CalendarScreen />} />
+        <Route path="/pano" element={<BoardScreen />} />
+        <Route path="/pano/:id" element={<BoardNoteScreen />} />
         <Route path="/worlds" element={<WorldSelect />} />
         <Route path="/game" element={<App />} />
         <Route path="/timeline" element={<TimelineRoute />} />

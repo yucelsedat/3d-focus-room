@@ -11,9 +11,18 @@ function weekInfo(monday) {
   return { year, weekNo: monthWeekMondays(year, month).indexOf(monday) + 1 }
 }
 
-// page: { kind, ref }; title: not defterinin sayfasına yazılan başlık
-export function pageHeading(page, title = '') {
+// page: { kind, ref }; title: not defterinin sayfasına (ya da pano notuna) yazılan başlık;
+// boardNote: pano notunun kaydı (tutturulduğu gün)
+export function pageHeading(page, title = '', boardNote = null) {
   switch (page.kind) {
+    // Pano notu: başlığı elle yazılır, altında panoya tutturulduğu gün
+    case 'board':
+      return {
+        title,
+        meta: `Pano · ${boardNote ? formatDate(boardNote.created_at.slice(0, 10)) : ''}`,
+        now: null,
+        hint: 'Notunu yaz',
+      }
     case 'page':
       return { ...sheetHeading({ kind: 'page', number: page.ref }, title), hint: 'Yazmaya başla' }
     case 'month-goals':
@@ -49,6 +58,8 @@ export function pageHeading(page, title = '') {
 // Defterde üst üste duran sayfaların kâğıt dokusu birbirinden farklı olsun
 export function paperSeed(page) {
   switch (page.kind) {
+    case 'board':
+      return 4_000_000 + page.ref
     case 'page':
       return 2_000_000 + page.ref
     case 'day':

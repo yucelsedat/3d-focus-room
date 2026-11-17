@@ -462,6 +462,106 @@ export function registerLibraryRoutes(app, prisma) {
     res.json(out)
   }))
 
+  // ─── Pano: tek sayfalık notlar (mobilde board_notes) ───────────────────────────
+  // Notun sayfasındaki bloklar ve çizimler bookId 0, kind 'board', ref = notun kimliğiyle durur
+  const BOARD_BOOK = 0
+  const PIN_KEYS = ['red', 'blue', 'yellow', 'green', 'white']
+  const boardOut = (b) => ({
+    id: b.id,
+    title: b.title,
+    paper: b.paper,
+    tilt: b.tilt,
+    pin: b.pin,
+    position: b.position,
+    created_at: stamp(b.createdAt),
+  })
+
+  // Panodaki sırasıyla; her notun yazılı blokları sayfadaki sırasıyla (kartın önizlemesi)
+  app.get(`${R}/board`, wrap(async (req, res) => {
+    const [notes, rows] = await Promise.all([
+      prisma.shelfBoardNote.findMany({ orderBy: [{ position: 'asc' }, { createdAt: 'desc' }, { id: 'desc' }] }),
+      prisma.shelfNote.findMany({
+        where: { bookId: BOARD_BOOK, kind: 'board' },
+        orderBy: [{ ref: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        select: { ref: true, content: true },
+      }),
+    ])
+    const contents = new Map()
+    for (const row of rows) {
+      if (row.content.trim() === '') continue
+      if (contents.has(row.ref)) contents.get(row.ref).push(row.content)
+      else contents.set(row.ref, [row.content])
+    }
+    res.json(notes.map((n) => ({ ...boardOut(n), contents: contents.get(n.id) ?? [] })))
+  }))
+
+  // Açılıp hiçbir şey yazılmadan bırakılan notlar panoya tutturulmaz: başlığı da sayfası da boş,
+  // çizimi de olmayanlar silinir; sahipsiz bloklar ve çizimler de temizlenir
+  app.delete(`${R}/board/empty`, wrap(async (req, res) => {
+    const [notes, written, drawn] = await Promise.all([
+      prisma.shelfBoardNote.findMany({ select: { id: true, title: true } }),
+      prisma.shelfNote.findMany({ where: { bookId: BOARD_BOOK, kind: 'board', NOT: { content: '' } }, select: { ref: true, content: true } }),
+      prisma.shelfDrawing.findMany({ where: { bookId: BOARD_BOOK, kind: 'board', NOT: { strokes: '' } }, select: { pageId: true } }),
+    ])
+    const used = new Set([...written.filter((r) => r.content.trim() !== '').map((r) => r.ref), ...drawn.map((d) => d.pageId)])
+    const empty = notes.filter((n) => n.title.trim() === '' && !used.has(n.id)).map((n) => n.id)
+    const kept = notes.map((n) => n.id).filter((id) => !empty.includes(id))
+    await prisma.$transaction([
+      prisma.shelfBoardNote.deleteMany({ where: { id: { in: empty } } }),
+      prisma.shelfNote.deleteMany({ where: { bookId: BOARD_BOOK, kind: 'board', ref: { notIn: kept } } }),
+      prisma.shelfDrawing.deleteMany({ where: { bookId: BOARD_BOOK, kind: 'board', pageId: { notIn: kept } } }),
+    ])
+    res.json({ deleted: empty.length })
+  }))
+
+  app.get(`${R}/board/:noteId`, wrap(async (req, res) => {
+    const id = int(req.params.noteId)
+    const row = id === null ? null : await prisma.shelfBoardNote.findUnique({ where: { id } })
+    res.json(row ? boardOut(row) : null)
+  }))
+
+  // Yeni not oxford kâğıtla açılır ve panonun en başına tutturulur; biraz yamuk durur, raptiyesinin
+  // rengi rastgele seçilir
+  app.post(`${R}/board`, wrap(async (req, res) => {
+    const tilt = Math.round((Math.random() * 6 - 3) * 10) / 10
+    const pin = PIN_KEYS[Math.floor(Math.random() * PIN_KEYS.length)]
+    const row = await prisma.$transaction(async (tx) => {
+      const first = await tx.shelfBoardNote.aggregate({ _min: { position: true } })
+      return tx.shelfBoardNote.create({ data: { tilt, pin, position: (first._min.position ?? 1) - 1 } })
+    })
+    res.json({ id: row.id })
+  }))
+
+  // Sürüklenip yer değiştiren notların yeni sırası: ids panodaki notların baştan sona sırası
+  app.put(`${R}/board/order`, wrap(async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(int).filter((x) => x !== null) : null
+    if (!ids) return res.status(400).json({ error: 'Geçersiz sıra' })
+    await prisma.$transaction(ids.map((id, i) => prisma.shelfBoardNote.updateMany({ where: { id }, data: { position: i } })))
+    res.json({ ok: true })
+  }))
+
+  app.put(`${R}/board/:noteId/title`, wrap(async (req, res) => {
+    const id = int(req.params.noteId)
+    const title = typeof req.body?.title === 'string' ? req.body.title.replace(/\s*\n\s*/g, ' ').slice(0, 60) : null
+    if (id === null || title === null) return res.status(400).json({ error: 'Geçersiz başlık' })
+    await prisma.shelfBoardNote.updateMany({ where: { id }, data: { title } })
+    res.json({ ok: true })
+  }))
+
+  // Not, sayfasındaki yazılar ve çizimlerle birlikte panodan kalkar; eklerinin dosyaları istemcide
+  // silinsin diye blokların içerikleri döner
+  app.delete(`${R}/board/:noteId`, wrap(async (req, res) => {
+    const id = int(req.params.noteId)
+    if (id === null) return res.status(400).json({ error: 'Geçersiz not' })
+    const rows = await prisma.shelfNote.findMany({ where: { bookId: BOARD_BOOK, kind: 'board', ref: id }, select: { content: true } })
+    await prisma.$transaction([
+      prisma.shelfNote.deleteMany({ where: { bookId: BOARD_BOOK, kind: 'board', ref: id } }),
+      prisma.shelfDrawing.deleteMany({ where: { bookId: BOARD_BOOK, kind: 'board', pageId: id } }),
+      prisma.shelfBoardNote.deleteMany({ where: { id } }),
+    ])
+    res.json({ contents: rows.map((r) => r.content) })
+  }))
+
   // ─── Alışkanlık takibi (ajanda) ─────────────────────────────────────────────
   const PERIOD = /^\d{4}-\d{2}(-\d{2})?$/
   const habitOut = (h) => ({ id: h.id, name: h.name, done: h.done })

@@ -13,6 +13,18 @@ const PATHS = {
   'arrow-back': <path {...STROKE} strokeWidth={2.2} d="M19 12H5M11 5l-7 7 7 7" />,
   add: <path {...STROKE} strokeWidth={2.4} d="M12 5v14M5 12h14" />,
   checkmark: <path {...STROKE} strokeWidth={2.4} d="M5 12.5l4.5 4.5L19 7.5" />,
+  search: (
+    <>
+      <circle {...STROKE} strokeWidth={2.2} cx="10.5" cy="10.5" r="6.5" />
+      <path {...STROKE} strokeWidth={2.2} d="M15.5 15.5L21 21" />
+    </>
+  ),
+  'close-circle': (
+    <>
+      <circle cx="12" cy="12" r="9.5" fill="currentColor" />
+      <path stroke="#14213D" strokeWidth={2} strokeLinecap="round" d="M9 9l6 6M15 9l-6 6" />
+    </>
+  ),
   'create-outline': (
     <g {...STROKE}>
       <path d="M4 20h4L19 9l-4-4L4 16v4z" />
