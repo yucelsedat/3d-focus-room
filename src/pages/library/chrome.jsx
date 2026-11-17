@@ -163,8 +163,7 @@ const fabStyle = {
   zIndex: 5,
 }
 
-// Not sayfası dışındaki ekranların altındaki gezinme çubuğu. Pano, takvim ve ayraçlar sonraki
-// fazlarda gelir (şimdilik kapalı). Defter, en son açılan defteri kaldığı sayfadan açar; rafta
+// Not sayfası dışındaki ekranların altındaki gezinme çubuğu. Defter, en son açılan defteri kaldığı sayfadan açar; rafta
 // defter yoksa oluşturma ekranını.
 export function BottomNav({ active, onReselect }) {
   const navigate = useNavigate()
@@ -175,6 +174,16 @@ export function BottomNav({ active, onReselect }) {
   }
 
   // Pano, takvim ve ayraçlar aynı seviyededir: birinden ötekine geçilince yerine açılır
+  function goToBoard() {
+    if (active === 'board') onReselect?.()
+    else navigate('/pano', { replace: active !== 'library' })
+  }
+
+  function goToCalendar() {
+    if (active === 'calendar') onReselect?.()
+    else navigate('/calendar', { replace: active !== 'library' })
+  }
+
   function goToFavorites() {
     if (active === 'favorites') onReselect?.()
     else navigate('/favorites', { replace: active !== 'library' })
@@ -189,8 +198,8 @@ export function BottomNav({ active, onReselect }) {
   return (
     <nav style={navStyles.bar} aria-label="Gezinme">
       <NavItem icon="library" label="Kitaplık" hint="Defterlerin durduğu rafları göster" selected={active === 'library'} onPress={goToLibrary} />
-      <NavItem icon="sticky" label="Pano" hint="Yakında" disabled />
-      <NavItem icon="calendar" label="Takvim" hint="Yakında" disabled />
+      <NavItem icon="sticky" label="Pano" hint="Panoya tutturduğun notları göster" selected={active === 'board'} onPress={goToBoard} />
+      <NavItem icon="calendar" label="Takvim" hint="Yılın aylarını, haftalarını ve günlerini göster" selected={active === 'calendar'} onPress={goToCalendar} />
       <NavItem icon="bookmark" label="Ayraçlar" hint="Ayraç koyduğun sayfaları göster" selected={active === 'favorites'} onPress={goToFavorites} />
       <NavItem icon="book" label="Defter" hint="En son açtığın defteri kaldığın sayfadan aç" onPress={openLastNotebook} />
     </nav>

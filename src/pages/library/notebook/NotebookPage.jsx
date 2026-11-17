@@ -16,6 +16,7 @@ import {
   getPageTitle,
   isFavorite,
   setFavorite,
+  setBoardNoteTitle,
   setNoteOrder,
   setPageTitle,
   updateNote,
@@ -146,6 +147,9 @@ export function NotebookPage({
   onDeletePage,
   // Yazarken değil; blok seçimi, sürükleme ya da çizim modu açıkken defterin sayfası çevrilmez
   onLockChange,
+  // Pano notu: kaydı (başlığı, tutturulduğu gün); autoStart: boş açılınca yazmaya hemen başlanır
+  boardNote = null,
+  autoStart = false,
 }) {
   // PDF'in kâğıdı (a4 / letter); not defterinde null: sayfa el yazısıyla yazılır
   const docPaper = isDocumentPaper(paper) ? paper : null
@@ -242,7 +246,8 @@ export function NotebookPage({
     if (pendingTitle.current !== null) {
       const title = pendingTitle.current
       pendingTitle.current = null
-      setPageTitle(page.notebookId, page.ref, title).catch(() => {})
+      const save = page.kind === 'board' ? setBoardNoteTitle(page.ref, title) : setPageTitle(page.notebookId, page.ref, title)
+      save.catch(() => {})
     }
   }
 
@@ -295,20 +300,30 @@ export function NotebookPage({
 
   // ─── Yükleme ─────────────────────────────────────────────────────────────────
   const notifyReady = useEffectEvent(() => onReady?.())
-  // Başlık yalnızca not defterinin (ve PDF'in) sayfasına elle yazılır; ajandanın sayfaları adlıdır
-  const canTitle = page.kind === 'page'
+  // Başlık not defterinin (ve PDF'in) sayfasına ve pano notuna elle yazılır; ajandanın sayfaları
+  // adlıdır. Pano notuna ayraç konmaz.
+  const canTitle = page.kind === 'page' || page.kind === 'board'
+  const isBoard = page.kind === 'board'
+  const boardTitle = boardNote?.title ?? ''
+  const boardCreated = boardNote?.created_at ?? null
+
 
   useEffect(() => {
     let cancelled = false
     const titled = page.kind === 'page'
+    const board = page.kind === 'board' ? { title: boardTitle, created_at: boardCreated ?? '' } : null
     deleteEmptyNotes(page)
       .catch(() => {})
       .then(() =>
-        Promise.all([titled ? getPageTitle(page.notebookId, page.ref) : '', getPageNotes(page), isFavorite(page).catch(() => false)]),
+        Promise.all([
+          titled ? getPageTitle(page.notebookId, page.ref) : (board?.title ?? ''),
+          getPageNotes(page),
+          board ? false : isFavorite(page).catch(() => false),
+        ]),
       )
       .then(([title, list, fav]) => {
         if (cancelled) return
-        setHeading(pageHeading(page, title))
+        setHeading(pageHeading(page, title, board))
         setFavoriteState(fav)
         notesRef.current = list
         setNotes(list)
@@ -316,13 +331,13 @@ export function NotebookPage({
       })
       .catch(() => {
         if (cancelled) return
-        setHeading(pageHeading(page))
+        setHeading(pageHeading(page, '', board))
         setLoaded(true)
       })
     return () => {
       cancelled = true
     }
-  }, [page])
+  }, [page, boardTitle, boardCreated])
 
   useEffect(() => {
     if (!loaded) return
@@ -351,6 +366,15 @@ export function NotebookPage({
     const note = await createAndShowNote()
     if (note) setFocusRequest({ noteId: note.id, segment: 0 })
   }
+
+  // autoStart: boş açılan sayfada yazmaya hemen başlanır
+  const startWriting = useEffectEvent(() => {
+    if (autoStart && !reading) addNote()
+  })
+
+  useEffect(() => {
+    if (loaded && notesRef.current.length === 0) startWriting()
+  }, [loaded])
 
   // Boş sayfanın ipucuna tıklayınca ilk blok açılır. Düğme odağı bırakır: blok sunucudan gelene
   // kadar basılan boşluk / Enter düğmeye yeniden basıp başka boş bloklar açmasın.
@@ -1395,7 +1419,9 @@ export function NotebookPage({
     if (!onDeletePage) return
     setConfirm({
       title: 'Sayfayı sil',
-      message: 'Bu sayfa bütün yazılarıyla defterden çıkarılsın mı? Ardındaki sayfalar birer sayfa geri kayar. Bu geri alınamaz.',
+      message: isBoard
+        ? 'Bu not bütün yazıları, resimleri ve dosyalarıyla panodan kaldırılsın mı? Bu geri alınamaz.'
+        : 'Bu sayfa bütün yazılarıyla defterden çıkarılsın mı? Ardındaki sayfalar birer sayfa geri kayar. Bu geri alınamaz.',
       action: 'Sil',
       run: () => {
         endDictationHere()
@@ -1441,7 +1467,15 @@ export function NotebookPage({
           onPress: clearPage,
         },
         ...(onDeletePage
-          ? [{ label: 'Sayfayı sil', hint: 'Sayfa defterden çıkar, ardındakiler geri kayar', icon: 'trash', danger: true, onPress: deletePage }]
+          ? [
+              {
+                label: 'Sayfayı sil',
+                hint: isBoard ? 'Not panodan kalkar' : 'Sayfa defterden çıkar, ardındakiler geri kayar',
+                icon: 'trash',
+                danger: true,
+                onPress: deletePage,
+              },
+            ]
           : []),
       ],
     },
@@ -1518,14 +1552,16 @@ export function NotebookPage({
           fill={reading ? notebookFills.readingFill : undefined}
           onPress={() => onReadingChange?.(!reading)}
         />
-        <HandIcon
-          shape="bookmark"
-          label={favorite ? 'Ayracı kaldır' : 'Ayraç koy'}
-          size={28}
-          selected={favorite}
-          fill={favorite ? notebookFills.bookmarkFill : undefined}
-          onPress={toggleFavorite}
-        />
+        {!isBoard && (
+          <HandIcon
+            shape="bookmark"
+            label={favorite ? 'Ayracı kaldır' : 'Ayraç koy'}
+            size={28}
+            selected={favorite}
+            fill={favorite ? notebookFills.bookmarkFill : undefined}
+            onPress={toggleFavorite}
+          />
+        )}
         {onCalendarPress && <HandIcon shape="calendar" label="Takvim" size={28} onPress={onCalendarPress} />}
         {onSearchPress && <HandIcon shape="search" label="Sayfalarda ara" size={28} onPress={onSearchPress} />}
         {onFilterPress && (

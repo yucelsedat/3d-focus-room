@@ -249,3 +249,16 @@ model ShelfHabit {
 
   @@index([bookId, period])
 }
+
+// Panoya raptiyeyle tutturulmuş tek sayfalık not (mobilde board_notes). Sayfasındaki bloklar
+// ShelfNote'ta bookId 0, kind 'board', ref = bu notun kimliğiyle durur. tilt: panodaki eğikliği
+// (derece); pin: raptiyenin rengi; position: panodaki sırası (0 en başta).
+model ShelfBoardNote {
+  id        Int      @id @default(autoincrement())
+  title     String   @default("")
+  paper     String   @default("oxford")
+  tilt      Float    @default(0)
+  pin       String   @default("red")
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+}
