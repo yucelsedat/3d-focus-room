@@ -80,3 +80,11 @@ export const setFavorite = (page, favorite) => call('PUT', `${pagePath(page)}/fa
 export const getFavorites = () => call('GET', '/favorites')
 export const getPageDrawing = (page) => call('GET', `${pagePath(page)}/drawing${kindQuery(page)}`).then((r) => r.strokes)
 export const setPageDrawing = (page, strokes) => call('PUT', `${pagePath(page)}/drawing${kindQuery(page)}`, { strokes })
+export const removeFavorite = (id) => call('DELETE', `/favorites/${id}`)
+
+// ─── Alışkanlık takibi (ajanda): period aylık sayfada "YYYY-AA", haftalıkta pazartesi ─────────
+export const getHabits = (notebookId, period) => call('GET', `/books/${notebookId}/habits?period=${period}`)
+export const createHabit = (notebookId, period) => call('POST', `/books/${notebookId}/habits`, { period })
+export const updateHabit = (habit) => call('PUT', `/habits/${habit.id}`, { name: habit.name, done: habit.done })
+export const deleteHabit = (id) => call('DELETE', `/habits/${id}`)
+export const clearHabits = (notebookId, period) => call('DELETE', `/books/${notebookId}/habits?period=${period}`)

@@ -1,12 +1,13 @@
-// Seyir defteri: components/notebook/NoteEntry.tsx (PDF / belge modu). Sayfadaki bir blok: solda
-// kenar boşluğunda tutamaç çizgisi, sağında yazı bölümleri, resimler ve dosya ekleri. Resimler
+// Seyir defteri: components/notebook/NoteEntry.tsx. Sayfadaki bir blok: solda kenar boşluğunda
+// tutamaç (PDF'te çizgi, not defterinde saat), sağında yazı bölümleri, resimler ve dosya ekleri. Resimler
 // bloğun içinde yüzer: yanında yer kalırsa yazı yanından akar, kalmazsa altına itilir.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { docPage, fonts, HAND_TAIL, notebook, notebookFills } from '../theme.js'
 import { openAttachment } from './attachments.js'
-import { DOC_RENDERED_PAD, DOC_ROW_LEFT, DOC_ROW_RIGHT, leadingHeadingCenter } from './docLayout.js'
+import { DOC_RENDERED_PAD, DOC_ROW_LEFT, DOC_ROW_RIGHT, HAND_ROW_LEFT, HAND_ROW_RIGHT, leadingHeadingCenter } from './docLayout.js'
 import { DocText } from './DocText.jsx'
+import { HandText, MarginTime } from './HandText.jsx'
 import { flowAround, imageRect, intersects, layoutBlockImages } from './imageLayout.js'
 import { marksIn, parseMarks } from './marks.js'
 import { parseContent, removeAttachment, serializeContent } from './noteContent.js'
@@ -56,10 +57,19 @@ export function NoteEntry({
   onOpenImage,
   onConfirmRemove,
   onPasteImage,
+  // Not defteri / ajanda: kâğıda el yazısı, kenarda bloğun saati; kutulu satırlar taşınabilir
+  hand = false,
+  onMoveLine,
 }) {
   const segments = parseContent(note.content)
   const highlights = parseMarks(note.highlights)
   const inks = parseMarks(note.inks)
+  const times = parseMarks(note.times)
+  // Kenar boşluğunda bloğun saati; saat konmamışsa ama blok kutulu bir satırla başlıyorsa o
+  // satırın saati, o da yoksa çizgi
+  const time = note.time ?? times.find((m) => m.start === 0)?.color ?? null
+  const rowLeft = hand ? HAND_ROW_LEFT : DOC_ROW_LEFT
+  const rowRight = hand ? HAND_ROW_RIGHT : DOC_ROW_RIGHT
   const starts = []
   segments.reduce((offset, segment) => {
     starts.push(offset)
@@ -95,7 +105,7 @@ export function NoteEntry({
     if (!hasImages) return
     const row = ownRef.current
     if (!row) return
-    const width = Math.max(0, row.clientWidth - DOC_ROW_LEFT - DOC_ROW_RIGHT)
+    const width = Math.max(0, row.clientWidth - rowLeft - rowRight)
     const anchors = {}
     const boxes = {}
     for (const [key, el] of parts.current) {
@@ -106,18 +116,18 @@ export function NoteEntry({
     const next = { width, anchors, boxes, height: row.offsetHeight }
     // Yerleşim DOM'dan ölçülür; aynı ölçüye gelince durur
     if (JSON.stringify(next) !== JSON.stringify(layout)) setLayout(next)
-  }, [hasImages, layout, note.content, focusedSegment, editingImage, readOnly])
+  }, [hasImages, layout, note.content, focusedSegment, editingImage, readOnly, rowLeft, rowRight])
 
   // Genişlik değişince yeniden ölçülür
   useEffect(() => {
     if (!hasImages) return
     const row = ownRef.current
     const ro = new ResizeObserver(() =>
-      setLayout((prev) => ({ ...prev, width: Math.max(0, row.clientWidth - DOC_ROW_LEFT - DOC_ROW_RIGHT) })),
+      setLayout((prev) => ({ ...prev, width: Math.max(0, row.clientWidth - rowLeft - rowRight) })),
     )
     ro.observe(row)
     return () => ro.disconnect()
-  }, [hasImages])
+  }, [hasImages, rowLeft, rowRight])
 
   function part(key) {
     return (el) => {
@@ -128,7 +138,7 @@ export function NoteEntry({
 
   // Blok bir başlıkla başlıyorsa tutamacın çizgisi o başlığın satırına ortalanır
   const first = segments[0]
-  const firstText = first?.type === 'text' ? first.text : ''
+  const firstText = !hand && first?.type === 'text' ? first.text : ''
   const headingCenter = firstText ? leadingHeadingCenter(firstText) : null
   const gripOffset =
     headingCenter !== null && (!rawMarkdown || focusedSegment !== 0)
@@ -211,16 +221,19 @@ export function NoteEntry({
       }}
       style={{
         ...styles.row,
+        paddingLeft: rowLeft,
+        paddingRight: rowRight,
         minHeight: imagesBottom || undefined,
         ...(focusedSegment !== null ? styles.raised : null),
         ...(lifted ? styles.lifted : null),
+        ...(lifted && hand ? styles.liftedHand : null),
         pointerEvents: inert ? 'none' : undefined,
         transform: dragOffset ? `translateY(${dragOffset}px)` : undefined,
         transition: dragTransition,
       }}
     >
       {selected && <div style={styles.selected} />}
-      {/* Çizgi bloğun tutamacıdır: basılı tutup yukarı aşağı sürükleyince blok yer değiştirir */}
+      {/* Saat ya da çizgi bloğun tutamacıdır: basılı tutup yukarı aşağı sürükleyince blok yer değiştirir */}
       <div
         {...(readOnly ? null : gripProps)}
         role={readOnly ? undefined : 'button'}
@@ -228,9 +241,9 @@ export function NoteEntry({
         aria-label={readOnly ? undefined : 'Blok — basılı tutup sürükle ya da Alt+ok tuşlarıyla taşı'}
         title={readOnly ? undefined : 'Basılı tutup yukarı aşağı sürükle'}
         className={readOnly ? undefined : 'nb-grip'}
-        style={styles.handle}
+        style={hand ? styles.timeHandle : styles.handle}
       >
-        <BlockGrip offset={gripOffset} />
+        {hand ? <MarginTime time={time} /> : <BlockGrip offset={gripOffset} />}
       </div>
       {segments.map((segment, i) => {
         if (segment.type === 'text') {
@@ -244,7 +257,8 @@ export function NoteEntry({
               data-push={flow.push}
               style={{ ...flowStyle(flow), ...(collapsed ? styles.collapsed : null) }}
             >
-              <DocText
+              <TextSegment
+                hand={hand}
                 ref={(el) => {
                   if (el) inputs.current.set(i, el)
                   else inputs.current.delete(i)
@@ -271,8 +285,11 @@ export function NoteEntry({
                 onSelect={(start, end) => onSelect?.(starts[i] + start, starts[i] + end)}
                 highlights={marksIn(highlights, starts[i], starts[i] + segment.text.length)}
                 inks={marksIn(inks, starts[i], starts[i] + segment.text.length)}
-                onPasteMarkdown={onPasteMarkdown}
+                onPasteMarkdown={hand ? undefined : onPasteMarkdown}
                 onPasteImage={onPasteImage ? (file) => onPasteImage(i, file) : undefined}
+                times={hand ? marksIn(times, starts[i], starts[i] + segment.text.length) : undefined}
+                firstInNote={i === 0}
+                onMoveLine={hand && onMoveLine ? (from, to) => onMoveLine(i, from, to) : undefined}
               />
             </div>
           )
@@ -286,13 +303,13 @@ export function NoteEntry({
         const flow = flowOf(key)
         return (
           <div key={key} ref={hasImages ? part(key) : undefined} data-push={flow.push} style={flowStyle(flow)}>
-            <NoteFile file={segment} onPress={() => openAttachment(segment.name)} onLongPress={readOnly ? undefined : () => confirmRemove(i)} />
+            <NoteFile hand={hand} file={segment} onPress={() => openAttachment(segment.name)} onLongPress={readOnly ? undefined : () => confirmRemove(i)} />
           </div>
         )
       })}
 
       {images.map((f) => (
-        <div key={`p-${f.image.name}`} style={{ ...styles.image, top: f.top, left: DOC_ROW_LEFT, width: textWidth }}>
+        <div key={`p-${f.image.name}`} style={{ ...styles.image, top: f.top, left: rowLeft, width: textWidth }}>
           <NoteImage
             image={f.image}
             maxWidth={textWidth}
@@ -308,6 +325,15 @@ export function NoteEntry({
         </div>
       ))}
     </div>
+  )
+}
+
+// Not defterinde el yazısı, PDF'te biçimli yazı
+function TextSegment({ hand, ref, times, firstInNote, onMoveLine, onPasteMarkdown, ...props }) {
+  return hand ? (
+    <HandText ref={ref} times={times} firstInNote={firstInNote} onMoveLine={onMoveLine} {...props} />
+  ) : (
+    <DocText ref={ref} onPasteMarkdown={onPasteMarkdown} {...props} />
   )
 }
 
@@ -337,6 +363,20 @@ const styles = {
     border: `1px solid ${notebookFills.selectionEdge}`,
     backgroundColor: notebookFills.selectionTint,
     pointerEvents: 'none',
+  },
+  liftedHand: {
+    backgroundColor: notebook.paper,
+  },
+  // Sağa dayalı saatin kutusu; rakamlar kenar çizgisinin hemen solunda biter
+  timeHandle: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: notebook.marginX - 8,
+    display: 'flex',
+    justifyContent: 'flex-end',
+    zIndex: 1,
+    touchAction: 'none',
   },
   handle: {
     position: 'absolute',

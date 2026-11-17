@@ -41,6 +41,21 @@ export function isDocumentPaper(paper) {
   return paper === 'a4' || paper === 'letter'
 }
 
+export const DAY_NAMES = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi', 'Pazar']
+
+// Ajandanın gün ve hafta sayfaları (hafta: pazartesisi) veritabanında tarihin sayısıyla durur:
+// 2026-11-17 → 20261117. Ayın sayfaları yıl × 100 + ay, not defterinin sayfaları numarasıyla.
+export const DATED_KINDS = ['day', 'goals', 'review']
+
+export function dateRef(iso) {
+  return Number(iso.replace(/-/g, ''))
+}
+
+export function refDate(ref) {
+  const s = String(ref).padStart(8, '0')
+  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`
+}
+
 // Not defteri ve PDF numaralı sayfalardan oluşur; ajanda takvime bölünür
 export function hasNumberedPages(kind) {
   return kind === 'notes' || kind === 'pdf'

@@ -1,17 +1,23 @@
-// Seyir defteri: app/notebook.tsx — sayfa çevirerek gezilen defter (/notebook?id=). Defter en son
-// kalınan sayfadan açılır; son sayfanın ardında boş bir sayfa durur, ona çevrilince defter bir
-// sayfa uzar. Okuma modu, sayfa listesi, sayfa ekleme/çıkarma Faz 8'de.
+// Seyir defteri: app/notebook.tsx — sayfa çevirerek gezilen defter (/notebook?id=&date=). Defter
+// istenen sayfadan, yoksa en son kalınan sayfadan açılır. Not defterinde ve PDF'te son sayfanın
+// ardında boş bir sayfa durur, ona çevrilince defter bir sayfa uzar; ajandanın sayfaları yılın
+// aylarına, haftalarına ve günlerine dizilir (bkz. notebookLayout).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import './library.css'
 import './notebook/notebook.css'
 import { deleteNotebookPage, getNotebook, getWrittenPages, insertNotebookPage, setNotebookPageCount } from './api.js'
-import { hasNumberedPages } from './model.js'
+import { todayISO } from './isoWeeks.js'
+import { dateRef } from './model.js'
 import { NotebookLoader } from './NotebookLoader.jsx'
+import { filterKindOf, hasNumberedPages, layoutOf, monthKey, monthRef, slotKey, writtenKey } from './notebookLayout.js'
 import { deleteContentFiles } from './notebook/blockClipboard.js'
+import { CalendarPage } from './notebook/CalendarPage.jsx'
+import { HabitPage } from './notebook/HabitPage.jsx'
 import { DEFAULT_PEN } from './notebook/marks.js'
 import { NotebookPage } from './notebook/NotebookPage.jsx'
+import { PageFilterMenu } from './notebook/PageFilterMenu.jsx'
 import { PageIndex } from './notebook/PageIndex.jsx'
 import { lastPageKey, rememberNotebook, storageGet, storageSet } from './state.js'
 import { colors, fonts, HAND_TAIL } from './theme.js'
@@ -72,11 +78,57 @@ function usePosition(initial) {
   return ref.current
 }
 
-// Defter istenen sayfadan, yoksa en son kalınan sayfadan açılır; hiç açılmadıysa ilk sayfadan
-function initialPage(notebookId) {
-  const saved = storageGet(lastPageKey(notebookId))
-  const match = saved && /^page:(\d+)$/.exec(saved)
-  return match ? Math.max(0, Number(match[1]) - 1) : 0
+// Defter istenen sayfadan (takvimden ya da ayraçlardan gelince), yoksa en son kalınan sayfadan
+// açılır; hiç açılmadıysa ajandada bugünden, not defterinde ilk sayfadan. key: sayfanın anahtarı
+// (bkz. notebookLayout slotKey)
+function initialPage(notebookId, layout, count, key) {
+  const saved = key ?? storageGet(lastPageKey(notebookId))
+  return clampPage(saved ? layout.nearest(saved) : layout.start(), count)
+}
+
+const isHabitSlot = (slot) => slot.kind === 'month-habits' || slot.kind === 'week-habits'
+
+// Sayfanın notlarının anahtarı: gün ve haftanın sayfaları tarihin sayısıyla, ayın sayfaları
+// yıl × 100 + ay, not defterinin sayfaları numarasıyla
+function pageOfSlot(notebookId, slot) {
+  switch (slot.kind) {
+    case 'day':
+      return { notebookId, kind: 'day', ref: dateRef(slot.date) }
+    case 'goals':
+    case 'review':
+      return { notebookId, kind: slot.kind, ref: dateRef(slot.monday) }
+    case 'month-goals':
+    case 'month-review':
+      return { notebookId, kind: slot.kind, ref: monthRef(slot.year, slot.month) }
+    default:
+      return { notebookId, kind: 'page', ref: slot.number }
+  }
+}
+
+// Takvimin açılacağı tarih: sayfanın günü, haftanın pazartesisi ya da ayın ortası
+function dateOfSlot(slot) {
+  switch (slot.kind) {
+    case 'day':
+      return slot.date
+    case 'goals':
+    case 'review':
+    case 'week-habits':
+      return slot.monday
+    case 'month-goals':
+    case 'month-review':
+    case 'month-habits':
+      return `${monthKey(slot.year, slot.month)}-15`
+    default:
+      return todayISO()
+  }
+}
+
+// İstenen sayfanın anahtarı: ?date= (ajandada tarih ya da sayfa anahtarı) ya da ?page= (numara)
+function requestedKey(params) {
+  const date = params.get('date')
+  if (date) return date
+  const page = Number(params.get('page'))
+  return page > 0 ? `page:${page}` : undefined
 }
 
 export default function NotebookScreen() {
@@ -112,10 +164,10 @@ export default function NotebookScreen() {
   return (
     <div className="lib-root">
       <div className="lib-app" style={styles.desk}>
-        {notebook && hasNumberedPages(notebook.kind) && <OpenNotebook notebook={notebook} onReady={markReady} />}
-        {(missing || (notebook && !hasNumberedPages(notebook.kind))) && (
+        {notebook && <OpenNotebook notebook={notebook} pageKey={requestedKey(params)} onReady={markReady} />}
+        {missing && (
           <div style={styles.center}>
-            <div style={styles.title}>{(missing ? 'Defter bulunamadı' : 'Bu defter türü yakında açılacak') + HAND_TAIL}</div>
+            <div style={styles.title}>{'Defter bulunamadı' + HAND_TAIL}</div>
           </div>
         )}
         {loaderShown && !missing && <NotebookLoader done={ready || missing} onHidden={hideLoader} />}
@@ -140,32 +192,40 @@ function keyOf(edits, index) {
   return `page-${original}`
 }
 
-// Yazılı sayfaların numaraları (0'dan), sırasıyla; defterde olmayanlar atlanır
-async function writtenPageIndices(notebookId, count) {
+// Yazılı sayfaların numaraları (0'dan), defterdeki sırasıyla; türler verilirse yalnızca o
+// türdekiler. Defterde olmayan sayfaların (ör. ajandanın yılı dışındaki günlerin) yazıları atlanır.
+async function writtenPageIndices(notebookId, layout, count, kinds) {
   const rows = await getWrittenPages(notebookId)
-  return [...new Set(rows.filter((r) => r.kind === 'page').map((r) => r.ref - 1))]
-    .filter((index) => index >= 0 && index < count)
+  return [...new Set(rows.map((row) => layout.find(writtenKey(row))))]
+    .filter((index) => index >= 0 && index < count && (!kinds || kinds.includes(filterKindOf(layout.slotAt(index).kind))))
     .sort((a, b) => a - b)
 }
 
 const ADD_TURN_DURATION = 560
 
-function OpenNotebook({ notebook, onReady }) {
+function OpenNotebook({ notebook, pageKey, onReady }) {
   const navigate = useNavigate()
   const notebookId = notebook.id
+  const isNotes = hasNumberedPages(notebook.kind)
+  const layout = layoutOf(notebook)
   const deskRef = useRef(null)
   const [deskWidth, setDeskWidth] = useState(0)
   const width = Math.min(deskWidth, SHEET_MAX)
-  // Okuma modu sayfa çevrilince de sürer: açıkken yalnızca yazılı sayfalar (written) çevrilir;
-  // page ve position o zaman bu listedeki sırayı gösterir
+  // Okuma modu ve sayfa filtresi sayfa çevrilince de sürer. İkisinden biri açıkken boş sayfalar
+  // atlanır: yalnızca yazılı sayfalar (written), filtre varsa da yalnızca seçilen türdekiler
+  // çevrilir; page ve position o zaman bu listedeki sırayı gösterir.
   const [reading, setReading] = useState(false)
+  const [kinds, setKinds] = useState(null)
+  const [filterOpen, setFilterOpen] = useState(false)
   const [written, setWritten] = useState(null)
   // Elde tutulan kalem de sayfa çevrilince değişmez
   const [pen, setPen] = useState(DEFAULT_PEN)
-  const [page, setPage] = useState(() => initialPage(notebookId))
-  // Defterin sayfa sayısı; son sayfanın ardında boş bir sayfa daha durur, ona çevrilince uzar
+  const [page, setPage] = useState(() =>
+    initialPage(notebookId, layout, isNotes ? notebook.page_count + 1 : layout.count, pageKey),
+  )
+  // Not defterinin sayfa sayısı; son sayfanın ardında boş bir sayfa daha durur, ona çevrilince uzar
   const [pages, setPages] = useState(() => Math.max(notebook.page_count, page + 1))
-  const fullCount = pages + 1
+  const fullCount = isNotes ? pages + 1 : layout.count
   const pageCount = written ? written.length : fullCount
   const pageAt = (order) => (written ? written[order] : order)
   const position = usePosition(page)
@@ -180,7 +240,8 @@ function OpenNotebook({ notebook, onReady }) {
   // Çıkarılan sayfa, altındaki sayfayı göstererek kalkana kadar kendi yaprağında durur
   const [ghost, setGhost] = useState(null)
   const ghostTurn = usePosition(0)
-  // Sayfa listesi (arama): görünen sayfanın üstüne soldan kapanan yaprak; 1'de dik, 0'da kapalı
+  // Takvim (not defterinde sayfa listesi): görünen sayfanın üstüne soldan kapanan yaprak; 1'de
+  // dik, 0'da kapalı
   const [indexOpen, setIndexOpen] = useState(false)
   const indexTurn = usePosition(1)
   const [notice, setNotice] = useState(null)
@@ -210,10 +271,10 @@ function OpenNotebook({ notebook, onReady }) {
     return () => clearTimeout(timer)
   }, [notice])
 
-  // Defter uzayınca ya da kısalınca sayfa sayısı kaydedilir
+  // Not defteri uzayınca ya da kısalınca sayfa sayısı kaydedilir
   useEffect(() => {
-    if (pages !== notebook.page_count) setNotebookPageCount(notebookId, pages).catch(() => {})
-  }, [notebookId, notebook.page_count, pages])
+    if (isNotes && pages !== notebook.page_count) setNotebookPageCount(notebookId, pages).catch(() => {})
+  }, [isNotes, notebookId, notebook.page_count, pages])
 
   function markCurrentReady() {
     onReady?.()
@@ -222,14 +283,14 @@ function OpenNotebook({ notebook, onReady }) {
   }
 
   function remember(index) {
-    storageSet(lastPageKey(notebookId), `page:${index + 1}`)
+    storageSet(lastPageKey(notebookId), slotKey(layout.slotAt(index)))
   }
 
   function settle(order) {
     setPage(order)
     const index = pageAt(order)
     remember(index)
-    if (index >= pages) setPages(index + 1)
+    if (isNotes && index >= pages) setPages(index + 1)
   }
 
   function back() {
@@ -245,30 +306,34 @@ function OpenNotebook({ notebook, onReady }) {
     position.animate(clamped, 120 + 380 * remaining, () => settle(clamped))
   }
 
-  // Okuma modu değişince çevrilecek sayfalar yeniden seçilir: bu sayfa listede yoksa ondan sonraki
-  // ilk sayfaya geçilir. Gösterilecek sayfa yoksa hiçbir şey değişmez, false döner.
-  async function changeReading(next) {
-    const current = pageAt(page)
-    if (!next) {
-      position.set(current)
-      turnCount.current = fullCount
-      setPage(current)
-      setWritten(null)
-      setReading(false)
-      return
-    }
-    const indices = await writtenPageIndices(notebookId, fullCount).catch(() => [])
-    if (indices.length === 0) {
-      setNotice('Bu defterde henüz yazılı sayfa yok.')
-      return
-    }
-    const after = indices.findIndex((index) => index >= current)
-    const order = after === -1 ? indices.length - 1 : after
+  // Sayfa çevirme bir moddan ötekinin sırasına geçer; yarım kalan çevirme iptal edilir
+  function jumpTo(order, count) {
     position.set(order)
-    turnCount.current = indices.length
+    turnCount.current = count
     setPage(order)
-    setWritten(indices)
-    setReading(true)
+  }
+
+  // Okuma modu ya da filtre değişince çevrilecek sayfalar yeniden seçilir: bu sayfa listede yoksa
+  // ondan sonraki ilk sayfaya geçilir. Gösterilecek sayfa yoksa hiçbir şey değişmez, false döner.
+  async function turnThrough(nextReading, nextKinds) {
+    const current = pageAt(page)
+    if (!nextReading && !nextKinds) {
+      jumpTo(current, fullCount)
+      setWritten(null)
+    } else {
+      const indices = await writtenPageIndices(notebookId, layout, fullCount, nextKinds).catch(() => [])
+      if (indices.length === 0) return false
+      const after = indices.findIndex((index) => index >= current)
+      jumpTo(after === -1 ? indices.length - 1 : after, indices.length)
+      setWritten(indices)
+    }
+    setReading(nextReading)
+    setKinds(nextKinds)
+    return true
+  }
+
+  async function changeReading(next) {
+    if (!(await turnThrough(next, kinds))) setNotice('Bu defterde henüz yazılı sayfa yok.')
   }
 
   // Görünen sayfanın soluna (önüne) ya da sağına (ardına) boş bir sayfa eklenir ve ona çevrilir.
@@ -285,6 +350,7 @@ function OpenNotebook({ notebook, onReady }) {
     position.cancel()
     setWritten(null)
     setReading(false)
+    setKinds(null)
     setEdits((prev) => [...prev, { kind: 'insert', at }])
     setPages((prev) => prev + 1)
     turnCount.current = pages + 2
@@ -318,6 +384,7 @@ function OpenNotebook({ notebook, onReady }) {
     setGhost({ key, index: current })
     setWritten(null)
     setReading(false)
+    setKinds(null)
     setEdits((prev) => [...prev, { kind: 'remove', at: current }])
     setPages((prev) => Math.max(1, prev - 1))
     turnCount.current = Math.max(1, pages - 1) + 1
@@ -344,28 +411,44 @@ function OpenNotebook({ notebook, onReady }) {
     setTimeout(() => indexTurn.animate(1, 520, () => setIndexOpen(false)), delay)
   }
 
-  // Sayfa listesinden seçilen sayfa açılır; okurken o sayfa çevrilenler arasında değilse okuma
-  // modu kapanır
-  function openFromIndex(number) {
-    const index = clampPage(number - 1, fullCount)
+  // Takvimden ya da sayfa listesinden seçilen sayfa açılır. Okurken ya da filtre açıkken o sayfa
+  // çevrilenler arasında değilse okuma modu ve filtre kapanır.
+  function openFromCalendar(key) {
+    const index = clampPage(layout.nearest(key), fullCount)
     const order = written ? written.indexOf(index) : index
     position.cancel()
     if (written && order !== -1) {
-      position.set(order)
-      setPage(order)
+      jumpTo(order, written.length)
     } else {
-      position.set(index)
-      turnCount.current = fullCount
-      setPage(index)
+      jumpTo(index, fullCount)
       setWritten(null)
       setReading(false)
+      setKinds(null)
     }
     remember(index)
     closeIndex(160)
   }
 
+  // Anahtarlardan defterde bulunan ilki açılır; hiçbiri yoksa sonuncusuna en yakın gün
+  function openFirstOf(keys) {
+    openFromCalendar(keys.find((key) => layout.find(key) !== -1) ?? keys[keys.length - 1])
+  }
+
+  // Hafta numarası haftanın hedefler (yoksa alışkanlık) sayfasını, ay adı ayın sayfalarını açar
+  function openWeek(monday) {
+    openFirstOf([`${monday}:goals`, `${monday}:week-habits`, monday])
+  }
+
+  function openMonth(year, month) {
+    const key = monthKey(year, month)
+    openFirstOf([`${key}:month-goals`, `${key}:month-habits`, `${key}:month-review`, key])
+  }
+
+  const hasMonthPages = notebook.month_goals === 1 || notebook.month_review === 1 || notebook.habits === 'month'
+  const currentSlot = layout.slotAt(pageAt(page))
+
   useEffect(() => {
-    if (!indexOpen) return
+    if (!indexOpen || filterOpen) return
     const onKey = (e) => e.key === 'Escape' && closeIndex()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -377,10 +460,10 @@ function OpenNotebook({ notebook, onReady }) {
   const drag = useRef(null)
 
   function canStartDrag(e) {
-    if (e.button !== 0 || indexOpen || ghost || locked) return false
+    if (e.button !== 0 || indexOpen || filterOpen || ghost || locked) return false
     const target = e.target
     // Blok seçimi alanı ve blok tutamacı kendi sürüklemesini yapar
-    if (target.closest('textarea, input, [contenteditable], button, a, .nb-carousel, pre, .nb-select-layer, .nb-grip, .nb-draw-surface')) return false
+    if (target.closest('textarea, input, [contenteditable], button, a, .nb-carousel, pre, .nb-select-layer, .nb-grip, .nb-hand-box, .nb-draw-surface')) return false
     if (e.pointerType === 'mouse' && target.closest('.nb-md-unit')) return false
     return true
   }
@@ -480,15 +563,19 @@ function OpenNotebook({ notebook, onReady }) {
 
   const sheetProps = {
     notebookId,
+    layout,
     paper: notebook.paper,
     onBack: back,
     reading,
     onReadingChange: changeReading,
-    onSearchPress: openIndex,
+    filtering: kinds !== null,
+    onFilterPress: layout.kinds.length > 1 ? () => setFilterOpen(true) : undefined,
+    onCalendarPress: isNotes ? undefined : openIndex,
+    onSearchPress: isNotes ? openIndex : undefined,
     pen,
     onPenChange: setPen,
-    onAddPage: addPage,
-    onDeletePage: deletePage,
+    onAddPage: isNotes ? addPage : undefined,
+    onDeletePage: isNotes ? deletePage : undefined,
   }
 
   return (
@@ -526,15 +613,33 @@ function OpenNotebook({ notebook, onReady }) {
           ]}
           {indexOpen && (
             <TurnSheet order={0} position={indexTurn} width={width} isCurrent>
-              <PageIndex
-                notebookId={notebookId}
-                pages={pages}
-                current={pageAt(page) + 1}
-                onClose={() => closeIndex()}
-                onOpenPage={openFromIndex}
-              />
+              {currentSlot.kind === 'page' ? (
+                <PageIndex
+                  notebookId={notebookId}
+                  pages={pages}
+                  current={currentSlot.number}
+                  onClose={() => closeIndex()}
+                  onOpenPage={(number) => openFromCalendar(`page:${number}`)}
+                />
+              ) : (
+                <CalendarPage
+                  date={dateOfSlot(currentSlot)}
+                  year={notebook.year}
+                  onClose={() => closeIndex()}
+                  onOpenDay={(date) => openFromCalendar(date)}
+                  onOpenWeek={openWeek}
+                  onOpenMonth={hasMonthPages ? openMonth : undefined}
+                />
+              )}
             </TurnSheet>
           )}
+          <PageFilterMenu
+            visible={filterOpen}
+            available={layout.kinds}
+            kinds={kinds}
+            onApply={(next) => turnThrough(reading, next)}
+            onClose={() => setFilterOpen(false)}
+          />
           {notice !== null && (
             <div style={styles.notice} role="status">
               <span style={styles.noticeText}>{notice}</span>
@@ -546,10 +651,23 @@ function OpenNotebook({ notebook, onReady }) {
   )
 }
 
-// Defterin bir sayfası. Sayfa eklenip çıkarılınca yaprak numarasıyla birlikte kayar; sayfa anahtarı
-// numara değişince yenilenir, yazılar yeni yerinden okunur
-function Sheet({ notebookId, index, ...rest }) {
-  const page = useMemo(() => ({ notebookId, kind: 'page', ref: index + 1 }), [notebookId, index])
+// Defterin bir sayfası: notlu sayfa ya da alışkanlık takibi. Sayfa eklenip çıkarılınca yaprak
+// numarasıyla birlikte kayar; sayfa anahtarı numara değişince yenilenir, yazılar yeni yerinden okunur
+function Sheet({ notebookId, layout, index, ...rest }) {
+  const slot = layout.slotAt(index)
+  const key = slotKey(slot)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- anahtar sayfanın kimliğidir
+  const page = useMemo(() => pageOfSlot(notebookId, slot), [notebookId, key])
+  if (isHabitSlot(slot)) {
+    const { onBack, reading, onReadingChange, filtering, onFilterPress, onCalendarPress, isCurrent, folio, onReady } = rest
+    return (
+      <HabitPage
+        notebookId={notebookId}
+        slot={slot}
+        {...{ onBack, reading, onReadingChange, filtering, onFilterPress, onCalendarPress, isCurrent, folio, onReady }}
+      />
+    )
+  }
   return <NotebookPage page={page} {...rest} />
 }
 

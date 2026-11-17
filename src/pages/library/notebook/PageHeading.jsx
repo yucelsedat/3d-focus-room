@@ -1,12 +1,21 @@
-// Seyir defteri: components/notebook/PageTop.tsx — sayfanın üstü (belge modu). Başlık elle yazılır;
+// Seyir defteri: components/notebook/PageTop.tsx — sayfanın üstü. Başlık elle yazılır;
 // altında "Sayfa N · Not defteri". Yazılan başlık tek satıra sığmazsa küçülüp iki satıra, ona da
 // sığmazsa daha da küçülüp üç satıra iner; başlık alanı hep tek satırın yüksekliğindedir.
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 
-import { docPage, fonts, HAND_TAIL } from '../theme.js'
+import { colors, docPage, fonts, HAND_TAIL, notebook } from '../theme.js'
 import { HandIcon } from './HandIcon.jsx'
 import { DOC_ROW_LEFT, DOC_ROW_RIGHT } from './docLayout.js'
 
+// Not defterinde başlık el yazısıyla: tek satırda büyük, uzadıkça küçülüp iki, üç satıra iner
+const TITLE_HEIGHT = 62
+const TITLE_TIERS = [
+  { lines: 1, fontSize: 46, lineHeight: 62 },
+  { lines: 2, fontSize: 28, lineHeight: 29 },
+  { lines: 3, fontSize: 19, lineHeight: 20 },
+]
+
+// PDF'te başlık Fraunces'le, daha küçük kademelerle yazılır
 const DOC_TITLE_HEIGHT = 46
 const DOC_TITLE_TIERS = [
   { lines: 1, fontSize: 30, lineHeight: 44 },
@@ -16,34 +25,72 @@ const DOC_TITLE_TIERS = [
 
 // Sayfanın üstündeki el çizimi düğmeler: solda geri; sağdakiler (okuma modu, blok seçimi, çizim,
 // sayfa ayarları) sonraki fazlarda gelir
-export function PageTopBar({ onBack, children }) {
+// tight: ajandada sağda sekiz düğme olabilir; dar ekrana sığsınlar diye aralar daralır
+export function PageTopBar({ onBack, tight = false, children }) {
   return (
     <div style={styles.top}>
       <HandIcon shape="back" label="Geri dön" size={28} onPress={onBack} />
-      <div style={styles.topActions}>{children}</div>
+      <div style={{ ...styles.topActions, ...(tight ? { gap: 7 } : null) }}>{children}</div>
     </div>
   )
 }
 
-// heading: { title, meta, now }
-export function PageHeading({ heading, onTitleChange, onTitleSubmit, readOnly = false }) {
+// heading: { title, meta, now }. document: PDF'te başlık beyaz kâğıdın üstünde basılı harflerle
+export function PageHeading({ heading, onTitleChange, onTitleSubmit, readOnly = false, document = true }) {
   return (
-    <div style={styles.header}>
+    <div style={document ? styles.docHeader : styles.header}>
       <div style={styles.titleRow}>
         {heading && onTitleChange ? (
-          <TitleInput title={heading.title} onChange={onTitleChange} onSubmit={onTitleSubmit} readOnly={readOnly} />
+          <TitleInput title={heading.title} onChange={onTitleChange} onSubmit={onTitleSubmit} readOnly={readOnly} document={document} />
         ) : (
-          <div style={styles.docTitle}>{heading ? heading.title + HAND_TAIL : ''}</div>
+          <FittedTitle style={document ? styles.docTitle : styles.title} text={heading ? heading.title + HAND_TAIL : ''} />
+        )}
+        {heading?.now && (
+          <div style={styles.today}>
+            <span style={styles.todayDot} />
+            <span style={styles.todayText}>{heading.now + HAND_TAIL}</span>
+          </div>
         )}
       </div>
-      {heading && <div style={styles.docMeta}>{heading.meta}</div>}
+      {heading && <div style={document ? styles.docMeta : styles.meta}>{document ? heading.meta : heading.meta + HAND_TAIL}</div>}
+    </div>
+  )
+}
+
+// "2. Hafta Değerlendirme" gibi uzun başlıklar tek satıra sığacak kadar (en çok %60'ına) küçülür
+function FittedTitle({ style, text }) {
+  const ref = useRef(null)
+  const [scale, setScale] = useState(1)
+  const fit = useEffectEvent(() => {
+    const el = ref.current
+    if (!el) return
+    // Yazının kendi eni (bloğun eni değil); küçültülmüşse ölçekten geri hesaplanır
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const full = range.getBoundingClientRect().width / scale
+    const next = full > el.clientWidth ? Math.max(0.6, el.clientWidth / full) : 1
+    if (Math.abs(next - scale) > 0.01) setScale(next)
+  })
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    fit()
+    const ro = new ResizeObserver(() => fit())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [text])
+  return (
+    <div ref={ref} style={{ ...style, fontSize: style.fontSize * scale }}>
+      {text}
     </div>
   )
 }
 
 // Başlığın hangi kademeye sığdığı görünmez kopyalarla ölçülür: her kademenin boyunda yazı dizilir,
 // satır sayısı kademenin satırlarını aşmayan ilk kademe seçilir
-function TitleInput({ title, onChange, onSubmit, readOnly }) {
+function TitleInput({ title, onChange, onSubmit, readOnly, document }) {
+  const tiers = document ? DOC_TITLE_TIERS : TITLE_TIERS
+  const height = document ? DOC_TITLE_HEIGHT : TITLE_HEIGHT
   const boxRef = useRef(null)
   const mirrorRef = useRef(null)
   const latestTitle = useRef(title)
@@ -55,9 +102,9 @@ function TitleInput({ title, onChange, onSubmit, readOnly }) {
     const mirror = mirrorRef.current
     if (!mirror) return
     mirror.textContent = text
-    let chosen = { tier: DOC_TITLE_TIERS.length - 1, lines: 3 }
-    for (let i = 0; i < DOC_TITLE_TIERS.length; i++) {
-      const t = DOC_TITLE_TIERS[i]
+    let chosen = { tier: tiers.length - 1, lines: 3 }
+    for (let i = 0; i < tiers.length; i++) {
+      const t = tiers[i]
       mirror.style.fontSize = `${t.fontSize}px`
       mirror.style.lineHeight = `${t.lineHeight}px`
       const lines = Math.round(mirror.scrollHeight / t.lineHeight)
@@ -65,20 +112,19 @@ function TitleInput({ title, onChange, onSubmit, readOnly }) {
         chosen = { tier: i, lines: Math.max(1, lines) }
         break
       }
-      if (i === DOC_TITLE_TIERS.length - 1) chosen = { tier: i, lines: t.lines }
+      if (i === tiers.length - 1) chosen = { tier: i, lines: t.lines }
     }
     setFit((prev) => (prev.tier === chosen.tier && prev.lines === chosen.lines ? prev : chosen))
   }
 
   // Genişlik değişince (ve ilk çizimde) yeniden ölçülür
+  const remeasure = useEffectEvent(() => measure(latestTitle.current))
   useLayoutEffect(() => {
     const el = boxRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => measure(latestTitle.current))
+    const ro = new ResizeObserver(() => remeasure())
     ro.observe(el)
     return () => ro.disconnect()
-    // measure yalnızca DOM'a ve setState'e dokunur
-     
   }, [])
 
   function change(text) {
@@ -88,9 +134,9 @@ function TitleInput({ title, onChange, onSubmit, readOnly }) {
     onChange(clean)
   }
 
-  const tier = DOC_TITLE_TIERS[fit.tier]
+  const tier = tiers[fit.tier]
   // Satırlar alanın ortasında durur
-  const padTop = Math.max(0, (DOC_TITLE_HEIGHT - fit.lines * tier.lineHeight) / 2)
+  const padTop = Math.max(0, (height - fit.lines * tier.lineHeight) / 2)
 
   return (
     <div ref={boxRef} style={styles.titleBox}>
@@ -112,15 +158,16 @@ function TitleInput({ title, onChange, onSubmit, readOnly }) {
             else e.currentTarget.blur()
           }
         }}
-        className="nb-title-input"
+        className={document ? 'nb-title-input' : 'nb-title-input nb-hand-title'}
         style={{
           ...styles.titleInput,
+          ...(document ? null : styles.handTitleInput),
           fontSize: tier.fontSize,
           lineHeight: `${tier.lineHeight}px`,
           paddingTop: padTop,
         }}
       />
-      <div ref={mirrorRef} aria-hidden="true" style={styles.titleMirror} />
+      <div ref={mirrorRef} aria-hidden="true" style={{ ...styles.titleMirror, ...(document ? null : styles.handMirror) }} />
     </div>
   )
 }
@@ -138,9 +185,61 @@ const styles = {
     gap: 12,
   },
   header: {
+    paddingLeft: notebook.marginX + 12,
+    paddingRight: 20,
+    paddingBottom: 6,
+    flexShrink: 0,
+  },
+  docHeader: {
     paddingLeft: DOC_ROW_LEFT,
     paddingRight: DOC_ROW_RIGHT,
     paddingBottom: 16,
+  },
+  // Harflerin kuyrukları satırdan taşar; fazlası eksi kenar boşluğuyla geri alınır
+  title: {
+    flexShrink: 1,
+    minWidth: 0,
+    margin: '-6px 0',
+    ...fonts.handBold,
+    fontSize: 46,
+    lineHeight: '62px',
+    color: 'rgba(56, 56, 61, 0.9)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  handTitleInput: {
+    margin: '-6px 0',
+    height: TITLE_HEIGHT,
+    ...fonts.handBold,
+    color: 'rgba(56, 56, 61, 0.9)',
+    caretColor: notebook.graphite,
+  },
+  handMirror: {
+    ...fonts.handBold,
+  },
+  meta: {
+    ...fonts.hand,
+    fontSize: 19,
+    color: 'rgba(56, 56, 61, 0.6)',
+  },
+  today: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    flexShrink: 0,
+  },
+  todayDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.today,
+  },
+  todayText: {
+    ...fonts.handBold,
+    fontSize: 22,
+    color: colors.today,
   },
   titleRow: {
     display: 'flex',

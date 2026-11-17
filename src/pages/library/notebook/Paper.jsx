@@ -75,3 +75,38 @@ const styles = {
     pointerEvents: 'none',
   },
 }
+
+// Kareli ve noktalı kâğıdın aralığı: iki kare bir satır, satır çizgileri kare çizgilerine denk gelir
+const GRID = notebook.lineHeight / 2
+const GRID_EDGE = GRID - 0.5
+
+// Karşıdan karşıya ince bir çizgi: [from, to) aralığı çizginin rengi, gerisi saydam
+function band(direction, from, to) {
+  return `linear-gradient(${direction}, transparent ${from}px, ${notebook.rule} ${from}px, ${notebook.rule} ${to}px, transparent ${to}px)`
+}
+
+// Satır çizgisi satırın en altında
+const LINE_STYLE = {
+  backgroundImage: band('to bottom', notebook.lineHeight - 0.95, notebook.lineHeight - 0.05),
+  backgroundSize: `100% ${notebook.lineHeight}px`,
+}
+
+// Karenin sağ ve alt kenarı; yan yana dizilince ızgara olur
+const GRID_STYLE = {
+  backgroundImage: `${band('to bottom', GRID_EDGE - 0.35, GRID_EDGE + 0.35)}, ${band('to right', GRID_EDGE - 0.35, GRID_EDGE + 0.35)}`,
+  backgroundSize: `${GRID}px ${GRID}px`,
+}
+
+// Karenin sağ alt köşesinde bir nokta
+const DOT_STYLE = {
+  backgroundImage: `radial-gradient(circle 1.5px at ${GRID_EDGE}px ${GRID_EDGE}px, ${notebook.rule} 1.1px, transparent 1.5px)`,
+  backgroundSize: `${GRID}px ${GRID}px`,
+}
+
+// Kaydırılan içeriğin arkasında, içerik boyunca satır çizgileri (kareli kâğıtta kareler, noktalı
+// kâğıtta noktalar; düz kâğıt boş kalır). Çizgiler yinelenen gradyan arka plandır.
+export function RuledLines({ paper = 'oxford' }) {
+  const style = paper === 'grid' ? GRID_STYLE : paper === 'dot' ? DOT_STYLE : paper === 'ruled' || paper === 'oxford' ? LINE_STYLE : null
+  if (!style) return null
+  return <div aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', backgroundRepeat: 'repeat', ...style }} />
+}

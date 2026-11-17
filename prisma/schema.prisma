@@ -236,3 +236,16 @@ model ShelfDrawing {
 
   @@unique([bookId, kind, pageId])
 }
+
+// Ajandanın alışkanlık takibi sayfasındaki bir satır (mobilde habits). period: aylık sayfada
+// "YYYY-AA", haftalık sayfada haftanın pazartesisi; done: yapılan günlerin tarihleri, virgülle.
+model ShelfHabit {
+  id        Int      @id @default(autoincrement())
+  bookId    Int
+  period    String
+  name      String   @default("")
+  done      String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([bookId, period])
+}

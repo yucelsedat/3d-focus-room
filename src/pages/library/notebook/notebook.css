@@ -150,3 +150,30 @@
   outline: 2px solid rgba(11, 92, 173, 0.5);
   outline-offset: 2px;
 }
+
+/* Not defteri: el yazısı yazı alanı ve kutular */
+.nb-hand-input::selection {
+  background: var(--nb-selection, rgba(92, 255, 58, 0.45));
+}
+.nb-hand-box:active {
+  cursor: grabbing;
+}
+.nb-mic-halo {
+  animation: nb-mic 1000ms cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+@keyframes nb-mic {
+  from {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+.nb-hand-title::placeholder {
+  color: rgba(56, 56, 61, 0.25);
+}
+.nb-habit-name::placeholder {
+  color: rgba(56, 56, 61, 0.35);
+}

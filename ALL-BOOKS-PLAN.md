@@ -113,9 +113,26 @@ bire bir aynı çalışır. Ajanda ve not defteri türleri formda görünür ama
 - [x] Sayfa listesi / arama (`PageIndex`, dokulu kâğıt), okuma modu (yalnız yazılı sayfalar, altta numara)
 - [x] Ayraçlar (`ShelfFavorite` + `/favorite` uçları); Ayraçlar sekmesi Faz 9'da
 
-### Faz 9 — Diğer türler ve sekmeler
-- [ ] Not defteri (el yazısı, çizgili/oxford/kareli/noktalı kâğıt), ajanda (takvim düzeni, alışkanlıklar)
-- [ ] Pano, Takvim, Ayraçlar sekmeleri
+### Faz 9 — Diğer türler ve sekmeler (branch: `defter-turleri-sekmeler`)
+- [x] 9.1 Ayraçlar sekmesi (`/favorites`): kapak renkli kartlar, başlık / önizleme, tıklayınca defter o
+      sayfadan açılır (`/notebook?id=&page=`), ayraçla kaldırma; sunucu `/favorites` zenginleştirildi
+- [x] 9.2 Not defteri türü: dokulu kâğıt (çizgili / oxford / düz / kareli / noktalı; `Paper` +
+      `RuledLines` gradyan çizgileri), el yazısı bloklar (`HandText`: saydam textarea + ayna, fosforlu
+      kalem `rows` şeridi, kutulu satırı basılı tutup taşıma + kalkmış kopya), kenarda blok / satır saati
+      (`MarginTime`, `TimeMenu`), alt çubuk (`BottomBar`: saat, saati ayarla, kutu, numara, ek), el
+      yazısı başlık kademeleri (`PageHeading document={false}`, kaymaz), formda "Sayfa yapısı" adımı
+      (`PaperStep`, düzenlemede de); fotoğraflar not defterinde -1.2° yamuk, PDF'te düz
+- [x] 9.3 Ajanda türü: ISO hafta düzeni (`isoWeeks.js`, `notebookLayout.js` mobilden birebir
+      taşındı), gün / hafta hedefleri / değerlendirme / ay sayfaları (`pageHeadings.js`: başlık, "bugün /
+      bu hafta / bu ay", ipucu), alışkanlık sayfası (`HabitPage`, aylık 16'lı iki sıra / haftalık 7),
+      takvim yaprağı (`CalendarPage`: güne, hafta numarasına, ay adına dokun), sayfa filtresi
+      (`PageFilterMenu`, okuma moduyla birlikte `turnThrough`), formda `AgendaStep` (yıl, sayfa düzeni,
+      alışkanlık şablonu, sayfa sayısı özeti). Sunucu: weeks / days tabloları yerine tarih tabanlı
+      `ref` (gün ve hafta = YYYYAAGG, ay = YYYYAA) mevcut `ShelfNote`/`ShelfFavorite`/`ShelfDrawing`'de;
+      `ShelfHabit` tablosu (migration `20261118000000_add_shelf_habits`); `/written` mobildeki
+      `{ kind, at, ref }` biçiminde, `/favorites` gün/hafta alanlarıyla; defter `?date=<slotKey>` ile açılır
+- [ ] 9.4 Takvim sekmesi (`/calendar`): yılın ayları, haftaları ve günleri; günden ajandaya
+- [ ] 9.5 Pano sekmesi (`/pano`): mantar pano, raptiyeyle tutturulmuş tek sayfalık notlar, sürükle-sırala
 
 ## Doğrulama
 - Her faz sonunda: `npm run lint`, `npm run build`, API uçları için izole DB kopyasında duman testi

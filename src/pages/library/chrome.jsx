@@ -174,6 +174,12 @@ export function BottomNav({ active, onReselect }) {
     else navigate('/')
   }
 
+  // Pano, takvim ve ayraçlar aynı seviyededir: birinden ötekine geçilince yerine açılır
+  function goToFavorites() {
+    if (active === 'favorites') onReselect?.()
+    else navigate('/favorites', { replace: active !== 'library' })
+  }
+
   async function openLastNotebook() {
     const notebook = await getLastNotebook().catch(() => null)
     if (notebook) navigate(`/notebook?id=${notebook.id}`)
@@ -185,7 +191,7 @@ export function BottomNav({ active, onReselect }) {
       <NavItem icon="library" label="Kitaplık" hint="Defterlerin durduğu rafları göster" selected={active === 'library'} onPress={goToLibrary} />
       <NavItem icon="sticky" label="Pano" hint="Yakında" disabled />
       <NavItem icon="calendar" label="Takvim" hint="Yakında" disabled />
-      <NavItem icon="bookmark" label="Ayraçlar" hint="Yakında" disabled />
+      <NavItem icon="bookmark" label="Ayraçlar" hint="Ayraç koyduğun sayfaları göster" selected={active === 'favorites'} onPress={goToFavorites} />
       <NavItem icon="book" label="Defter" hint="En son açtığın defteri kaldığın sayfadan aç" onPress={openLastNotebook} />
     </nav>
   )
