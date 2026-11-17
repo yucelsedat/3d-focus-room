@@ -150,3 +150,89 @@ model Timeline {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// ─── Kitaplık (all-books): Seyir Defteri'nin web kopyası, ana sayfa ──────────
+// Alanlar mobil uygulamanın SQLite şemasıyla aynı (snake_case API, server/library.js).
+
+// Kitaplığın sekmeleri. id 1 = "Genel": hep vardır, silinmez, adı değişmez.
+model ShelfCategory {
+  id        Int      @id @default(autoincrement())
+  name      String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// Rafta duran defter. kind: agenda | notes | pdf; binding: band | spiral | file;
+// paper: ruled | oxford | plain | grid | dot | a4 | letter. shelf/position: kategorisinin
+// raflarındaki yeri (0 en üst raf, soldan sağa).
+model ShelfBook {
+  id          Int      @id @default(autoincrement())
+  title       String
+  color       String   @default("ink")
+  kind        String   @default("pdf")
+  binding     String   @default("file")
+  paper       String   @default("a4")
+  year        Int?
+  weeklyPages Int      @default(1)
+  monthGoals  Int      @default(1)
+  monthReview Int      @default(1)
+  habits      String   @default("none")
+  pageCount   Int      @default(10)
+  categoryId  Int      @default(1)
+  shelf       Int      @default(0)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([categoryId, shelf, position])
+}
+
+// Sayfadaki blok (mobilde sheet_notes). kind 'page' + ref = sayfa numarası (1'den).
+// content: Markdown + U+FFFC ile gömülü ekler; highlights/inks/times: lib/marks biçimi.
+model ShelfNote {
+  id         Int      @id @default(autoincrement())
+  bookId     Int
+  kind       String   @default("page")
+  ref        Int
+  content    String   @default("")
+  highlights String   @default("")
+  inks       String   @default("")
+  times      String   @default("")
+  time       String?
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([bookId, kind, ref])
+}
+
+// Not defteri / PDF sayfasının başlığı; başlık yazılmamış sayfanın satırı yoktur
+model ShelfPageTitle {
+  bookId Int
+  ref    Int
+  title  String
+
+  @@id([bookId, ref])
+}
+
+// Sayfaya konan ayraç (mobilde favorites). kind 'page' + pageId = sayfa numarası.
+model ShelfFavorite {
+  id        Int      @id @default(autoincrement())
+  bookId    Int
+  kind      String
+  pageId    Int
+  createdAt DateTime @default(now())
+
+  @@unique([bookId, kind, pageId])
+}
+
+// Sayfanın üstüne elle çizilen çizgiler (mobilde drawings). strokes: lib/drawing JSON'u.
+model ShelfDrawing {
+  id        Int      @id @default(autoincrement())
+  bookId    Int
+  kind      String
+  pageId    Int
+  strokes   String   @default("")
+  updatedAt DateTime @updatedAt
+
+  @@unique([bookId, kind, pageId])
+}

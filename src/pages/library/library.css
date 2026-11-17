@@ -1,0 +1,151 @@
+/* Kitaplık (all-books): seyir defteri mobil uygulamasının web kopyası. Telefonda mobil düzenin
+   aynısı; geniş ekranda raflar yan yana bölmelere dizilir (Bookshelf.jsx measure), alt gezinme ve
+   formlar ortalanır. */
+
+.lib-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  background: #1d1a16;
+  color: #f4efe6;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.lib-app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.lib-app *,
+.lib-torn-backdrop * {
+  box-sizing: border-box;
+}
+
+/* Yatay sayfalı kitaplıklar: her kategori bir sayfa, kaydırınca sayfaya oturur */
+.lib-pager {
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+.lib-pager > * {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+.lib-pager::-webkit-scrollbar,
+.lib-scroll-x::-webkit-scrollbar,
+.lib-scroll-y::-webkit-scrollbar {
+  display: none;
+}
+.lib-scroll-x,
+.lib-scroll-y {
+  scrollbar-width: none;
+}
+
+/* RN Pressable'ın "pressed" geri bildirimi */
+.lib-press:not(:disabled):active {
+  background-color: rgba(244, 239, 230, 0.12) !important;
+}
+.lib-press:not(:disabled):hover {
+  background-color: rgba(244, 239, 230, 0.07);
+}
+.lib-press:focus-visible,
+.lib-fab:focus-visible,
+.lib-book-press:focus-visible,
+.lib-shelf-book:focus-visible,
+.lib-torn-option:focus-visible,
+.lib-paper-icon:focus-visible,
+.lib-card:focus-visible {
+  outline: 2px solid #c8553d;
+  outline-offset: 2px;
+}
+
+.lib-fab {
+  transition: transform 120ms ease-out;
+}
+.lib-fab:active {
+  transform: scale(0.94);
+}
+
+/* Raftaki defter: basınca rafından hafifçe kalkar */
+.lib-book-press {
+  cursor: pointer;
+  transition: transform 140ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+@media (hover: hover) {
+  .lib-book-press:hover {
+    transform: translateY(-3px);
+  }
+}
+.lib-book-press:active {
+  transform: translateY(-6px);
+}
+
+.lib-shelf-book--editing {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.lib-shelf-book--editing:active {
+  cursor: grabbing;
+}
+
+/* Yırtık kâğıt menüsü */
+.lib-torn-backdrop {
+  animation: lib-fade 160ms ease-out;
+}
+.lib-torn-option:active {
+  background-color: rgba(56, 56, 61, 0.08) !important;
+}
+@media (hover: hover) {
+  .lib-torn-option:hover {
+    background-color: rgba(56, 56, 61, 0.05);
+  }
+}
+.lib-paper-icon:not(:disabled):active {
+  background-color: rgba(56, 56, 61, 0.08) !important;
+}
+.lib-hand-input::placeholder {
+  color: rgba(56, 56, 61, 0.45);
+}
+
+@keyframes lib-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Oluşturma formu */
+.lib-card {
+  transition: opacity 120ms, background-color 120ms, border-color 120ms;
+}
+.lib-card:not(:disabled):active {
+  opacity: 0.8;
+}
+.lib-cover-input::placeholder {
+  color: #3a4a6b;
+}
+.lib-cover-input:focus {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lib-book-press,
+  .lib-fab,
+  .lib-torn-backdrop {
+    transition: none;
+    animation: none;
+  }
+}

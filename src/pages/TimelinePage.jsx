@@ -145,7 +145,7 @@ export default function TimelinePage() {
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: C.bg, color: C.text, fontFamily: FONT_UI, overflow: 'hidden' }}>
       <nav style={{ height: 56, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, padding: '0 16px 0 20px', background: '#0a0a0a', borderBottom: '1px solid #1e1e1e', minWidth: 0 }}>
-        <button onClick={() => navigate('/')} title="Odalara dön"
+        <button onClick={() => navigate('/worlds')} title="Odalara dön"
           style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'none', border: 'none', color: C.text, cursor: 'pointer', padding: 0, flexShrink: 0 }}>
           <span style={{ width: 32, height: 32, borderRadius: 9, background: C.brand, display: 'flex', alignItems: 'center', justifyContent: 'center', font: `800 16px ${FONT_UI}`, color: '#fff' }}>F</span>
           <span className="tl-hide-sm" style={{ font: `800 15px ${FONT_UI}`, letterSpacing: 0.3 }}>Focus Room</span>
@@ -156,7 +156,7 @@ export default function TimelinePage() {
             onRename={(name) => renameTimeline(active.id, name)} onDelete={() => deleteTimeline(active.id)} onOpen={() => refreshList().catch(() => {})} />
         )}
         <span style={{ flex: 1 }} />
-        <button onClick={() => navigate('/')} className="tl-hide-sm"
+        <button onClick={() => navigate('/worlds')} className="tl-hide-sm"
           style={{ background: 'none', border: '1px solid #262626', borderRadius: 999, color: C.dim, font: `800 12px ${FONT_UI}`, padding: '7px 14px', cursor: 'pointer', flexShrink: 0 }}>
           Odalar
         </button>

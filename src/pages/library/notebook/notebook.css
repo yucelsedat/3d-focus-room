@@ -1,0 +1,152 @@
+/* PDF defterinin sayfası (Faz 3): yazma alanları, yer tutucular, sayfa çevirme. */
+
+.nb-paper {
+  -webkit-font-smoothing: antialiased;
+}
+
+.nb-scroll {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(36, 41, 47, 0.25) transparent;
+}
+
+/* Biçimli yazı: tıklayınca yerinde yazılır */
+.nb-md-unit {
+  cursor: text;
+}
+
+/* Yazılan birim: biçimli hâliyle aynı yerde, aynı yazı stilinde */
+.nb-unit-input {
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  caret-color: #24292f;
+  cursor: text;
+}
+.nb-unit-input:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(36, 41, 47, 0.32);
+  pointer-events: none;
+}
+.nb-unit-input::selection,
+.nb-unit-input *::selection,
+.nb-raw-input::selection {
+  background: var(--nb-selection, rgba(11, 92, 173, 0.25));
+}
+
+.nb-raw-input::placeholder,
+.nb-title-input::placeholder {
+  color: rgba(36, 41, 47, 0.32);
+}
+
+.nb-hint:focus-visible,
+.lib-hand-icon:focus-visible {
+  outline: 2px solid rgba(11, 92, 173, 0.5);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* El çizimi düğme: basınca hafif gri halka (RN Pressable "pressed") */
+.lib-hand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.lib-hand-icon:not(:disabled):active {
+  background-color: rgba(56, 56, 61, 0.08);
+}
+@media (hover: hover) {
+  .lib-hand-icon:not(:disabled):hover {
+    background-color: rgba(56, 56, 61, 0.05);
+  }
+}
+
+/* Sayfa çevrilirken yazı seçilmez */
+.nb-turning,
+.nb-turning * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  cursor: grabbing !important;
+}
+
+.nb-carousel {
+  scrollbar-width: none;
+}
+.nb-carousel::-webkit-scrollbar {
+  display: none;
+}
+
+/* Alt biçim çubuğu ve ayar şeridi: basınca / üstüne gelince geri bildirim */
+.nb-tool:not(:disabled):active {
+  background-color: rgba(36, 41, 47, 0.1) !important;
+}
+@media (hover: hover) {
+  .nb-tool:not(:disabled):hover {
+    box-shadow: inset 0 0 0 1px rgba(36, 41, 47, 0.12);
+  }
+  .nb-sidebar-row:not(:disabled):hover {
+    background-color: rgba(56, 56, 61, 0.05);
+  }
+}
+.nb-sidebar-row:not(:disabled):active {
+  background-color: rgba(56, 56, 61, 0.08);
+}
+.nb-tool:focus-visible,
+.nb-sidebar-row:focus-visible {
+  outline: 2px solid rgba(11, 92, 173, 0.5);
+  outline-offset: -2px;
+}
+.nb-tool-row {
+  scrollbar-width: none;
+}
+.nb-tool-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* Bloğun tutamacı: basılı tutup sürükle */
+.nb-grip {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+.nb-grip:active {
+  cursor: grabbing;
+}
+.nb-grip:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(11, 92, 173, 0.4);
+  border-radius: 6px;
+}
+
+/* Yapıştır düğmesinin yanında atan nokta */
+.nb-paste-halo {
+  animation: nb-halo 1100ms cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+@keyframes nb-halo {
+  from {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+.nb-attach-option:hover,
+.nb-attach-option:focus-visible {
+  background-color: #f3eedf !important;
+  outline: none;
+}
+.nb-file-tag:hover {
+  background-color: #f3eedf !important;
+}
+.nb-photo:focus-visible {
+  outline: 2px solid rgba(11, 92, 173, 0.5);
+  outline-offset: 2px;
+}

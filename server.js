@@ -14,6 +14,7 @@ import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 import { sanitizeNotebook, createEmptyDoc, resolveRoot, planNotebookReconcile, cleanBookName, cleanCover, NB_LIMITS } from './src/utils/notebookModel.js';
 import { getGifFrames } from './server/gifFrames.js';
+import { registerLibraryRoutes } from './server/library.js';
 import { sanitizeTimeline, createEmptyTimeline, sanitizeTimelineName, noteToText, itemAssetUrls, TL_LIMITS } from './src/utils/timelineModel.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -117,7 +118,12 @@ app.use(cors());
 app.use('/api/notebook', express.json({ limit: '2mb' }));
 app.use('/api/notebooks', express.json({ limit: '2mb' }));
 app.use('/api/timelines', express.json({ limit: '5mb' }));
+// Kitaplık blokları uzun Markdown taşıyabilir
+app.use('/api/library', express.json({ limit: '5mb' }));
 app.use(express.json());
+
+// Kitaplık (all-books): ana sayfanın defterleri — server/library.js
+registerLibraryRoutes(app, prisma);
 
 // Yüklenen dosyaları (kapak görselleri, medya) statik olarak sun.
 // Kart kodu API + coverImage ile bu URL'lere doğrudan istek atıyor;
