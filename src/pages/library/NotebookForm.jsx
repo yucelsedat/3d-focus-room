@@ -868,7 +868,7 @@ const styles = {
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: 10,
-    maxWidth: 5 * 44 + 4 * 10,
+    maxWidth: 6 * 44 + 5 * 10,
   },
   swatchRing: {
     ...resetButton,

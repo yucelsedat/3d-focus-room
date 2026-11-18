@@ -136,6 +136,17 @@ export const bookColors = {
   mustard: { name: 'Hardal', cover: '#C9962B', band: '#14213D' },
   sand: { name: 'Kum', cover: '#D8C7A3', band: '#7A1F2B' },
   charcoal: { name: 'Kömür', cover: '#2E2E30', band: '#C8553D' },
+  // Canlı kapaklar: grafik tasarım kitapları gibi parlak renkler. Bant rengi, PDF etiketindeki
+  // yazının (kapak renginde) üstünde okunacak biçimde seçildi.
+  coral: { name: 'Mercan', cover: '#FF5A4E', band: '#16161A' },
+  tangerine: { name: 'Mandalina', cover: '#FF8A1F', band: '#16161A' },
+  lemon: { name: 'Limon', cover: '#F6CF2F', band: '#2346D9' },
+  mint: { name: 'Nane', cover: '#34C38F', band: '#16161A' },
+  teal: { name: 'Camgöbeği', cover: '#0E9AA7', band: '#FFFFFF' },
+  sky: { name: 'Gök mavisi', cover: '#4BA8F5', band: '#16161A' },
+  cobalt: { name: 'Kobalt', cover: '#2346D9', band: '#F6CF2F' },
+  lilac: { name: 'Leylak', cover: '#9B7BFF', band: '#16161A' },
+  magenta: { name: 'Fuşya', cover: '#E83E8C', band: '#FFFFFF' },
 }
 
 export const DEFAULT_BOOK_COLOR = 'ink'
