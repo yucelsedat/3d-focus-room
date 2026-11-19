@@ -128,7 +128,7 @@ export default function BoardScreen() {
 
   return (
     <div className="lib-root">
-      <div className="lib-app" style={styles.safe}>
+      <div className="lib-app lib-app--rail" style={styles.safe}>
         {searching ? (
           <header style={styles.header}>
             <label style={styles.searchField}>
