@@ -194,3 +194,267 @@
 .lib-board-search::placeholder {
   color: rgba(244, 239, 230, 0.45);
 }
+
+/* ───────────────────────── Ana sayfa: yan yana kategori dolapları ─────────────────────────
+   Her kategorinin LED ışıklı ahşap dolabı yan yana durur; sekmeye basınca o kategorinin dolabı
+   ekranda değilse dolaplar onu gösterecek kadar kayar. Arka plan sıcak, koyu bir duvar tonu. */
+
+.lib-home {
+  background:
+    radial-gradient(60% 45% at 50% 0%, rgba(255, 190, 120, 0.14), transparent 70%),
+    linear-gradient(180deg, #2a170d, #3b2213 55%, #24140b);
+}
+
+/* Düzen: dolapların alanı ekranı kaplar; üstte ince kategori çubuğu, solda dikey gezinme şeridi */
+.lib-home .lib-room-app {
+  z-index: 1;
+  background: transparent;
+}
+.lib-room-wall {
+  position: absolute;
+  inset: 0 0 0 64px;
+}
+/* Yan yana dolaplar: yatay kaydırılır, bırakınca dolaplar bir dolap sınırına oturur */
+.lib-room-pager {
+  position: absolute;
+  inset: 0;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.lib-room-pager::-webkit-scrollbar {
+  display: none;
+}
+.lib-room-strip {
+  display: flex;
+  height: 100%;
+  width: max-content;
+}
+.lib-room-page {
+  position: relative;
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  scroll-snap-align: start;
+}
+@media (max-width: 759px) {
+  .lib-room-wall {
+    left: 48px;
+  }
+}
+.lib-topbar {
+  position: absolute;
+  top: 0;
+  left: 64px;
+  right: 0;
+  z-index: 3;
+  background: linear-gradient(180deg, rgba(14, 7, 3, 0.72), rgba(14, 7, 3, 0.35) 70%, rgba(14, 7, 3, 0));
+}
+@media (max-width: 759px) {
+  .lib-topbar {
+    left: 48px;
+  }
+}
+.lib-edit-hint {
+  position: absolute;
+  left: 50%;
+  top: 50px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(14, 7, 3, 0.6);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-weight: 200;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: #f4efe6;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Sol şerit: simgeler alt alta, seçilenin solunda kiremit bir çentik */
+.lib-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 4;
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: linear-gradient(90deg, rgba(14, 7, 3, 0.7), rgba(14, 7, 3, 0.3) 75%, rgba(14, 7, 3, 0));
+}
+/* Pano, takvim, ayraçlar: içerik soldaki şerit kadar içeride başlar, şerit sayfanın lacivertinde */
+.lib-app--rail {
+  padding-left: 64px;
+}
+.lib-rail--solid {
+  background: #14213d;
+  border-right: 1px solid rgba(244, 239, 230, 0.12);
+}
+@media (max-width: 759px) {
+  .lib-app--rail {
+    padding-left: 48px;
+  }
+  .lib-rail {
+    width: 48px;
+  }
+  .lib-rail-item {
+    width: 40px;
+    height: 40px;
+  }
+  .lib-rail-mark {
+    left: -4px;
+  }
+}
+.lib-rail-item {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+.lib-rail-mark {
+  position: absolute;
+  left: -6px;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+}
+.lib-rail-mark--on {
+  background: #c8553d;
+  box-shadow: 0 0 10px rgba(200, 85, 61, 0.7);
+}
+.lib-rail-item:focus-visible {
+  outline: 2px solid #c8553d;
+  outline-offset: 2px;
+}
+
+/* Dolabın gövdesi: taç, kaide, yan dikmeler, raf tahtaları ve bölme panelleri. Sıcak ahşap,
+   kenarlarda ışık alan ince bir pah */
+.lib-frame {
+  position: absolute;
+  background:
+    linear-gradient(180deg, rgba(255, 214, 160, 0.22), rgba(40, 14, 2, 0.28)),
+    url('/textures/room/warmwood_diff.jpg') 0 0 / 686px auto,
+    #b8763e;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 220, 170, 0.4),
+    inset 0 -1px 0 rgba(30, 10, 2, 0.5);
+}
+/* Taç: üst kenarı ışık alır */
+.lib-frame--crown {
+  z-index: 1;
+  border-radius: 6px 6px 0 0;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 236, 170, 0.7),
+    0 -6px 22px rgba(255, 206, 80, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 226, 130, 0.5) 0, rgba(255, 220, 140, 0.1) 5px, rgba(40, 14, 2, 0.3) 100%),
+    url('/textures/room/warmwood_diff.jpg') 0 0 / 686px auto,
+    #b8763e;
+}
+.lib-frame--plinth {
+  border-radius: 0 0 6px 6px;
+  background:
+    linear-gradient(180deg, rgba(40, 14, 2, 0.25), rgba(20, 7, 1, 0.55)),
+    url('/textures/room/warmwood_diff.jpg') 0 0 / 686px auto,
+    #9a5e30;
+}
+.lib-frame--stile {
+  background:
+    linear-gradient(90deg, rgba(40, 14, 2, 0.4), rgba(255, 210, 150, 0.12) 30%, rgba(40, 14, 2, 0.3)),
+    url('/textures/room/warmwood_diff.jpg') 0 0 / 686px auto,
+    #b8763e;
+}
+.lib-frame--plank {
+  z-index: 1;
+  background:
+    linear-gradient(180deg, rgba(255, 220, 170, 0.55) 0, rgba(255, 190, 120, 0.15) 2px, rgba(0, 0, 0, 0) 45%, rgba(30, 10, 2, 0.4) 100%),
+    url('/textures/room/warmwood_diff.jpg') 0 0 / 686px auto,
+    #b8763e;
+  box-shadow: 0 6px 10px -4px rgba(20, 6, 0, 0.55);
+}
+.lib-frame--divider {
+  z-index: 1;
+  background:
+    linear-gradient(90deg, rgba(40, 14, 2, 0.45), rgba(255, 210, 150, 0.12) 25%, rgba(40, 14, 2, 0.4)),
+    url('/textures/room/warmwood_diff.jpg') 0 0 / 686px auto,
+    #b8763e;
+}
+
+/* Raf bölmesi: arka pano, tepesinde sarı LED şerit. Yalnız seçili dolabın (.lib-cabinet--lit)
+   LED'leri yanar: şerit parlar, ışığı arka panoya yukarıdan yayılıp söner. Öbür dolapların
+   şeritleri sönük, panoları gölgede; dolap değişince ışık yumuşakça yanıp söner. */
+.lib-bay {
+  position: absolute;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(20, 6, 0, 0.45) 0, rgba(20, 6, 0, 0) 10px),
+    linear-gradient(180deg, rgba(70, 28, 6, 0.28) 0%, rgba(35, 13, 3, 0.5) 100%),
+    url('/textures/room/warmwood_diff.jpg') 0 0 / 686px auto,
+    #a8682f;
+  box-shadow:
+    inset 6px 0 10px -6px rgba(20, 6, 0, 0.55),
+    inset -6px 0 10px -6px rgba(20, 6, 0, 0.55);
+}
+/* LED'in arka panoya düşen ışığı */
+.lib-bay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(115% 80% at 50% 0%, rgba(255, 214, 90, 0.62) 0%, rgba(255, 190, 60, 0.26) 42%, rgba(255, 170, 50, 0) 78%);
+  opacity: 0;
+  transition: opacity 360ms ease-out;
+}
+/* LED şerit: sönükken koyu, ışıksız bir çubuk */
+.lib-bay::after {
+  content: '';
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 3px;
+  height: 3px;
+  border-radius: 2px;
+  background: #6e5a36;
+  box-shadow: 0 0 0 0 rgba(255, 200, 60, 0);
+  transition:
+    background-color 360ms ease-out,
+    box-shadow 360ms ease-out;
+}
+.lib-cabinet--lit .lib-bay::before {
+  opacity: 1;
+}
+/* Şeridin ışığı aşağı doğru yayılır: üstteki raf tahtası (ya da taç) yukarı yayılanı örttüğü için
+   her raftaki şerit aynı görünsün diye parıltı aşağı kaydırılmıştır */
+.lib-cabinet--lit .lib-bay::after {
+  background: #ffe680;
+  box-shadow:
+    0 1px 4px 1px rgba(255, 220, 100, 0.95),
+    0 5px 14px 3px rgba(255, 196, 50, 0.65),
+    0 10px 26px 6px rgba(255, 180, 40, 0.3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lib-bay::before,
+  .lib-bay::after {
+    transition: none;
+  }
+}
+
+/* Ana sayfanın + düğmesi hafifçe parlar */
+.lib-home .lib-fab {
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.5),
+    0 0 26px rgba(255, 120, 70, 0.35) !important;
+}
+

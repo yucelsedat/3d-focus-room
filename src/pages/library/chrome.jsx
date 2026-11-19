@@ -7,9 +7,12 @@ import { Icon, StickyNoteIcon } from './icons.jsx'
 import { getLastNotebook } from './state.js'
 import { colors, fonts, type } from './theme.js'
 
+// Ana sayfanın (3B oda) cam panelindeki ayırıcı çizgiler
+const ROOM_LINE = 'rgba(255, 226, 190, 0.12)'
+
 // Kitaplığın başlığının altındaki sekmeler: her kategori kendi raflarını gösterir. Sekmeler yana
 // kayar; ayar simgesi sağda sabit durur.
-export function CategoryTabs({ categories, activeId, counts, onSelect, onManage }) {
+export function CategoryTabs({ categories, activeId, counts, onSelect, onManage, tone, leading, trailing }) {
   const scrollRef = useRef(null)
   const tabRefs = useRef(new Map())
 
@@ -23,7 +26,8 @@ export function CategoryTabs({ categories, activeId, counts, onSelect, onManage 
   }, [activeId, categories])
 
   return (
-    <div style={tabStyles.bar}>
+    <div style={{ ...tabStyles.bar, ...(tone === 'room' ? tabStyles.barRoom : null) }}>
+      {leading}
       <div ref={scrollRef} className="lib-scroll-x" style={tabStyles.scroll} role="tablist">
         <div style={tabStyles.tabs}>
           {categories.map((category) => {
@@ -53,13 +57,14 @@ export function CategoryTabs({ categories, activeId, counts, onSelect, onManage 
           })}
         </div>
       </div>
+      {trailing}
       <button
         type="button"
         onClick={onManage}
         aria-label="Kategorileri düzenle"
         title="Kategori ekle, adını değiştir ya da sil"
         className="lib-press"
-        style={tabStyles.manage}
+        style={{ ...tabStyles.manage, ...(tone === 'room' ? tabStyles.manageRoom : null) }}
       >
         <Icon name="pricetags-outline" size={20} color={colors.onInk} />
       </button>
@@ -76,6 +81,15 @@ const tabStyles = {
     alignItems: 'stretch',
     backgroundColor: colors.ink,
     borderBottom: '1px solid rgba(244, 239, 230, 0.18)',
+  },
+  // Ana sayfada sekmeler cam panelin üstünde durur: zemin saydam, çizgi sıcak ve soluk
+  // Ana sayfada sekmeler odanın üstünde ince bir çubuktur: zemin saydam, çizgi yok
+  barRoom: {
+    height: 44,
+    alignItems: 'center',
+    padding: '0 6px',
+    backgroundColor: 'transparent',
+    borderBottom: 0,
   },
   scroll: {
     flex: 1,
@@ -135,6 +149,12 @@ const tabStyles = {
     background: 'transparent',
     cursor: 'pointer',
   },
+  manageRoom: {
+    width: 40,
+    height: 40,
+    borderLeft: 0,
+    borderRadius: 20,
+  },
 }
 
 // Kitaplıkta yeni defter açan yuvarlak buton; alanın sağ alt köşesinde durur
@@ -165,7 +185,7 @@ const fabStyle = {
 
 // Not sayfası dışındaki ekranların altındaki gezinme çubuğu. Defter, en son açılan defteri kaldığı sayfadan açar; rafta
 // defter yoksa oluşturma ekranını.
-export function BottomNav({ active, onReselect }) {
+export function BottomNav({ active, onReselect, tone, orientation = 'vertical' }) {
   const navigate = useNavigate()
 
   function goToLibrary() {
@@ -189,6 +209,10 @@ export function BottomNav({ active, onReselect }) {
     else navigate('/favorites', { replace: active !== 'library' })
   }
 
+  // Dikey (varsayılan): ekranın solunda alt alta simgeler. Sayfa .lib-app--rail ile şerit kadar
+  // sağa kayar; odada şerit saydam, öbür sayfalarda lacivert zeminli
+  const vertical = orientation === 'vertical'
+
   async function openLastNotebook() {
     const notebook = await getLastNotebook().catch(() => null)
     if (notebook) navigate(`/notebook?id=${notebook.id}`)
@@ -196,18 +220,46 @@ export function BottomNav({ active, onReselect }) {
   }
 
   return (
-    <nav style={navStyles.bar} aria-label="Gezinme">
-      <NavItem icon="library" label="Kitaplık" hint="Defterlerin durduğu rafları göster" selected={active === 'library'} onPress={goToLibrary} />
-      <NavItem icon="sticky" label="Pano" hint="Panoya tutturduğun notları göster" selected={active === 'board'} onPress={goToBoard} />
-      <NavItem icon="calendar" label="Takvim" hint="Yılın aylarını, haftalarını ve günlerini göster" selected={active === 'calendar'} onPress={goToCalendar} />
-      <NavItem icon="bookmark" label="Ayraçlar" hint="Ayraç koyduğun sayfaları göster" selected={active === 'favorites'} onPress={goToFavorites} />
-      <NavItem icon="book" label="Defter" hint="En son açtığın defteri kaldığın sayfadan aç" onPress={openLastNotebook} />
+    <nav
+      className={vertical ? (tone === 'room' ? 'lib-rail' : 'lib-rail lib-rail--solid') : undefined}
+      style={vertical ? undefined : { ...navStyles.bar, ...(tone === 'room' ? navStyles.barRoom : null) }}
+      aria-label="Gezinme"
+    >
+      <NavItem vertical={vertical} icon="library" label="Kitaplık" hint="Defterlerin durduğu rafları göster" selected={active === 'library'} onPress={goToLibrary} />
+      <NavItem vertical={vertical} icon="sticky" label="Pano" hint="Panoya tutturduğun notları göster" selected={active === 'board'} onPress={goToBoard} />
+      <NavItem vertical={vertical} icon="calendar" label="Takvim" hint="Yılın aylarını, haftalarını ve günlerini göster" selected={active === 'calendar'} onPress={goToCalendar} />
+      <NavItem vertical={vertical} icon="bookmark" label="Ayraçlar" hint="Ayraç koyduğun sayfaları göster" selected={active === 'favorites'} onPress={goToFavorites} />
+      <NavItem vertical={vertical} icon="book" label="Defter" hint="En son açtığın defteri kaldığın sayfadan aç" onPress={openLastNotebook} />
     </nav>
   )
 }
 
-function NavItem({ icon, label, hint, selected = false, disabled = false, onPress }) {
+function NavItem({ icon, label, hint, selected = false, disabled = false, vertical = false, onPress }) {
   const dim = selected ? null : { opacity: disabled ? 0.3 : 0.55 }
+  // Dikey şeritte yalnızca simge; adı ipucunda ve ekran okuyucuda
+  if (vertical) {
+    return (
+      <button
+        type="button"
+        onClick={onPress}
+        disabled={disabled}
+        role="tab"
+        aria-selected={selected}
+        aria-label={label}
+        title={`${label} — ${hint}`}
+        className="lib-press lib-rail-item"
+      >
+        <span className={selected ? 'lib-rail-mark lib-rail-mark--on' : 'lib-rail-mark'} />
+        <span style={dim}>
+          {icon === 'sticky' ? (
+            <StickyNoteIcon size={23} color={colors.onInk} filled={selected} />
+          ) : (
+            <Icon name={selected ? icon : `${icon}-outline`} size={23} color={colors.onInk} />
+          )}
+        </span>
+      </button>
+    )
+  }
   return (
     <button
       type="button"
@@ -241,6 +293,10 @@ const navStyles = {
     justifyContent: 'center',
     padding: '0 8px 6px',
     backgroundColor: colors.ink,
+  },
+  barRoom: {
+    backgroundColor: 'rgba(20, 11, 6, 0.35)',
+    borderTop: `1px solid ${ROOM_LINE}`,
   },
   // Geniş ekranda sekmeler ortada, telefondaki aralıklarla durur
   item: {

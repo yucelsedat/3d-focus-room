@@ -81,7 +81,7 @@ export default function FavoritesPage() {
 
   return (
     <div className="lib-root">
-      <div className="lib-app" style={styles.safe}>
+      <div className="lib-app lib-app--rail" style={styles.safe}>
         <header style={styles.header}>
           <h1 style={styles.title}>Ayraçlar</h1>
         </header>

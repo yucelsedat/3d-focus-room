@@ -3,15 +3,32 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } fro
 import { BookCover } from './BookCover.jsx'
 import { BOOK_RATIO } from './coverStyle.js'
 import { BOOKS_PER_SHELF } from './model.js'
-import { bookColorOf, shelf as shelfColors } from './theme.js'
+import { bookColorOf } from './theme.js'
 
 const SIDE = 24
+const SIDE_NARROW = 10
 const GAP = 18
-// Rafın kalınlığı ve kitabın üstünde kalan boşluk
+const GAP_NARROW = 10
+// Rafın kalınlığı ve kitabın üstünde kalan boşluk (üstte LED şeridi yanar)
 const PLANK = 16
-const HEADROOM = 24
-// Son rafın oluşturma butonunun üstünde kalması için alttaki boşluk
+const HEADROOM = 30
+// Son rafın oluşturma butonunun üstünde kalması için alttaki boşluk; yan yana duran dolaplarda
+// (single) yok: dolap ekranın altına kadar iner, + düğmesi üstünde yüzer
 const BOTTOM_SPACE = 96
+// Dolabın gövdesi: yan tahtalar, üstteki taç, alttaki kaide ve dolabın üstündeki boşluk.
+// Dar ekranda yan tahtalar ve kenar payı incelir ki kitaplar küçülmesin.
+const FRAME = 16
+const FRAME_NARROW = 9
+const MARGIN = 28
+const MARGIN_NARROW = 4
+const CROWN = 20
+const PLINTH = 22
+const PAD_TOP = 18
+// Tek sütunlu dolap (yan yana duran kategori dolaplarından biri): üstünde üst çubuğa yer kalır
+const SINGLE_MAX = 520
+const PAD_TOP_SINGLE = 64
+// Yan yana duran dolapların arasındaki pay (dolabın iki yanında)
+const MARGIN_ROOM = 22
 // Ekranda en az bu kadar raf sırası görünsün; ekran genişse kitaplar buna göre küçülür
 const MIN_VISIBLE_SHELVES = 3
 const MIN_VISIBLE_ROWS_WIDE = 2
@@ -34,34 +51,56 @@ const MAX_SPEED = 12
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 const bayLeft = (g, shelf) => g.originX + (shelf % g.cols) * g.bayWidth
 const slotLeft = (g, shelf, index) => bayLeft(g, shelf) + g.side + index * g.step
-// Kitap rafın üstünde durur
-const slotTop = (g, shelf) => Math.floor(shelf / g.cols) * g.rowHeight + HEADROOM
-const contentHeight = (g) => Math.max(g.viewHeight, g.rows * g.rowHeight + BOTTOM_SPACE)
+// Raf sırasının üstü (g.top dolabın ilk sırasının başladığı yerdir); kitap rafın üstünde durur
+const rowTop = (g, row) => g.top + row * g.rowHeight
+const slotTop = (g, shelf) => rowTop(g, Math.floor(shelf / g.cols)) + HEADROOM
+const contentHeight = (g) => Math.max(g.viewHeight, g.top + g.rows * g.rowHeight + PLINTH + g.bottomSpace)
 
-function measure(width, height, shelfCount) {
-  const cols = width >= BAY_MIN * 2 ? Math.min(MAX_COLS, Math.floor(width / BAY_MIN)) : 1
-  const bayWidth = cols === 1 ? width : Math.min(width / cols, BAY_MAX)
+function measure(width, height, shelfCount, single) {
+  const roomy = width >= 600
+  const frame = roomy ? FRAME : FRAME_NARROW
+  // Telefonda tek dolap ekranı kaplar; pay ancak yan yana dolaplar sığınca bırakılır
+  const margin = roomy ? MARGIN : single && width >= 420 ? MARGIN_ROOM : MARGIN_NARROW
+  const inner = width - 2 * (frame + margin)
+  const cols = !single && inner >= BAY_MIN * 2 ? Math.min(MAX_COLS, Math.floor(inner / BAY_MIN)) : 1
+  const bayWidth = cols === 1 ? Math.min(inner, single ? SINGLE_MAX : inner) : Math.min(inner / cols, BAY_MAX)
+  const padTop = single ? PAD_TOP_SINGLE : PAD_TOP
+  const bottomSpace = single ? 0 : BOTTOM_SPACE
+  const sideMin = roomy ? SIDE : SIDE_NARROW
+  const gap = roomy ? GAP : GAP_NARROW
   // Bir rafa BOOKS_PER_SHELF kitap yan yana sığar; ekran alçaksa en az birkaç raf sırası
   // görünsün diye kitaplar küçülür ve raflar bölmede ortalanır
-  const byWidth = (bayWidth - SIDE * 2 - GAP * (BOOKS_PER_SHELF - 1)) / BOOKS_PER_SHELF
+  const byWidth = (bayWidth - sideMin * 2 - gap * (BOOKS_PER_SHELF - 1)) / BOOKS_PER_SHELF
   const minRows = cols > 1 ? MIN_VISIBLE_ROWS_WIDE : MIN_VISIBLE_SHELVES
-  const byHeight = ((height - BOTTOM_SPACE) / minRows - HEADROOM - PLANK) / BOOK_RATIO
+  const chrome = cols > 1 ? PAD_TOP + CROWN + PLINTH : 0
+  const byHeight = ((height - bottomSpace - chrome) / minRows - HEADROOM - PLANK) / BOOK_RATIO
   const bookWidth = Math.max(40, Math.min(byWidth, byHeight, MAX_BOOK))
   const bookHeight = bookWidth * BOOK_RATIO
-  const row = BOOKS_PER_SHELF * bookWidth + (BOOKS_PER_SHELF - 1) * GAP
+  const row = BOOKS_PER_SHELF * bookWidth + (BOOKS_PER_SHELF - 1) * gap
   // Son sıra da tam dolu çizilir: boş bölmeler de birer raftır, defter oraya da konabilir
   const padded = Math.max(cols, Math.ceil(shelfCount / cols) * cols)
+  const rows = padded / cols
+  const rowHeight = HEADROOM + bookHeight + PLANK
+  // Dolap ekrana sığıyorsa dikeyde ortalanır (alttaki + düğmesine yer bırakarak)
+  const cabinetHeight = CROWN + rows * rowHeight + PLINTH
+  const free = height - (padTop + cabinetHeight + bottomSpace)
+  const cabinetTop = padTop + Math.max(0, Math.floor(free / 2))
   return {
     cols,
     bayWidth,
+    frame,
     originX: (width - cols * bayWidth) / 2,
     bookWidth,
     bookHeight,
-    side: Math.max(SIDE, (bayWidth - row) / 2),
-    step: bookWidth + GAP,
-    rowHeight: HEADROOM + bookHeight + PLANK,
+    side: Math.max(sideMin, (bayWidth - row) / 2),
+    step: bookWidth + gap,
+    rowHeight,
     shelfCount: padded,
-    rows: padded / cols,
+    rows,
+    cabinetTop,
+    cabinetHeight,
+    bottomSpace,
+    top: cabinetTop + CROWN,
     viewWidth: width,
     viewHeight: height,
   }
@@ -94,7 +133,23 @@ function previewSlot(shelf, index, from, to, counts) {
 // Bir kategorinin kitaplığı: raflar (geniş ekranda yan yana bölmelerde), her rafta yan yana
 // BOOKS_PER_SHELF kitap; aşağı doğru uzar ve aşağı yukarı kaydırılır. Düzenlerken kitaplar
 // basılı tutulup sürüklenir.
-export function Bookshelf({ shelves: rawShelves, editing, onOpen, onSelect, onMove, onDragChange, children, ref }) {
+//
+// single: yan yana duran kategori dolaplarından biri (tek sütun). lit: seçili dolap; yalnız onun
+// raflarındaki LED'ler yanar (öbürlerininki sönük). onScrollY: dolap aşağı yukarı
+// kaydırılınca (yan yana duran öbür dolaplar da aynı yüksekliğe kaysın diye).
+export function Bookshelf({
+  shelves: rawShelves,
+  editing,
+  onOpen,
+  onSelect,
+  onMove,
+  onDragChange,
+  single = false,
+  lit = true,
+  onScrollY,
+  children,
+  ref,
+}) {
   const wallRef = useRef(null)
   const scrollRef = useRef(null)
   const [size, setSize] = useState(null)
@@ -106,6 +161,11 @@ export function Bookshelf({ shelves: rawShelves, editing, onOpen, onSelect, onMo
 
   useImperativeHandle(ref, () => ({
     scrollToTop: (animated) => scrollRef.current?.scrollTo({ top: 0, behavior: animated ? 'smooth' : 'auto' }),
+    // Yan yana duran dolaplar aynı yükseklikte kalır; zaten oradaysa olay döngüsü kurulmaz
+    setScrollTop: (top) => {
+      const el = scrollRef.current
+      if (el && Math.abs(el.scrollTop - top) > 0.5) el.scrollTop = top
+    },
   }))
 
   useLayoutEffect(() => {
@@ -119,7 +179,7 @@ export function Bookshelf({ shelves: rawShelves, editing, onOpen, onSelect, onMo
     return () => ro.disconnect()
   }, [])
 
-  const g = size && size.width > 0 && measure(size.width, size.height, rawShelves.length)
+  const g = size && size.width > 0 && measure(size.width, size.height, rawShelves.length, single)
   const shelves = g
     ? Array.from({ length: g.shelfCount }, (_, i) => rawShelves[i] ?? [])
     : rawShelves
@@ -133,8 +193,8 @@ export function Bookshelf({ shelves: rawShelves, editing, onOpen, onSelect, onMo
     const left = slotLeft(g, d.from.shelf, d.from.index)
     const top = slotTop(g, d.from.shelf)
     const x = clamp(left + d.fx, 0, g.viewWidth - g.bookWidth)
-    const y = clamp(top + d.fy + scroll - d.startScroll, 0, slotTop(g, g.shelfCount - 1))
-    const row = clamp(Math.floor((y + g.bookHeight / 2) / g.rowHeight), 0, g.rows - 1)
+    const y = clamp(top + d.fy + scroll - d.startScroll, g.top, slotTop(g, g.shelfCount - 1))
+    const row = clamp(Math.floor((y - g.top + g.bookHeight / 2) / g.rowHeight), 0, g.rows - 1)
     const col = clamp(Math.floor((x + g.bookWidth / 2 - g.originX) / g.bayWidth), 0, g.cols - 1)
     const shelf = row * g.cols + col
     const room = (counts[shelf] ?? 0) - (shelf === d.from.shelf ? 1 : 0)
@@ -168,7 +228,7 @@ export function Bookshelf({ shelves: rawShelves, editing, onOpen, onSelect, onMo
       if (y < EDGE) speed = -(1 - Math.max(0, y) / EDGE)
       else if (y > g.viewHeight - EDGE) speed = Math.min(1, (y - g.viewHeight + EDGE) / EDGE)
       if (speed !== 0) {
-        const max = Math.max(0, g.rows * g.rowHeight + BOTTOM_SPACE - g.viewHeight)
+        const max = Math.max(0, contentHeight(g) - g.viewHeight)
         const nextTop = clamp(el.scrollTop + (speed * MAX_SPEED * elapsed) / 16, 0, max)
         if (nextTop !== el.scrollTop) {
           el.scrollTop = nextTop
@@ -267,8 +327,14 @@ export function Bookshelf({ shelves: rawShelves, editing, onOpen, onSelect, onMo
     hold.current = null
   }, [editing])
 
+  const cabinetLeft = g ? g.originX - g.frame : 0
+  const cabinetWidth = g ? g.cols * g.bayWidth + g.frame * 2 : 0
   const wide = g && g.cols > 1
-  const plankInset = wide ? DIVIDER / 2 : 8
+  // Bölmenin iç kenarı: bölme panelinin ya da dolabın yan tahtasının yanından başlar
+  const bayInset = (shelf) => {
+    const col = shelf % g.cols
+    return { left: col === 0 ? 0 : DIVIDER / 2, right: col === g.cols - 1 ? 0 : DIVIDER / 2 }
+  }
 
   return (
     <div ref={wallRef} style={styles.wall}>
@@ -276,28 +342,63 @@ export function Bookshelf({ shelves: rawShelves, editing, onOpen, onSelect, onMo
         ref={scrollRef}
         className="lib-scroll-y"
         style={{ ...styles.scroll, overflowY: drag ? 'hidden' : 'auto' }}
+        onScroll={(e) => onScrollY?.(e.currentTarget.scrollTop)}
       >
         {g && (
-          <div style={{ position: 'relative', height: contentHeight(g) }}>
-            {shelves.map((_, shelf) => (
-              <div
-                key={shelf}
-                style={{
-                  ...styles.plank,
-                  left: bayLeft(g, shelf) + plankInset,
-                  width: g.bayWidth - plankInset * 2,
-                  top: (Math.floor(shelf / g.cols) + 1) * g.rowHeight - PLANK,
-                }}
-              />
-            ))}
+          <div className={lit ? 'lib-cabinet lib-cabinet--lit' : 'lib-cabinet'} style={{ position: 'relative', height: contentHeight(g) }}>
+            {/* Dolabın gövdesi: taç, kaide, yan dikmeler; aralarında raf bölmeleri */}
+            <div className="lib-frame lib-frame--crown" style={{ left: cabinetLeft, top: g.cabinetTop, width: cabinetWidth, height: CROWN }} />
+            <div
+              className="lib-frame lib-frame--plinth"
+              style={{ left: cabinetLeft, top: g.cabinetTop + g.cabinetHeight - PLINTH, width: cabinetWidth, height: PLINTH }}
+            />
+            <div className="lib-frame lib-frame--stile" style={{ left: cabinetLeft, top: g.cabinetTop, width: g.frame, height: g.cabinetHeight }} />
+            <div
+              className="lib-frame lib-frame--stile"
+              style={{ left: cabinetLeft + cabinetWidth - g.frame, top: g.cabinetTop, width: g.frame, height: g.cabinetHeight }}
+            />
+            {/* Raf bölmesi: arka pano, tepesinde sarı LED şerit */}
+            {shelves.map((_, shelf) => {
+              const inset = bayInset(shelf)
+              return (
+                <div
+                  key={`b${shelf}`}
+                  className="lib-bay"
+                  style={{
+                    left: bayLeft(g, shelf) + inset.left,
+                    width: g.bayWidth - inset.left - inset.right,
+                    top: rowTop(g, Math.floor(shelf / g.cols)),
+                    height: g.rowHeight - PLANK,
+                  }}
+                />
+              )
+            })}
+            {/* Raf tahtaları */}
+            {shelves.map((_, shelf) => {
+              const inset = bayInset(shelf)
+              return (
+                <div
+                  key={shelf}
+                  className="lib-frame lib-frame--plank"
+                  style={{
+                    left: bayLeft(g, shelf) + inset.left,
+                    width: g.bayWidth - inset.left - inset.right,
+                    top: rowTop(g, Math.floor(shelf / g.cols) + 1) - PLANK,
+                    height: PLANK,
+                  }}
+                />
+              )
+            })}
             {/* Geniş ekranda bölmeleri ayıran dikey ahşap paneller */}
             {wide &&
-              Array.from({ length: g.cols + 1 }, (_, c) => (
+              Array.from({ length: g.cols - 1 }, (_, c) => (
                 <div
                   key={`d${c}`}
+                  className="lib-frame lib-frame--divider"
                   style={{
-                    ...styles.divider,
-                    left: g.originX + c * g.bayWidth - DIVIDER / 2,
+                    left: g.originX + (c + 1) * g.bayWidth - DIVIDER / 2,
+                    top: g.top,
+                    width: DIVIDER,
                     height: g.rows * g.rowHeight,
                   }}
                 />
@@ -435,27 +536,5 @@ const styles = {
     position: 'absolute',
     inset: 0,
     overflowX: 'hidden',
-  },
-  plank: {
-    position: 'absolute',
-    height: PLANK,
-    boxSizing: 'border-box',
-    borderTop: `4px solid ${shelfColors.woodTop}`,
-    borderBottom: `3px solid ${shelfColors.woodEdge}`,
-    borderRadius: 2,
-    backgroundColor: shelfColors.wood,
-    boxShadow: '0px 8px 10px rgba(0, 0, 0, 0.45)',
-    zIndex: 1,
-  },
-  divider: {
-    position: 'absolute',
-    top: 0,
-    width: DIVIDER,
-    boxSizing: 'border-box',
-    borderLeft: `2px solid ${shelfColors.woodTop}`,
-    borderRight: `2px solid ${shelfColors.woodEdge}`,
-    backgroundColor: shelfColors.wood,
-    boxShadow: '4px 0 8px rgba(0, 0, 0, 0.35)',
-    zIndex: 1,
   },
 }
