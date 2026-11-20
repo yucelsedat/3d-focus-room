@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore'
+import { STICKY_COLORS, STICKY_DEFAULT_COLOR, stickyInk } from './stickyNote'
 import { useSpeechToText } from '../hooks/useSpeechToText'
 import { loadRoom } from '../utils/loadRoom'
 import { pasteRichTextAsMarkdown } from '../utils/richTextToMarkdown'
@@ -53,6 +54,7 @@ export function EditModal() {
   const [canvasBg, setCanvasBg]       = useState('#1a1a2e')
   const [headerBg, setHeaderBg]       = useState('#1a1a2e')
   const [headerColor, setHeaderColor] = useState('#ffffff')
+  const [stickyColor, setStickyColor] = useState(STICKY_DEFAULT_COLOR)
   const [editingId, setEditingId] = useState(null)
   const [editingContent, setEditingContent] = useState('')
   const [copiedId, setCopiedId] = useState(null)
@@ -205,7 +207,7 @@ export function EditModal() {
   }
 
   // Kopyala/Kes butonları için medya tip etiketleri
-  const mediaTypeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', projectview: 'ProjectView', bluprint: 'Blueprint', defter: 'Defter' }
+  const mediaTypeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', sticky: 'Sticky Not', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', projectview: 'ProjectView', bluprint: 'Blueprint', defter: 'Defter' }
 
   const handlePaste = async () => {
     if (!clonedMedia || !selectedTile) return
@@ -250,6 +252,38 @@ export function EditModal() {
   }
 
   const handleApply = async () => {
+    if (activeTab === 'sticky') {
+      setLoading(true)
+      setLoadingStep('saving')
+      try {
+        const r = await fetch('/api/sticky', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tileId: selectedTile.id,
+            width,
+            height,
+            color: stickyColor,
+            text: '',
+            position: JSON.stringify(selectedTile.position),
+            rotation: JSON.stringify(selectedTile.rotation),
+          })
+        })
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(d.error || 'Sticky not oluşturulamadı')
+        addMedia(d)
+        closeModal()
+        setWidth(4)
+        setHeight(4)
+      } catch (err) {
+        alert(err.message)
+      } finally {
+        setLoading(false)
+        setLoadingStep('')
+      }
+      return
+    }
+
     if (activeTab === 'header') {
       setLoading(true)
       setLoadingStep('saving')
@@ -917,8 +951,8 @@ export function EditModal() {
                 <div style={s.mediaItem}>
                   <div style={{ flex: 1, marginRight: '10px' }}>
                     <span style={s.mediaItemLabel}>
-                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'projectview' ? '🖥' : m.type === 'bluprint' ? '📐' : m.type === 'multiagent' ? '🤝' : m.type === 'defter' ? '📒' : '🖼'}{' '}
-                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'projectview' ? 'ProjectView' : m.type === 'bluprint' ? 'Blueprint' : m.type === 'multiagent' ? 'MultiAgent' : m.type === 'defter' ? 'Defter' : (m.url || '').split('/').pop()}
+                      {m.type === 'video' ? '🎬' : m.type === 'youtube' ? '▶️' : m.type === 'markdown' ? '📝' : m.type === 'canvas' ? '🎨' : m.type === 'session' ? '🤖' : m.type === 'roomchat' ? '🧠' : m.type === 'roomsession' ? '🏗' : m.type === 'projectview' ? '🖥' : m.type === 'bluprint' ? '📐' : m.type === 'multiagent' ? '🤝' : m.type === 'defter' ? '📒' : m.type === 'sticky' ? '🗒' : m.type === 'header' ? '🔤' : '🖼'}{' '}
+                      {m.type === 'youtube' ? 'YouTube Video' : m.type === 'markdown' ? 'Metin' : m.type === 'canvas' ? 'Canvas' : m.type === 'session' ? 'AI Session' : m.type === 'roomchat' ? 'Oda Sohbeti' : m.type === 'roomsession' ? 'Oda Projesi' : m.type === 'projectview' ? 'ProjectView' : m.type === 'bluprint' ? 'Blueprint' : m.type === 'multiagent' ? 'MultiAgent' : m.type === 'defter' ? 'Defter' : m.type === 'sticky' ? 'Sticky Not' : m.type === 'header' ? 'Başlık' : (m.url || '').split('/').pop()}
                     </span>
                     <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                       <label style={{ fontSize: '11px', color: '#888', display: 'flex', alignItems: 'center' }}>
@@ -1189,6 +1223,12 @@ export function EditModal() {
             🔤 Başlık
           </button>
           <button
+            style={activeTab === 'sticky' ? s.activeTab : s.tab}
+            onClick={() => { setActiveTab('sticky'); setWidth(4); setHeight(4) }}
+          >
+            🗒 Sticky Not
+          </button>
+          <button
             style={activeTab === 'defter' ? s.activeTab : s.tab}
             onClick={() => { setActiveTab('defter'); setWidth(6); setHeight(4) }}
           >
@@ -1256,6 +1296,40 @@ export function EditModal() {
                     style={{ width: 36, height: 28, border: 'none', background: 'none', cursor: 'pointer', padding: 0, borderRadius: 4 }} />
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Sticky Not */}
+          {activeTab === 'sticky' && (
+            <div style={s.inputGroup}>
+              <label style={s.label}>Not rengi</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                {STICKY_COLORS.map(c => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    title={c.label}
+                    aria-label={c.label}
+                    aria-pressed={stickyColor === c.hex}
+                    onClick={() => setStickyColor(c.hex)}
+                    style={{
+                      width: 28, height: 28, borderRadius: '50%', padding: 0, cursor: 'pointer', background: c.hex,
+                      border: stickyColor === c.hex ? '2px solid #fff' : '2px solid rgba(255,255,255,0.12)',
+                      boxShadow: stickyColor === c.hex ? `0 0 0 2px ${c.hex}` : 'none',
+                    }}
+                  />
+                ))}
+              </div>
+              <div style={{
+                width: 96, height: 96, background: stickyColor, borderRadius: 3, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', boxShadow: '0 8px 14px -8px rgba(0,0,0,0.6)',
+                fontFamily: "'Caveat', cursive", fontWeight: 600, fontSize: 22, color: stickyInk(stickyColor),
+              }}>
+                Not yaz…
+              </div>
+              <p style={s.note}>
+                Duvara tıklayıp yaz — yazı uzadıkça satır sayısı ve punto otomatik ayarlanır. ESC veya Ctrl+Enter ile bitir.
+              </p>
             </div>
           )}
 
@@ -1670,7 +1744,7 @@ export function EditModal() {
           )}
 
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'sticky' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -1699,7 +1773,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'sticky' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
