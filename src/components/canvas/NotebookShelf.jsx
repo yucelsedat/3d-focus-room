@@ -1,12 +1,12 @@
 // ── Kitaplık menüsü ──────────────────────────────────────────────────────────
 // Canvas tile ve Timeline ortak kullanır: kitaplıktaki bir deftere kart ekler, yeni defter
 // oluşturur, defteri düzenler. Ad, renk ve kategori deftere aittir (kitaplık), karta değil.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../store/useStore'
 import { useLibrary, refreshLibrary, libKey, KIND_LABEL } from '../notebook/libraryShelf'
 import { createLibraryBook, editLibraryBook, libraryMeta } from '../notebook/libraryForm'
 import { bookColorOf } from '../../pages/library/theme.js'
-import { stopEvt } from './canvasUtils'
+import { stopEvt, searchByName } from './canvasUtils'
 
 const FONT_UI = "'DM Sans', system-ui, sans-serif"
 const FONT_DISPLAY = "'Fraunces', Georgia, serif"
@@ -19,19 +19,25 @@ const PAPER = '#f7f2e4'
 // onPick(meta) seçilen deftere kart ekler (meta.lib = true, key 'lib:<id>'). "+ Yeni defter" ve
 // satırdaki ✎ kitaplığın formunu oyunun içinde açar (libraryForm.js); oluşturulan defter de onPick'le
 // karta dönüşür. Form açılınca menü (ör. timeline popover'ı) kapansa da söz çağıranın kapanışıyla çözülür.
+// Üstteki arama kutusu (oda aramasıyla aynı davranış): eşleşenler benzerliğe göre sıralanır; yazılan ad
+// birebir bir defter değilse listenin başında vurgulu "oluştur ve ekle" durur — Enter formu o adla açar.
+// ↑/↓ satırlar arasında gezer, Enter vurgulu satırı seçer.
 export function NotebookShelfMenu({ u = 1, style, onPick }) {
   const { books, categories, state } = useLibrary()
   const held = useStore(st => st.heldNotebook)
   const [busy, setBusy] = useState(false)
+  const [query, setQuery] = useState('')
+  const [activeIdx, setActiveIdx] = useState(0)
+  const listRef = useRef(null)
 
   useEffect(() => { refreshLibrary() }, [])
 
   const pick = (b) => onPick(libraryMeta(b))
-  const create = async () => {
+  const create = async (title) => {
     if (busy) return
     setBusy(true)
     try {
-      const meta = await createLibraryBook()
+      const meta = await createLibraryBook({ title: title || undefined })
       if (meta) onPick(meta)
     } finally { setBusy(false) }
   }
@@ -43,14 +49,60 @@ export function NotebookShelfMenu({ u = 1, style, onPick }) {
   // Kategorisi listede olmayan defter (ör. bu arada silinen kategori) en sonda
   const orphans = books.filter(b => !known.has(b.category_id))
   if (orphans.length) groups.push({ id: 'other', name: 'Diğer', books: orphans })
+  const catName = new Map(groups.map(g => [g.id, g.name]))
 
-  const row = (b, pinned = false) => {
+  // Seçilebilir satırlar, ekrandaki sırayla. Aramada liste düz (kategori satırın altında yazar),
+  // elindeki defter tekrar edilmez.
+  const search = searchByName(groups.flatMap(g => g.books), query, b => b.title)
+  const options = search.query
+    ? [...(search.exact ? [] : [{ create: true, name: search.query }]), ...search.matches.map(b => ({ book: b }))]
+    : [...(heldBook ? [{ book: heldBook, pinned: true }] : []), ...groups.flatMap(g => g.books.map(b => ({ book: b })))]
+  const active = Math.max(0, Math.min(activeIdx, options.length - 1))
+  const choose = (opt) => opt.create ? create(opt.name) : pick(opt.book)
+  const onSearchKey = (e) => {
+    // Esc: önce aramayı temizler; boşsa menüyü kapatan dinleyicilere (canvas, timeline) bırakılır
+    if (e.key === 'Escape') { if (query) { e.stopPropagation(); setQuery(''); setActiveIdx(0) } return }
+    e.stopPropagation()   // yazılan harfler oyun / sayfa kısayollarına gitmesin
+    const n = options.length
+    if (!n) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const next = e.key === 'ArrowDown' ? (active + 1) % n : (active - 1 + n) % n
+      setActiveIdx(next)
+      listRef.current?.querySelector(`[data-opt="${next}"]`)?.scrollIntoView({ block: 'nearest' })
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (!e.repeat) choose(options[active])
+    }
+  }
+
+  const rowShell = (key, i, children) => (
+    <div key={key} data-opt={i} onMouseEnter={() => setActiveIdx(i)}
+      style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid rgba(255,255,255,0.05)',
+        background: i === active ? 'rgba(247,242,228,0.09)' : 'transparent' }}>
+      {children}
+    </div>
+  )
+  const createRow = (opt, i) => rowShell('create', i, (
+    <button type="button" disabled={busy} onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); choose(opt) }}
+      style={{ display: 'flex', alignItems: 'center', gap: 12 * u, flex: 1, minWidth: 0, padding: `${8 * u}px ${12 * u}px`, background: 'transparent',
+        border: 0, cursor: busy ? 'progress' : 'pointer', textAlign: 'left', color: PAPER }}>
+      <span style={{ width: 24 * u, height: 32 * u, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: 2 * u, border: `${1 * u}px dashed rgba(247,242,228,0.4)`, font: `200 ${16 * u}px ${FONT_UI}`, color: 'rgba(247,242,228,0.7)' }}>+</span>
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{ display: 'block', font: `italic 200 ${17 * u}px/1.15 ${FONT_DISPLAY}`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          textDecoration: 'underline', textUnderlineOffset: 3 * u }}>{opt.name}</span>
+        <span style={{ display: 'block', font: `800 ${9 * u}px ${FONT_UI}`, letterSpacing: '0.16em', textTransform: 'uppercase',
+          color: 'rgba(247,242,228,0.45)', marginTop: 3 * u }}>oluştur ve ekle</span>
+      </span>
+    </button>
+  ))
+
+  const row = (b, i, { pinned = false, withCategory = false } = {}) => {
     const color = bookColorOf(b.color)
-    const sub = pinned ? 'elinde' : [KIND_LABEL[b.kind] ?? 'Defter', b.year].filter(Boolean).join(' · ')
-    return (
-      <div key={`${pinned ? 'held' : 'b'}-${b.id}`} style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid rgba(255,255,255,0.05)' }}
-        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(247,242,228,0.07)' }}
-        onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+    const sub = pinned ? 'elinde'
+      : [withCategory && catName.get(known.has(b.category_id) ? b.category_id : 'other'), KIND_LABEL[b.kind] ?? 'Defter', b.year].filter(Boolean).join(' · ')
+    return rowShell(`${pinned ? 'held' : 'b'}-${b.id}`, i, (<>
       <button type="button" title="Canvas'a kart olarak ekle" onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); pick(b) }}
         style={{ display: 'flex', alignItems: 'center', gap: 12 * u, flex: 1, minWidth: 0, padding: `${8 * u}px ${4 * u}px ${8 * u}px ${12 * u}px`, background: 'transparent',
           border: 0, cursor: 'pointer', textAlign: 'left', color: PAPER }}>
@@ -73,8 +125,7 @@ export function NotebookShelfMenu({ u = 1, style, onPick }) {
         onMouseLeave={e => { e.currentTarget.style.color = 'rgba(247,242,228,0.5)' }}>
         ✎
       </button>
-      </div>
-    )
+    </>))
   }
   const head = (text) => (
     <div style={{ padding: `${10 * u}px ${12 * u}px ${4 * u}px`, font: `800 ${9 * u}px ${FONT_UI}`, letterSpacing: '0.22em', textTransform: 'uppercase', color: 'rgba(247,242,228,0.4)' }}>{text}</div>
@@ -91,16 +142,35 @@ export function NotebookShelfMenu({ u = 1, style, onPick }) {
             textDecoration: 'none', font: `800 ${10 * u}px ${FONT_UI}` }}>
           ↗
         </a>
-        <button type="button" disabled={busy} onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); create() }}
+        <button type="button" disabled={busy} onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); create(search.query) }}
           style={{ padding: `${7 * u}px ${12 * u}px`, borderRadius: 4 * u, border: 0, background: PAPER, color: '#1b1a18', cursor: busy ? 'progress' : 'pointer',
             font: `800 ${10 * u}px ${FONT_UI}`, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
           + Yeni defter
         </button>
       </div>
-      <div style={{ maxHeight: 380 * u, overflowY: 'auto' }}>
-        {heldBook && row(heldBook, true)}
-        {groups.map(g => <div key={g.id}>{head(g.name)}{g.books.map(b => row(b))}</div>)}
-        {state === 'ready' && !books.length && (
+      <div style={{ padding: `${10 * u}px ${12 * u}px`, borderBottom: '1px solid rgba(247,242,228,0.1)' }}>
+        <input type="text" autoFocus value={query} placeholder="Defter ara…" aria-label="Defter ara"
+          onChange={e => { setQuery(e.target.value); setActiveIdx(0) }} onKeyDown={onSearchKey}
+          onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+          style={{ width: '100%', height: 36 * u, padding: `0 ${12 * u}px`, boxSizing: 'border-box', borderRadius: 6 * u, outline: 'none',
+            background: 'rgba(247,242,228,0.06)', border: '1px solid rgba(247,242,228,0.22)', color: PAPER,
+            font: `200 ${15 * u}px ${FONT_UI}` }} />
+      </div>
+      <div ref={listRef} style={{ maxHeight: 380 * u, overflowY: 'auto' }}>
+        {search.query ? (
+          <>
+            {options.map((opt, i) => opt.create ? createRow(opt, i) : row(opt.book, i, { withCategory: true }))}
+          </>
+        ) : (() => {
+          let i = 0
+          return (
+            <>
+              {heldBook && row(heldBook, i++, { pinned: true })}
+              {groups.map(g => <div key={g.id}>{head(g.name)}{g.books.map(b => row(b, i++))}</div>)}
+            </>
+          )
+        })()}
+        {state === 'ready' && !books.length && !search.query && (
           <div style={{ padding: 18 * u, font: `200 ${13 * u}px ${FONT_UI}`, color: 'rgba(247,242,228,0.55)', textAlign: 'center' }}>
             Kitaplıkta henüz defter yok
           </div>
