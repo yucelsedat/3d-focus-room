@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom'
 
 import { colors, fonts, HAND_TAIL, notebook } from '../theme.js'
 import { HandDrawing, HandIcon } from './HandIcon.jsx'
+import { portalRoot } from '../portalRoot.js'
 
 const TEAR = 7
 const MARGIN = 34
@@ -133,7 +134,7 @@ export function PageSidebar({ visible, title, subtitle, sections, onClose }) {
         </div>
       </div>
     </div>,
-    document.body,
+    portalRoot(),
   )
 }
 

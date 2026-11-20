@@ -15,6 +15,7 @@ import { filterKindOf, hasNumberedPages, layoutOf, monthKey, monthRef, slotKey, 
 import { deleteContentFiles } from './notebook/blockClipboard.js'
 import { CalendarPage } from './notebook/CalendarPage.jsx'
 import { HabitPage } from './notebook/HabitPage.jsx'
+import { HandIcon } from './notebook/HandIcon.jsx'
 import { DEFAULT_PEN } from './notebook/marks.js'
 import { NotebookPage } from './notebook/NotebookPage.jsx'
 import { PageFilterMenu } from './notebook/PageFilterMenu.jsx'
@@ -133,7 +134,13 @@ function requestedKey(params) {
 
 export default function NotebookScreen() {
   const [params] = useSearchParams()
-  const notebookId = Number(params.get('id'))
+  return <NotebookView notebookId={Number(params.get('id'))} pageKey={requestedKey(params)} />
+}
+
+// Defterin kendisi: /notebook rotası ve oyundaki defter (LibraryNotebookOverlay) aynısını çizer.
+// onClose verilirse (gömülü) geri düğmesi ve Esc onu çağırır — onClose('button' | 'escape');
+// verilmezse geri, tarayıcı geçmişinde bir adım geri gider. onMissing: defter bulunamadı.
+export function NotebookView({ notebookId, pageKey, onClose, onMissing }) {
   const [notebook, setNotebook] = useState(null)
   const [missing, setMissing] = useState(false)
   const [ready, setReady] = useState(false)
@@ -161,13 +168,34 @@ export default function NotebookScreen() {
     return () => clearTimeout(timer)
   }, [markReady])
 
+  // Gömülüyken defter yüklenirken ya da bulunamadıysa da Esc kapatır (açık defterin Esc'i
+  // OpenNotebook'ta; o kurulana kadar burası)
+  useEffect(() => {
+    if (!onClose || notebook) return
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || document.querySelector('[aria-modal="true"]')) return
+      onClose('escape')
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose, notebook])
+
+  const missingRef = useRef(onMissing)
+  useEffect(() => {
+    missingRef.current = onMissing
+  })
+  useEffect(() => {
+    if (missing) missingRef.current?.()
+  }, [missing])
+
   return (
     <div className="lib-root">
       <div className="lib-app" style={styles.desk}>
-        {notebook && <OpenNotebook notebook={notebook} pageKey={requestedKey(params)} onReady={markReady} />}
+        {notebook && <OpenNotebook notebook={notebook} pageKey={pageKey} onReady={markReady} onClose={onClose} />}
         {missing && (
-          <div style={styles.center}>
+          <div style={{ ...styles.center, flexDirection: 'column', gap: 18 }}>
             <div style={styles.title}>{'Defter bulunamadı' + HAND_TAIL}</div>
+            {onClose && <HandIcon shape="back" label="Geri dön" size={28} color={colors.onInk} onPress={() => onClose('button')} />}
           </div>
         )}
         {loaderShown && !missing && <NotebookLoader done={ready || missing} onHidden={hideLoader} />}
@@ -203,7 +231,7 @@ async function writtenPageIndices(notebookId, layout, count, kinds) {
 
 const ADD_TURN_DURATION = 560
 
-function OpenNotebook({ notebook, pageKey, onReady }) {
+function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
   const navigate = useNavigate()
   const notebookId = notebook.id
   const isNotes = hasNumberedPages(notebook.kind)
@@ -294,7 +322,8 @@ function OpenNotebook({ notebook, pageKey, onReady }) {
   }
 
   function back() {
-    if (window.history.state?.idx > 0) navigate(-1)
+    if (onClose) onClose('button')
+    else if (window.history.state?.idx > 0) navigate(-1)
     else navigate('/', { replace: true })
   }
 
@@ -538,6 +567,30 @@ function OpenNotebook({ notebook, pageKey, onReady }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  })
+
+  // Gömülüyken Esc defteri kapatır — ama yalnızca defterde açık başka bir şey yoksa. Karar
+  // window'un capture fazında, olaydan önceki durumla verilir: iç katmanların (menü, resim,
+  // kenar çubuğu, seçim, çizim) kendi Esc dinleyicileri sonra çalışıp kendilerini kapatır; biz
+  // onların kapandığı halini görüp defteri de kapatmayız. Yazarken Esc önce odağı bırakır.
+  useEffect(() => {
+    if (!onClose) return
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (indexOpen || filterOpen || ghost || locked || drag.current) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      const el = document.activeElement
+      if (el && el !== document.body && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) {
+        // Alanın kendi Esc'i (ör. saat seçici) önce çalışsın; odak hâlâ ordaysa bırakılır
+        requestAnimationFrame(() => {
+          if (document.activeElement === el) el.blur()
+        })
+        return
+      }
+      onClose('escape')
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   })
 
   // Trackpad'de iki parmakla yana kaydırma da sayfa çevirir

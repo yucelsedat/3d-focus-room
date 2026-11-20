@@ -1,15 +1,16 @@
-// Defter overlay'ini bağlayan kabuk: oyun (App), /canvas ve /timeline aynısını
-// kullanır. Defter ayrı chunk (roughjs + dnd-kit); açılıştan birkaç saniye sonra
-// boşta önceden indirilir, açılınca hazır olur.
-//
-// onOpenRoom verilirse (sayfalar) satırın oda etiketi oyunu o odada açar; verilmezse
-// oyundayız ve oda yerinde yüklenir.
-import { lazy, Suspense, useEffect, useRef } from 'react'
+// Defter overlay'ini bağlayan kabuk: oyun (App), /canvas ve /timeline aynısını kullanır.
+// notebookOpen açıkken ya kitaplık defter formu (notebookForm: yeni / düzenle) ya da elde tutulan
+// kitaplık defteri ('lib:<id>') açılır. İkisi de ayrı chunk; açılıştan birkaç saniye sonra boşta
+// önceden indirilir, açılınca hazır olur.
+import { lazy, Suspense, useEffect } from 'react'
 import { useStore } from '../../store/useStore'
-import { setNotebookHost, closeNotebookOverlay } from './notebookStore'
+import { closeNotebookOverlay } from './notebookUi'
+import { parseLibKey } from './libraryShelf'
 
-const loadNotebookOverlay = () => import('./NotebookOverlay')
-const NotebookOverlay = lazy(loadNotebookOverlay)
+const loadLibraryOverlay = () => import('./LibraryNotebookOverlay')
+const LibraryNotebookOverlay = lazy(loadLibraryOverlay)
+const loadLibraryForm = () => import('./LibraryFormOverlay')
+const LibraryFormOverlay = lazy(loadLibraryForm)
 
 // Chunk henüz inmediyse anında geri bildirim. Tıklama yayılımı durdurulur:
 // aksi halde drei PointerLockControls imleci yeniden kilitler.
@@ -28,30 +29,33 @@ function NotebookFallback() {
   )
 }
 
-export function NotebookHost({ onOpenRoom }) {
+export function NotebookHost() {
   const open = useStore(st => st.notebookOpen)
-  const openRef = useRef(onOpenRoom)
-  useEffect(() => { openRef.current = onOpenRoom })
-  const page = !!onOpenRoom
-
-  useEffect(() => {
-    setNotebookHost(page ? { openRoom: (id, name) => openRef.current?.({ id, name }) } : null)
-    return () => setNotebookHost(null)
-  }, [page])
+  const libId = useStore(st => parseLibKey(st.heldNotebook))
+  const form = useStore(st => st.notebookForm)
+  // Açık ama gösterilecek bir şey yok (elde kitaplık defteri yok, form yok): kapı açık kalıp oyunu
+  // kilitlemesin
+  const empty = open && !form && libId === null
 
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((cb) => setTimeout(cb, 1))
-    const t = setTimeout(() => idle(() => { loadNotebookOverlay().catch(() => {}) }), 4000)
+    const t = setTimeout(() => idle(() => {
+      loadLibraryOverlay().catch(() => {})
+      loadLibraryForm().catch(() => {})
+    }), 4000)
     return () => clearTimeout(t)
   }, [])
+
+  useEffect(() => { if (empty) closeNotebookOverlay() }, [empty])
 
   // Sayfadan ayrılırken açık kalmasın (oyuna dönünce B'siz açılmasın)
   useEffect(() => () => { if (useStore.getState().notebookOpen) closeNotebookOverlay() }, [])
 
-  if (!open) return null
+  if (!open || empty) return null
   return (
     <Suspense fallback={<NotebookFallback />}>
-      <NotebookOverlay />
+      {form ? <LibraryFormOverlay key={form.token} request={form} />
+        : <LibraryNotebookOverlay key={libId} id={libId} />}
     </Suspense>
   )
 }

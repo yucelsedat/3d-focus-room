@@ -82,12 +82,18 @@ function useWidth(ref) {
 // /new-notebook?category= — kitaplıktan açılınca o an seçili kategori önceden seçili gelir
 export function NewNotebookPage() {
   const [params] = useSearchParams()
-  const categoryId = Number(params.get('category')) || GENERAL_CATEGORY_ID
+  return <NewNotebookForm categoryId={Number(params.get('category')) || GENERAL_CATEGORY_ID} />
+}
+
+// Oluşturma formu: rota ve oyundaki form overlay'i aynısını kullanır; onDone(yeni defterin id'si)
+export function NewNotebookForm({ categoryId = GENERAL_CATEGORY_ID, onDone, onCancel }) {
   return (
     <NotebookForm
       mode="create"
       initial={{ ...defaultSettings(), category_id: categoryId }}
       onSubmit={(settings) => createNotebook(settings)}
+      onDone={onDone}
+      onCancel={onCancel}
     />
   )
 }
@@ -96,12 +102,18 @@ export function NewNotebookPage() {
 // okunduktan sonra eski haliyle açılır
 export function EditNotebookPage() {
   const { id } = useParams()
+  return <EditNotebookForm id={Number(id)} />
+}
+
+// Düzenleme formu: rota ve oyundaki form overlay'i (LibraryFormOverlay) aynısını kullanır.
+// onDone / onCancel verilirse (gömülü) kaydedince / geri dönünce onlar çağrılır.
+export function EditNotebookForm({ id, onDone, onCancel }) {
   const [nb, setNb] = useState(null)
   const [missing, setMissing] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    getNotebook(Number(id))
+    getNotebook(id)
       .then((result) => {
         if (cancelled) return
         if (result) setNb(result)
@@ -113,23 +125,41 @@ export function EditNotebookPage() {
     }
   }, [id])
 
+  // Gömülüyken bulunamadı / yükleniyor ekranından Esc ile çıkılır (formun Esc'i form kurulunca)
+  useEffect(() => {
+    if (!onCancel || nb) return
+    const onKey = (e) => e.key === 'Escape' && !e.defaultPrevented && onCancel()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel, nb])
+
   if (missing) {
     return (
       <div className="lib-root">
-        <div className="lib-app" style={{ ...styles.safe, alignItems: 'center', justifyContent: 'center' }}>
+        <div className="lib-app" style={{ ...styles.safe, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
           <div style={{ ...fonts.handBold, fontSize: 30 }}>Defter bulunamadı</div>
+          {onCancel && (
+            <button type="button" onClick={onCancel} aria-label="Geri dön" className="lib-press" style={styles.back}>
+              <Icon name="arrow-back" size={24} color={colors.onInk} />
+            </button>
+          )}
         </div>
       </div>
     )
   }
   if (!nb) return <div className="lib-root"><div className="lib-app" style={styles.safe} /></div>
 
-  return <NotebookForm mode="edit" initial={nb} onSubmit={(settings) => updateNotebook(nb.id, settings)} />
+  return (
+    <NotebookForm mode="edit" initial={nb} onSubmit={(settings) => updateNotebook(nb.id, settings)}
+      onDone={onDone} onCancel={onCancel} />
+  )
 }
 
 // Defter oluşturma ve düzenleme. Oluştururken önce tür, sonra kapak (kapağın etiketine yazılan
 // ad, renk ve kitaplıkta duracağı kategori), en son sayfalar seçilir. Düzenlerken tür değişmez.
-export function NotebookForm({ mode, initial, onSubmit }) {
+// Gömülüyken (oyun, canvas, timeline) onCancel ilk adımdan geri dönünce, onDone(sonuç) kaydedince
+// çağrılır; verilmezse ikisi de kitaplığa döner.
+export function NotebookForm({ mode, initial, onSubmit, onDone, onCancel }) {
   const goBackToLibrary = useGoBackToLibrary()
   const bodyRef = useRef(null)
   const width = useWidth(bodyRef)
@@ -174,6 +204,7 @@ export function NotebookForm({ mode, initial, onSubmit }) {
 
   function back() {
     if (stepIndex > 0) setStepIndex(stepIndex - 1)
+    else if (onCancel) onCancel()
     else goBackToLibrary()
   }
 
@@ -186,7 +217,7 @@ export function NotebookForm({ mode, initial, onSubmit }) {
     setSaving(true)
     setError(null)
     try {
-      await onSubmit({
+      const result = await onSubmit({
         ...settings,
         title: name,
         binding: KIND_DEFAULTS[settings.kind].binding,
@@ -194,7 +225,8 @@ export function NotebookForm({ mode, initial, onSubmit }) {
         year: settings.kind === 'pdf' ? null : settings.year,
       })
       // Kitaplık açılınca defterleri yeniden okur, değişiklik rafta görünür
-      goBackToLibrary()
+      if (onDone) onDone(result)
+      else goBackToLibrary()
     } catch (err) {
       setError(err.message)
       setSaving(false)
@@ -217,7 +249,7 @@ export function NotebookForm({ mode, initial, onSubmit }) {
           <button
             type="button"
             onClick={back}
-            aria-label={stepIndex > 0 ? 'Önceki adım' : 'Kitaplığa dön'}
+            aria-label={stepIndex > 0 ? 'Önceki adım' : onCancel ? 'Kapat' : 'Kitaplığa dön'}
             className="lib-press"
             style={styles.back}
           >

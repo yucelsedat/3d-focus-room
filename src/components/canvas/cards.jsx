@@ -7,7 +7,10 @@ import { parseMd } from '../../utils/markdownRender'
 import { formatRange, formatRangeShort, statusOf } from '../../utils/timelineModel'
 import { stopEvt, parseInstaTitle, formatBytes, audioPool, getPoolAudio, togglePoolAudio, releasePoolAudio } from './canvasUtils'
 import { useStore } from '../../store/useStore'
-import { useShelf, ensureShelf, clothOf } from '../notebook/shelfStore'
+import { useLibrary, ensureLibrary, parseLibKey } from '../notebook/libraryShelf'
+import { BookCover } from '../../pages/library/BookCover.jsx'
+import { BOOK_RATIO } from '../../pages/library/coverStyle.js'
+import { bookColorOf } from '../../pages/library/theme.js'
 import { withAuthUser } from '../../utils/googleAccount'
 
 // Canvas'a özgü stiller (ortak .cvmd markdown stilleri utils/markdownRender'da)
@@ -291,64 +294,49 @@ export const RoomChip = ({ item }) => {
 }
 
 // ── Defter kartı ─────────────────────────────────────────────────────────────
-// Kitaplıktaki bir defterin kapağı (item.src = 'book:<id>' | 'room:<kökId>'). Ad ve
-// kapak kitaplıktan canlı okunur — aynı deftere bakan bütün kartlar birlikte değişir;
-// kartın kendi kopyası (name, cover) ilk çizim ve kitaplık yüklenemezse içindir.
-// Ölçüler kart genişliğine göre: köşe tutamacıyla büyütünce yazı da büyür.
+// Kitaplık defteri (src 'lib:<id>', new-defter-system): kitaplıktaki kapağın aynısı. Başlık, renk
+// ve bağlama kitaplıktan canlı; karttaki kopya (name, color, binding, year) yalnız yedek. Kapak
+// oranı sabit (BOOK_RATIO) — kart köşe tutamacıyla başka orana çekilirse kutuya sığıp ortalanır.
 export const NotebookCard = ({ item, width, clickable = false, onOpen }) => {
-  useEffect(() => { ensureShelf() }, [])
-  const live = useShelf(st => st.byKey[item.src])
-  const shelfReady = useShelf(st => st.state === 'ready')
+  useEffect(() => { ensureLibrary() }, [])
+  const id = parseLibKey(item.src)
+  const live = useLibrary(st => st.byId[id])
+  const ready = useLibrary(st => st.state === 'ready')
   const held = useStore(st => st.heldNotebook === item.src)
-  const [imgFail, setImgFail] = useState(null)
-  const name = live?.name || item.name || 'Defter'
-  const cover = live ? live.cover : item.cover
-  const hasImg = !!cover && imgFail !== cover
-  // Bağımsız defter kitaplıkta yoksa silinmiştir; oda defteri satırsız da olabilir
-  const missing = shelfReady && !live && item.src?.startsWith('book:')
-  const isRoom = item.src?.startsWith('room:')
-  const u = (width ?? item.w ?? 300) / 300
-  const spine = 22 * u
+  // Liste yüklendi ama defter yok → kitaplıktan silinmiş. Kitaplık anahtarı olmayan kart (eski
+  // 'book:' / 'room:' defter sistemi kaldırıldı) da silinmiş sayılır.
+  const missing = id === null || (ready && !live)
+  const book = live || { title: item.name, color: item.color, binding: item.binding, year: item.year }
+  const W = width ?? item.w ?? NOTEBOOK_W
+  // width verilirse (timeline görüntü ölçeği) kutunun boyu da aynı oranda ölçeklenir
+  const H = item.w && item.h ? item.h * W / item.w : W * BOOK_RATIO
+  const bw = Math.max(40, Math.min(W, H / BOOK_RATIO))
+  const u = bw / NOTEBOOK_W
+  const color = bookColorOf(book.color)
   const open = clickable && !missing && onOpen
+  const title = book.title || 'Defter'
 
   return (
-    <div title={missing ? 'Bu defter kitaplıktan silinmiş' : open ? `${name} — elime al` : name}
-      style={{ position: 'relative', width: '100%', height: '100%', boxSizing: 'border-box', pointerEvents: open ? 'auto' : 'none', cursor: open ? 'pointer' : 'inherit',
-        borderRadius: `${4 * u}px ${12 * u}px ${12 * u}px ${4 * u}px`, overflow: 'hidden',
-        background: missing ? '#2a2d33' : clothOf(item.src), opacity: missing ? 0.6 : 1,
-        boxShadow: `0 ${14 * u}px ${28 * u}px -${12 * u}px rgba(0,0,0,0.75), inset 0 0 0 ${1 * u}px rgba(255,255,255,0.08)` }}
+    <div title={missing ? 'Bu defter kitaplıktan silinmiş' : open ? `${title} — aç` : title}
+      style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        pointerEvents: open ? 'auto' : 'none', cursor: open ? 'pointer' : 'inherit',
+        opacity: missing ? 0.45 : 1, filter: missing ? 'grayscale(1)' : 'none' }}
       {...(open ? { onMouseDown: stopEvt, onClick: (e) => { stopEvt(e); onOpen() } } : {})}>
-      {hasImg && (
-        <img src={cover} alt="" draggable={false} referrerPolicy="no-referrer" onError={() => setImgFail(cover)}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
-      )}
-      {/* sırt: koyu şerit + dikiş */}
-      <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: spine, pointerEvents: 'none',
-        background: 'linear-gradient(90deg, rgba(0,0,0,0.55), rgba(0,0,0,0.25) 70%, rgba(255,255,255,0.08))' }}>
-        <div style={{ position: 'absolute', top: 10 * u, bottom: 10 * u, right: 5 * u, borderRight: `${1.5 * u}px dashed rgba(247,242,228,0.35)` }} />
+      <div style={{ position: 'relative', width: bw, height: bw * BOOK_RATIO, flexShrink: 0 }}>
+        <BookCover width={bw} title={title} color={color.cover} band={color.band} binding={book.binding || 'band'}
+          subtitle={missing ? 'silinmiş' : book.year ? String(book.year) : undefined} />
+        {held && !missing && (
+          <div style={{ position: 'absolute', top: 14 * u, right: -4 * u, pointerEvents: 'none', padding: `${5 * u}px ${12 * u}px ${5 * u}px ${10 * u}px`,
+            background: '#f4d35e', color: '#1d1c1a', font: `800 ${10 * u}px ${FONT_UI}`, letterSpacing: '0.18em', textTransform: 'uppercase',
+            borderRadius: `${3 * u}px 0 0 ${3 * u}px`, boxShadow: `0 ${4 * u}px ${10 * u}px -${6 * u}px rgba(0,0,0,0.7)` }}>
+            elinde
+          </div>
+        )}
       </div>
-      {/* etiket: ad + tür */}
-      <div style={{ position: 'absolute', left: spine + 16 * u, right: 16 * u, bottom: 18 * u, pointerEvents: 'none',
-        padding: `${12 * u}px ${14 * u}px`, borderRadius: 3 * u, background: 'rgba(247,242,228,0.94)', color: '#1d1c1a',
-        boxShadow: `0 ${6 * u}px ${14 * u}px -${8 * u}px rgba(0,0,0,0.6)` }}>
-        <div style={{ font: `800 ${10 * u}px ${FONT_UI}`, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'rgba(29,28,26,0.55)', marginBottom: 4 * u }}>
-          {missing ? 'silinmiş defter' : isRoom ? 'oda defteri' : 'defter'}
-        </div>
-        <div style={{ font: `italic 200 ${30 * u}px/1.08 ${FONT_DISPLAY}`, letterSpacing: '-0.01em', overflowWrap: 'anywhere',
-          display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-          {name}
-        </div>
-      </div>
-      {held && !missing && (
-        <div style={{ position: 'absolute', top: 14 * u, right: 0, pointerEvents: 'none', padding: `${5 * u}px ${12 * u}px ${5 * u}px ${10 * u}px`,
-          background: '#f4d35e', color: '#1d1c1a', font: `800 ${10 * u}px ${FONT_UI}`, letterSpacing: '0.18em', textTransform: 'uppercase',
-          borderRadius: `${3 * u}px 0 0 ${3 * u}px`, boxShadow: `0 ${4 * u}px ${10 * u}px -${6 * u}px rgba(0,0,0,0.7)` }}>
-          elinde
-        </div>
-      )}
     </div>
   )
 }
+const NOTEBOOK_W = 300
 
 // ── Not balonu ───────────────────────────────────────────────────────────────
 // Timeline'ın asıl öğesi; canvas tile'da da aynı öğe. Bütün ölçüler item.fontSize'a

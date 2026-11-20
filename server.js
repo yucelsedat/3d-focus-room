@@ -12,7 +12,6 @@ import { randomUUID } from 'crypto';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
-import { sanitizeNotebook, createEmptyDoc, resolveRoot, planNotebookReconcile, cleanBookName, cleanCover, NB_LIMITS } from './src/utils/notebookModel.js';
 import { getGifFrames } from './server/gifFrames.js';
 import { registerLibraryRoutes } from './server/library.js';
 import { sanitizeTimeline, createEmptyTimeline, sanitizeTimelineName, noteToText, itemAssetUrls, TL_LIMITS } from './src/utils/timelineModel.js';
@@ -113,10 +112,8 @@ const app = express();
 const port = Number(process.env.PORT) || 5001;
 
 app.use(cors());
-// Oda defteri gövdeleri 100 kB varsayılanını aşabilir. Global parser'dan ÖNCE
-// bağlanmalı: gövde burada okununca global parser isteği atlar (req._body).
-app.use('/api/notebook', express.json({ limit: '2mb' }));
-app.use('/api/notebooks', express.json({ limit: '2mb' }));
+// Büyük gövdeler 100 kB varsayılanını aşabilir. Global parser'dan ÖNCE bağlanmalı: gövde burada
+// okununca global parser isteği atlar (req._body).
 app.use('/api/timelines', express.json({ limit: '5mb' }));
 // Kitaplık blokları uzun Markdown taşıyabilir
 app.use('/api/library', express.json({ limit: '5mb' }));
@@ -157,7 +154,6 @@ ensureDir('public/uploads/videos');
 ensureDir('public/uploads/slides');
 ensureDir('public/uploads/audio');
 ensureDir('public/uploads/pdf');
-ensureDir('public/uploads/notebooks');
 
 // ─── Active room ──────────────────────────────────────────────────────────────
 let activeRoomId   = 'default';
@@ -297,17 +293,6 @@ const uploadCover = multer({
     destination: (req, file, cb) => cb(null, 'public/uploads/images/'),
     filename: (req, file, cb) => cb(null, `cover-${Date.now()}-${diskName(file.originalname)}`),
   }),
-});
-
-// Defter kapağı: kendi klasöründe → kapak değişince / defter silinince güvenle silinir
-const notebookCoverUpload = multer({
-  ...MULTER_UTF8,
-  limits: { fileSize: 15 * 1024 * 1024 },
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'public/uploads/notebooks/'),
-    filename: (req, file, cb) => cb(null, `cover-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${diskName(file.originalname)}`),
-  }),
-  fileFilter: (req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
 });
 
 const canvasUpload = multer({
@@ -529,7 +514,6 @@ app.delete('/api/rooms/:id', async (req, res) => {
     await prisma.room.deleteMany({ where: { id: { in: allIds } } });
     await cleanupSyncGroups();   // silinen odalardaki senkron üyeler → tek kalan grupları çöz
     for (const roomId of allIds) removeRoomDiskArtifacts(roomId);
-    await reconcileNotebooks();   // silinen ağacın defteri / satırları
     if (allIds.includes(activeRoomId)) activeRoomId = 'default';
     return res.json({ ok: true, deletedIds: allIds });
   }
@@ -548,7 +532,6 @@ app.delete('/api/rooms/:id', async (req, res) => {
   await prisma.room.delete({ where: { id } });
   await cleanupSyncGroups();   // silinen odadaki senkron üyeler → tek kalan grupları çöz
   removeRoomDiskArtifacts(id);
-  await reconcileNotebooks();   // çocuklar yeni kök oldu → satırları kendi defterlerine
 
   if (activeRoomId === id) activeRoomId = 'default';
   res.json({ ok: true, deletedIds: [id] });
@@ -650,255 +633,6 @@ app.delete('/api/timelines/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// ─── Room Notebook API (oda defteri) ─────────────────────────────────────────
-// Defter en üstteki kök odaya aittir; ağaçtaki her oda aynı defteri görür.
-// Okuma herhangi bir odadan (kök sunucuda çözülür), yazma yalnızca açık kök
-// id'sine yapılır: GET ile PUT arasında ağaç değiştiyse yanlış deftere yazılmaz.
-
-function parseNotebook(raw) {
-  try { return sanitizeNotebook(JSON.parse(raw)); } catch { return null; }
-}
-
-app.get('/api/notebook/:roomId', async (req, res) => {
-  const rooms = await prisma.room.findMany({ select: { id: true, name: true, parentId: true } });
-  const byId = new Map(rooms.map(r => [r.id, r]));
-  if (!byId.has(req.params.roomId)) return res.status(404).json({ error: 'Oda bulunamadı' });
-  const rootRoomId = resolveRoot(byId, req.params.roomId);
-  const book = await prisma.roomNotebook.findUnique({ where: { rootRoomId } });
-  res.json({
-    rootRoomId,
-    rootName: byId.get(rootRoomId).name,
-    meta: roomBookMeta(rootRoomId, byId.get(rootRoomId).name, book),
-    rev: book?.rev ?? 0,
-    content: (book && parseNotebook(book.content)) || createEmptyDoc(),
-    tree: rooms.filter(r => resolveRoot(byId, r.id) === rootRoomId),
-  });
-});
-
-app.put('/api/notebook/:rootRoomId', async (req, res) => {
-  const { rootRoomId } = req.params;
-  const { content, rev } = req.body ?? {};
-  const room = await prisma.room.findUnique({ where: { id: rootRoomId }, select: { parentId: true } });
-  if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
-  if (room.parentId) return res.status(409).json({ code: 'root-changed', error: 'Defter ağacı değişti' });
-  const clean = sanitizeNotebook(content);
-  if (!clean || !Number.isInteger(rev) || rev < 0) return res.status(400).json({ error: 'Geçersiz defter verisi' });
-  const json = JSON.stringify(clean);
-  if (json.length > NB_LIMITS.bytes) return res.status(413).json({ error: 'Defter çok büyük' });
-
-  if (rev === 0) {
-    // Satırı yalnızca ad/kapak için açılmış (rev 0) olabilir; yoksa oluştur
-    const r = await prisma.roomNotebook.updateMany({ where: { rootRoomId, rev: 0 }, data: { content: json, rev: 1 } });
-    if (r.count) return res.json({ rev: 1 });
-    try {
-      await prisma.roomNotebook.create({ data: { rootRoomId, content: json, rev: 1 } });
-      return res.json({ rev: 1 });
-    } catch { /* zaten var → aşağıda rev uyuşmazlığı */ }
-  } else {
-    const r = await prisma.roomNotebook.updateMany({
-      where: { rootRoomId, rev },
-      data: { content: json, rev: { increment: 1 } },
-    });
-    if (r.count) return res.json({ rev: rev + 1 });
-  }
-  const cur = await prisma.roomNotebook.findUnique({ where: { rootRoomId } });
-  res.status(409).json({
-    code: 'rev-mismatch',
-    error: 'Defter başka yerde güncellendi',
-    rev: cur?.rev ?? 0,
-    content: cur ? parseNotebook(cur.content) : null,
-  });
-});
-
-// ─── Kitaplık (bağımsız defterler + oda defterlerinin ad/kapağı) ─────────────
-// Canvas'taki defter kartı 'book:<id>' ya da 'room:<kökId>' anahtarını taşır;
-// ad ve kapak satırda durur, kart dokümanı indirmeden çizilir. Bağımsız defterin
-// dokümanı oda defteriyle aynı şema ve aynı rev kuralıdır.
-
-const NOTEBOOK_COVER_DIR = '/uploads/notebooks/';
-
-function roomBookMeta(rootRoomId, rootName, row) {
-  return {
-    key: `room:${rootRoomId}`, kind: 'room', id: rootRoomId,
-    name: row?.name || rootName, customName: row?.name || null, roomName: rootName,
-    cover: row?.coverUrl || null, updatedAt: row?.updatedAt ?? null,
-  };
-}
-
-function bookMeta(row) {
-  return {
-    key: `book:${row.id}`, kind: 'book', id: row.id,
-    name: row.name, customName: row.name, roomName: null,
-    cover: row.coverUrl || null, updatedAt: row.updatedAt,
-  };
-}
-
-// Yalnızca kapak klasörümüzdeki ve artık hiçbir defterin kullanmadığı dosya silinir
-async function releaseNotebookCover(url) {
-  if (!url || !url.startsWith(NOTEBOOK_COVER_DIR)) return;
-  const [a, b] = await Promise.all([
-    prisma.notebook.count({ where: { coverUrl: url } }),
-    prisma.roomNotebook.count({ where: { coverUrl: url } }),
-  ]);
-  if (!a && !b) unlinkUploads([url]);
-}
-
-// { name?, cover? } → Prisma data; geçersiz kapak 400
-function parseBookMetaBody(body, { roomKind }) {
-  const data = {};
-  if (body && 'name' in body) {
-    const name = cleanBookName(body.name);
-    if (!name && !roomKind) return { error: 'Defter adı boş olamaz' };
-    data.name = name;
-  }
-  if (body && 'cover' in body) {
-    if (body.cover === null || body.cover === '') data.coverUrl = null;
-    else {
-      const cover = cleanCover(body.cover);
-      if (!cover) return { error: 'Geçersiz kapak adresi' };
-      data.coverUrl = cover;
-    }
-  }
-  return { data };
-}
-
-// room: şu anki oda → o ağacın defteri satırı olmasa da listede olsun
-app.get('/api/notebooks', async (req, res) => {
-  const [books, roomBooks, rooms] = await Promise.all([
-    prisma.notebook.findMany({ select: { id: true, name: true, coverUrl: true, updatedAt: true }, orderBy: { updatedAt: 'desc' } }),
-    prisma.roomNotebook.findMany({ select: { rootRoomId: true, name: true, coverUrl: true, updatedAt: true } }),
-    prisma.room.findMany({ where: VISIBLE_ROOMS, select: { id: true, name: true, parentId: true } }),
-  ]);
-  const byId = new Map(rooms.map(r => [r.id, r]));
-  const rowByRoot = new Map(roomBooks.map(b => [b.rootRoomId, b]));
-  const roots = new Set(roomBooks.map(b => b.rootRoomId).filter(id => byId.has(id) && !byId.get(id).parentId));
-  const here = typeof req.query.room === 'string' && byId.has(req.query.room) ? resolveRoot(byId, req.query.room) : null;
-  if (here) roots.add(here);
-  const roomList = [...roots]
-    .map(id => roomBookMeta(id, byId.get(id).name, rowByRoot.get(id)))
-    .sort((a, b) => (a.key === `room:${here}` ? -1 : b.key === `room:${here}` ? 1 : a.name.localeCompare(b.name, 'tr')));
-  res.json({ books: [...books.map(bookMeta), ...roomList], hereKey: here ? `room:${here}` : null });
-});
-
-app.post('/api/notebooks', async (req, res) => {
-  const parsed = parseBookMetaBody({ name: req.body?.name || 'Yeni defter', ...(req.body?.cover ? { cover: req.body.cover } : {}) }, { roomKind: false });
-  if (parsed.error) return res.status(400).json({ error: parsed.error });
-  const row = await prisma.notebook.create({
-    data: { id: randomUUID(), name: parsed.data.name, coverUrl: parsed.data.coverUrl ?? null, content: JSON.stringify(createEmptyDoc()), rev: 1 },
-  });
-  res.json(bookMeta(row));
-});
-
-// Kapak yükleme (multer'ın yazdığı dosya hiçbir deftere bağlanmazsa öksüz kalır;
-// istemci yalnızca seçilen dosyayı yükler, hemen PATCH eder)
-app.post('/api/notebooks/cover', notebookCoverUpload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Resim dosyası yok' });
-  res.json({ url: `${NOTEBOOK_COVER_DIR}${req.file.filename}` });
-});
-
-app.get('/api/notebooks/:id', async (req, res) => {
-  const row = await prisma.notebook.findUnique({ where: { id: req.params.id } });
-  if (!row) return res.status(404).json({ error: 'Defter bulunamadı' });
-  // Satır oda etiketleri için oda adları (bağımsız defter her odada açılabilir)
-  const tree = await prisma.room.findMany({ where: VISIBLE_ROOMS, select: { id: true, name: true, parentId: true } });
-  res.json({ meta: bookMeta(row), rev: row.rev, content: parseNotebook(row.content) || createEmptyDoc(), tree });
-});
-
-app.put('/api/notebooks/:id', async (req, res) => {
-  const { id } = req.params;
-  const { content, rev } = req.body ?? {};
-  const clean = sanitizeNotebook(content);
-  if (!clean || !Number.isInteger(rev) || rev < 0) return res.status(400).json({ error: 'Geçersiz defter verisi' });
-  const json = JSON.stringify(clean);
-  if (json.length > NB_LIMITS.bytes) return res.status(413).json({ error: 'Defter çok büyük' });
-  const r = await prisma.notebook.updateMany({ where: { id, rev }, data: { content: json, rev: { increment: 1 } } });
-  if (r.count) return res.json({ rev: rev + 1 });
-  const cur = await prisma.notebook.findUnique({ where: { id } });
-  if (!cur) return res.status(404).json({ error: 'Defter bulunamadı' });
-  res.status(409).json({ code: 'rev-mismatch', error: 'Defter başka yerde güncellendi', rev: cur.rev, content: parseNotebook(cur.content) });
-});
-
-app.patch('/api/notebooks/:id', async (req, res) => {
-  const parsed = parseBookMetaBody(req.body, { roomKind: false });
-  if (parsed.error) return res.status(400).json({ error: parsed.error });
-  const cur = await prisma.notebook.findUnique({ where: { id: req.params.id }, select: { coverUrl: true } });
-  if (!cur) return res.status(404).json({ error: 'Defter bulunamadı' });
-  const row = await prisma.notebook.update({ where: { id: req.params.id }, data: parsed.data });
-  if ('coverUrl' in parsed.data && cur.coverUrl !== row.coverUrl) await releaseNotebookCover(cur.coverUrl);
-  res.json(bookMeta(row));
-});
-
-app.delete('/api/notebooks/:id', async (req, res) => {
-  const cur = await prisma.notebook.findUnique({ where: { id: req.params.id }, select: { coverUrl: true } });
-  if (!cur) return res.status(404).json({ error: 'Defter bulunamadı' });
-  await prisma.notebook.delete({ where: { id: req.params.id } });
-  await releaseNotebookCover(cur.coverUrl);
-  res.json({ ok: true });
-});
-
-// Oda defterinin adı / kapağı (herhangi bir odadan; kök sunucuda çözülür).
-// Satır yoksa boş dokümanla rev 0 açılır → defterin ilk PUT'u (rev 0) onu doldurur.
-app.patch('/api/notebook/:roomId/meta', async (req, res) => {
-  const parsed = parseBookMetaBody(req.body, { roomKind: true });
-  if (parsed.error) return res.status(400).json({ error: parsed.error });
-  const rooms = await prisma.room.findMany({ select: { id: true, name: true, parentId: true } });
-  const byId = new Map(rooms.map(r => [r.id, r]));
-  if (!byId.has(req.params.roomId)) return res.status(404).json({ error: 'Oda bulunamadı' });
-  const rootRoomId = resolveRoot(byId, req.params.roomId);
-  const cur = await prisma.roomNotebook.findUnique({ where: { rootRoomId }, select: { coverUrl: true } });
-  const row = await prisma.roomNotebook.upsert({
-    where: { rootRoomId },
-    update: parsed.data,
-    create: { rootRoomId, content: JSON.stringify(createEmptyDoc()), rev: 0, ...parsed.data },
-  });
-  if (cur && 'coverUrl' in parsed.data && cur.coverUrl !== row.coverUrl) await releaseNotebookCover(cur.coverUrl);
-  res.json(roomBookMeta(rootRoomId, byId.get(rootRoomId).name, row));
-});
-
-// Oda ağacı değişince (re-parent, özel kapı bağla/sil, oda silme) satırları
-// eklendikleri odanın bugünkü kökünün defterine taşır. Planı saf model üretir
-// (planNotebookReconcile); burada yalnızca yazılır. Oda işlemlerini asla bozmaz.
-async function reconcileNotebooks(attempt = 0) {
-  try {
-    const rows = await prisma.roomNotebook.findMany();
-    if (!rows.length) return;
-    const books = rows
-      .map(b => ({ rootRoomId: b.rootRoomId, rev: b.rev, content: parseNotebook(b.content) }))
-      .filter(b => b.content);
-    const rooms = await prisma.room.findMany({ select: { id: true, name: true, parentId: true } });
-    const { upserts, deletes } = planNotebookReconcile(books, rooms);
-    if (!upserts.length && !deletes.length) return;
-
-    let conflict = false;
-    for (const u of upserts) {
-      const content = JSON.stringify(u.content);
-      if (u.existed) {
-        const r = await prisma.roomNotebook.updateMany({
-          where: { rootRoomId: u.rootRoomId, rev: u.rev },
-          data: { content, rev: { increment: 1 } },
-        });
-        if (!r.count) conflict = true;
-      } else {
-        try {
-          await prisma.roomNotebook.create({ data: { rootRoomId: u.rootRoomId, content, rev: 1 } });
-        } catch { conflict = true; }
-      }
-    }
-    if (!conflict) {
-      const byRev = new Map(books.map(b => [b.rootRoomId, b.rev]));
-      const coverOf = new Map(rows.map(b => [b.rootRoomId, b.coverUrl]));
-      for (const id of deletes) {
-        const r = await prisma.roomNotebook.deleteMany({ where: { rootRoomId: id, rev: byRev.get(id) } });
-        if (r.count) await releaseNotebookCover(coverOf.get(id));
-      }
-    }
-    // Arada bir PUT araya girdiyse güncel veriyle bir kez daha dene
-    if (conflict && attempt < 2) await reconcileNotebooks(attempt + 1);
-  } catch (err) {
-    console.error('[notebook] uzlaştırma hatası:', err.message);
-  }
-}
-
 app.put('/api/rooms/:id/cover-image', async (req, res) => {
   const { id } = req.params;
   const { coverImage } = req.body;
@@ -936,8 +670,6 @@ app.put('/api/rooms/:id/settings', async (req, res) => {
       for (const c of cats) await tx.roomCategory.create({ data: { roomId: id, categoryId: c.id } });
     }
   });
-
-  if (parentId !== undefined && (parentId || null) !== room.parentId) await reconcileNotebooks();
 
   const updated = await prisma.room.findUnique({ where: { id }, include: roomInclude });
   res.json(serializeRoom(updated));
@@ -1112,7 +844,6 @@ app.delete('/api/special-doors/:id', async (req, res) => {
     },
     data: { parentId: null },
   });
-  await reconcileNotebooks();   // kopan alt ağaç kendi defterine
   const allRooms = await prisma.room.findMany({ where: VISIBLE_ROOMS, include: roomInclude });
   res.json({ success: true, rooms: allRooms.map(serializeRoom) });
 });
@@ -1135,7 +866,6 @@ app.post('/api/special-doors/link', async (req, res) => {
     }
     await tx.specialDoor.create({ data: { roomId: activeRoomId, anchorId, targetRoomId, layer } });
   });
-  if (linkType === 'child') await reconcileNotebooks();   // bağlanan ağaç bu defterle birleşir
 
   const updatedDoors = await prisma.specialDoor.findMany({
     where: { roomId: activeRoomId },
@@ -1298,7 +1028,6 @@ app.post('/api/rooms/:id/disconnect', async (req, res) => {
       data: { parentId: null },
     }),
   ]);
-  if (parent.count) await reconcileNotebooks();   // kopan alt ağaç kendi defterine
   const allRooms = await prisma.room.findMany({ where: VISIBLE_ROOMS, orderBy: { lastActiveAt: 'desc' }, include: roomInclude });
   res.json({
     success: true,
@@ -5343,7 +5072,6 @@ process.on('exit', shutdownDevServers);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 await bootMigrate();
-await reconcileNotebooks();   // sunucu kapalıyken yapılmış ağaç değişikliklerini yakala
 app.listen(port, () => {
   console.log(`Backend server running at http://localhost:${port}`);
 });

@@ -514,7 +514,14 @@ export function pasteMsgView(msg, missingLinksMessage) {
 
 // Defter kartı: kitaplıktaki deftere bakar (src); ad/kapak kopyası ilk çizim için.
 // Boy canvas'ın 1920 px'lik mantıksal ölçeğinde (timeline aynı ölçek).
+// Kitaplık defteri (meta.lib, src 'lib:<id>') kitaplıktaki kapağın oranında (1.45, coverStyle
+// BOOK_RATIO) çizilir; kopyası başlık / renk / bağlama / yıl. c: kartın ortası.
 export const NOTEBOOK_CARD = { w: 300, h: 400 }
-export function makeNotebookItem(meta, pt) {
-  return { id: crypto.randomUUID(), type: 'notebook', x: pt.x, y: pt.y, w: NOTEBOOK_CARD.w, h: NOTEBOOK_CARD.h, src: meta.key, name: meta.name, cover: meta.cover }
+const LIB_BOOK_CARD = { w: 300, h: 435 }
+export function makeNotebookItem(meta, c) {
+  const { w, h } = meta.lib ? LIB_BOOK_CARD : NOTEBOOK_CARD
+  const base = { id: crypto.randomUUID(), type: 'notebook', x: c.x - w / 2, y: c.y - h / 2, w, h, src: meta.key, name: meta.name }
+  return meta.lib
+    ? { ...base, color: meta.color, binding: meta.binding, year: meta.year ?? null }
+    : { ...base, cover: meta.cover }
 }
