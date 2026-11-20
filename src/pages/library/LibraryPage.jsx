@@ -15,6 +15,8 @@ import { AddButton, BottomNav, CategoryTabs } from './chrome.jsx'
 import { Icon } from './icons.jsx'
 import { DEFAULT_SHELF_COUNT, GENERAL_CATEGORY_ID, settleOverflow } from './model.js'
 import { forgetNotebook } from './state.js'
+import { forgetLibraryBook, libKey } from '../../components/notebook/libraryShelf.js'
+import { useStore } from '../../store/useStore.js'
 import { TornPaperMenu } from './TornPaperMenu.jsx'
 import { colors, fonts, HAND_TAIL } from './theme.js'
 
@@ -193,6 +195,11 @@ export default function LibraryPage() {
     setMenuOpen(false)
     await deleteNotebook(id)
     forgetNotebook(id)
+    // Oyunda elde tutulan defter buysa bırakılır (B artık "elinde defter yok" der); kartlar
+    // "silinmiş" görünür
+    forgetLibraryBook(id)
+    const st = useStore.getState()
+    if (st.heldNotebook === libKey(id)) st.setHeldNotebook(null)
     setNotebooks((prev) => prev.filter((n) => n.id !== id))
   }
 

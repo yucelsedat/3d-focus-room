@@ -142,7 +142,7 @@ export default function CanvasPage() {
         )}
       />
       {/* defter kartından "elime al": defter bu sayfada açılır, oda etiketi oyuna götürür */}
-      <NotebookHost onOpenRoom={openRoom} />
+      <NotebookHost />
     </>
   )
 }

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { colors, fonts, HAND_TAIL, notebook } from './theme.js'
+import { portalRoot } from './portalRoot.js'
 
 // Yırtık kenarın dişlerinin derinliği; içerik bu kadar içeriden başlar
 const TEAR = 6
@@ -172,7 +173,7 @@ export function TornPaperMenu({ visible, title, message, options = [], children,
         ))}
       </div>
     </div>,
-    document.body,
+    portalRoot(),
   )
 }
 

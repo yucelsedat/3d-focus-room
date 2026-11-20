@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom'
 import { fonts } from '../theme.js'
 import { attachmentUrl } from './attachments.js'
 import { HandIcon } from './HandIcon.jsx'
+import { portalRoot } from '../portalRoot.js'
 
 const MAX_SCALE = 6
 const MIN_CROP = 0.05
@@ -115,7 +116,7 @@ export function ImageViewer({ images, startIndex, onClose, onCrop }) {
         </>
       )}
     </div>,
-    document.body,
+    portalRoot(),
   )
 }
 

@@ -7,11 +7,17 @@ function readTileClipboard() {
   try { return JSON.parse(localStorage.getItem(TILE_CLIP_KEY)) || null } catch { return null }
 }
 
-// Elimdeki defter: canvas'taki defter kartından "elime al" denince B tuşu oda defteri
-// yerine bunu açar; oda değişse de, /canvas ↔ /game geçişinde de elde kalır.
+// Elimdeki defter: canvas'taki kitaplık defteri kartından "elime al" denince B tuşu bunu açar;
+// oda değişse de, /canvas ↔ /game geçişinde de elde kalır. Yalnız 'lib:<id>' — kaldırılan eski
+// sistemin 'room:' / 'book:' anahtarı tarayıcıda kalmışsa yok sayılır ve silinir.
 const HELD_BOOK_KEY = 'nb:held'
 function readHeldNotebook() {
-  try { return localStorage.getItem(HELD_BOOK_KEY) || null } catch { return null }
+  try {
+    const key = localStorage.getItem(HELD_BOOK_KEY)
+    if (key && /^lib:\d+$/.test(key)) return key
+    if (key) localStorage.removeItem(HELD_BOOK_KEY)
+  } catch { /* depolama kapalı */ }
+  return null
 }
 
 export const useStore = create((set) => ({
@@ -25,9 +31,11 @@ export const useStore = create((set) => ({
   worldMedia: [],
   roomModal: false,
   menuModal: true,    // uygulama açılışında menü göster
-  notebookOpen: false, // B — oda defteri (kök odaya ait not/todo sayfası)
+  notebookOpen: false, // B / defter kartı — elde tutulan kitaplık defteri ya da kitaplık formu açık
   notebookRelock: false,
-  heldNotebook: readHeldNotebook(), // 'book:<id>' | 'room:<kökId>' | null — B bunu açar
+  notebookForm: null,  // { mode: 'create' | 'edit', id? } — notebookOpen ile birlikte: kitaplık defter formu (libraryForm.js)
+  hudNotice: null,     // { text, sub, id } — oyunda kısa süre görünen uyarı (HudNotice)
+  heldNotebook: readHeldNotebook(), // 'lib:<ShelfBook.id>' | null — B bunu açar
   hiddenWalls: [],        // iç duvar gizli tile ID'leri
   hiddenOuterWalls: [],   // 1. bahçe duvarı (±30) gizli tile ID'leri
   hiddenOuterWalls2: [],  // 2. bahçe duvarı (±40) gizli tile ID'leri
@@ -67,7 +75,9 @@ export const useStore = create((set) => ({
   // Kapanınca imleç yalnızca defter oyundan (kilitliyken, B ile) açıldıysa yeniden kilitlenir;
   // karttan açıldıysa kilit canvas düzenleme modunu kapatırdı
   openNotebook:  () => set({ notebookOpen: true, notebookRelock: typeof document !== 'undefined' && !!document.pointerLockElement }),
-  closeNotebook: () => set({ notebookOpen: false }),
+  closeNotebook: () => set({ notebookOpen: false, notebookForm: null }),
+  showHudNotice: (text, sub = '') => set({ hudNotice: { text, sub, id: Date.now() + Math.random() } }),
+  clearHudNotice: (id) => set((st) => (st.hudNotice?.id === id ? { hudNotice: null } : {})),
   setHeldNotebook: (key) => {
     try { key ? localStorage.setItem(HELD_BOOK_KEY, key) : localStorage.removeItem(HELD_BOOK_KEY) } catch {}
     set({ heldNotebook: key || null })

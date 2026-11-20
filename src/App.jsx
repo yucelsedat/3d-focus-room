@@ -6,6 +6,7 @@ import { FrameLimiter } from './components/FrameLimiter'
 import { Walls } from './components/Walls'
 import { Player } from './components/Player'
 import { Crosshair } from './components/Crosshair'
+import { HudNotice } from './components/HudNotice'
 import { EditModal } from './components/EditModal'
 import { RoomModal } from './components/RoomModal'
 import { OuterWalls } from './components/OuterWalls'
@@ -112,6 +113,7 @@ function App() {
           </Suspense>
         </Canvas>
         <Crosshair />
+        <HudNotice />
         <RoomNavHUD />
         <LoopIndicator />
         <EditModal />

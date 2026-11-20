@@ -110,34 +110,6 @@ model RoomLink {
   @@unique([roomId, anchorId, layer])
 }
 
-// Oda Defteri: B tuşuyla açılan defter, en üstteki kök odaya aittir ve o ağacın
-// tüm alt odalarında ortaktır. content = JSON doküman (src/utils/notebookModel.js).
-// Bilinçli olarak FK yok: kök cascade'siz silinince satırlar çocuk ağaçlara
-// dağıtılır (server.js reconcileNotebooks) — cascade defteri anında silerdi.
-// rev: iyimser eşzamanlılık (PUT eski rev ile gelirse 409).
-model RoomNotebook {
-  rootRoomId String   @id
-  content    String
-  rev        Int      @default(0)
-  // Kitaplık kartı için; null → kök odanın adı / kapaksız
-  name       String?
-  coverUrl   String?
-  updatedAt  DateTime @updatedAt
-}
-
-// Kitaplık: odaya bağlı olmayan defter. Canvas'taki defter kartı bunu gösterir,
-// karttan "elime al" denince B tuşu bu defteri açar. content = oda defteriyle
-// aynı JSON doküman (src/utils/notebookModel.js); rev aynı iyimser eşzamanlılık.
-model Notebook {
-  id        String   @id
-  name      String
-  coverUrl  String?
-  content   String
-  rev       Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 // Timeline: /timeline sayfasındaki ölçekli zaman ekseni üzerinde sonsuz canvas.
 // content = JSON doküman { items, bg, view } (src/utils/timelineModel.js);
 // öğeler canvas tile ile aynı şemayı paylaşır. rev: iyimser eşzamanlılık
