@@ -39,9 +39,10 @@ export function libraryMeta(book) {
   return { lib: true, key: libKey(book.id), name: book.title, color: book.color, binding: book.binding, year: book.year }
 }
 
-// Yeni defter: form kaydedilince kitaplık tazelenir, yeni defterin özeti döner (vazgeçilirse null)
-export async function createLibraryBook({ categoryId } = {}) {
-  const id = await openLibraryForm({ mode: 'create', categoryId })
+// Yeni defter: form kaydedilince kitaplık tazelenir, yeni defterin özeti döner (vazgeçilirse null).
+// title verilirse (menüde aranan ad) form o adla dolu açılır.
+export async function createLibraryBook({ categoryId, title } = {}) {
+  const id = await openLibraryForm({ mode: 'create', categoryId, title })
   if (id == null) return null
   await reloadLibrary()
   const book = useLibrary.getState().byId[id]

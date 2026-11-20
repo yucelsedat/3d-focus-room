@@ -28,7 +28,7 @@ export default function LibraryFormOverlay({ request }) {
       style={{ position: 'fixed', inset: 0, zIndex: 2147483647, cursor: 'auto' }}>
       {request.mode === 'edit'
         ? <EditNotebookForm id={request.id} onDone={() => settleLibraryForm(true, token)} onCancel={cancel} />
-        : <NewNotebookForm categoryId={request.categoryId} onDone={(id) => settleLibraryForm(id, token)} onCancel={cancel} />}
+        : <NewNotebookForm categoryId={request.categoryId} title={request.title} onDone={(id) => settleLibraryForm(id, token)} onCancel={cancel} />}
       <div id={LIB_PORTAL_ID} />
     </div>
   )

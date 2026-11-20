@@ -12,7 +12,7 @@ import {
   HANDLES, MAX_IMG_W, getImageNaturalSize, a4MaxH, getBounds, resizeItems, imageOrder,
   saveImageItem, copyImageToClipboard, isInstaUrl, buildInstaItem, disposePoolAudio,
   getCanvasClipboard, setCanvasClipboard, copyItemAssets, placeClipItems, buildPasteItems, pasteMsgView, urlsToViewerImages,
-  makeNotebookItem,
+  makeNotebookItem, searchByName,
 } from './canvas/canvasUtils'
 import { ImageItem, LinkCard, InstaCard, MusicCard, PdfCard, YoutubeCard, RoomChip, NoteCard, NotebookCard } from './canvas/cards'
 import { NotebookShelfMenu } from './canvas/NotebookShelf'
@@ -190,6 +190,9 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   useEffect(() => { viewerItemIdRef.current = viewerItemId }, [viewerItemId])
   useEffect(() => { noteOverlayRef.current = !!(noteEditId || noteGallery || notebookOpen) }, [noteEditId, noteGallery, notebookOpen])
   useEffect(() => { showColorPickerRef.current = showColorPicker }, [showColorPicker])
+  // Esc önce açık açılır menüyü (oda arama / kitaplık) kapatır — capture dinleyicisi render beklemeden görsün
+  const dropdownOpenRef = useRef(null)
+  dropdownOpenRef.current = showRoomSearch ? 'room' : showShelf ? 'shelf' : null
   // Yalnız gerçek değişimde kaydet: mount'ta (ref zaten aynı değer) boş kayıt atılmasın —
   // /canvas düzenleme modunda açıldığından aksi halde her açılış bir PUT gönderiyordu.
   useEffect(() => {
@@ -328,7 +331,7 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
         if (act) { e.preventDefault(); if (!e.repeat || k !== 'Escape') act() }
         return
       }
-      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); if (readerItemIdRef.current) { setReaderItemId(null); setReaderEditing(false); return } if (showColorPickerRef.current) { setShowColorPicker(null); return } if (standalone) return; if (isFullscreenRef.current) { setIsFullscreen(false); return } exitEdit(); return }
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); if (readerItemIdRef.current) { setReaderItemId(null); setReaderEditing(false); return } if (showColorPickerRef.current) { setShowColorPicker(null); return } if (dropdownOpenRef.current) { if (dropdownOpenRef.current === 'room') { setShowRoomSearch(false); setRoomSearchText('') } else setShowShelf(false); return } if (standalone) return; if (isFullscreenRef.current) { setIsFullscreen(false); return } exitEdit(); return }
       const active = document.activeElement
       if (active?.tagName === 'TEXTAREA' || active?.tagName === 'INPUT') return
       const ctrl = e.ctrlKey || e.metaKey
@@ -1009,10 +1012,11 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
   )
 
   // ── Room search ───────────────────────────────────────────────────────────
-  const filteredRooms = rooms.filter(r => !roomSearchText || r.name.toLowerCase().includes(roomSearchText.toLowerCase()))
-  const noMatch = roomSearchText.trim() && filteredRooms.length === 0
-  // seçilebilir öneriler: eşleşen odalar, yoksa "oluştur ve ekle"
-  const roomOptions = noMatch ? [{ create: true, name: roomSearchText.trim() }] : filteredRooms
+  // seçilebilir öneriler: benzerliğe göre sıralı odalar; yazılan ad birebir bir oda değilse
+  // başta (vurgulu) "oluştur ve ekle" — Enter yeni oda açar
+  const roomSearch = searchByName(rooms, roomSearchText, r => r.name)
+  const roomOptions = roomSearch.query && !roomSearch.exact
+    ? [{ create: true, name: roomSearch.query }, ...roomSearch.matches] : roomSearch.matches
   const roomActive = Math.min(roomActiveIdx, roomOptions.length - 1)
   // Var olmayan oda: oyundaki tile'da önce child/ayrık seçimi sorulur. /canvas sayfası
   // bir odaya ait olmadığından (gizli sistem odası) orada oda doğrudan ayrık oluşturulur.
@@ -1421,24 +1425,23 @@ export default function CanvasMesh({ id, content, width, height, syncGroupId, sy
                     style={{ width: '100%', height: 56, padding: '0 18px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(96,165,250,0.4)', borderRadius: 8, color: '#fff', fontSize: 26, outline: 'none', boxSizing: 'border-box' }} />
                 </div>
                 <div ref={roomListRef} style={{ maxHeight: 380, overflowY: 'auto' }}>
-                  {filteredRooms.map((room, i) => (
-                    <div key={room.id} onClick={() => linkExistingRoom(room)}
+                  {roomOptions.map((opt, i) => opt.create ? (
+                    <div key="__create" onClick={() => pickRoomOption(opt)}
+                      onMouseEnter={() => setRoomActiveIdx(i)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.04)', color: '#94a3b8', fontSize: 26,
+                        background: i === roomActive ? 'rgba(96,165,250,0.12)' : 'transparent' }}>
+                      <span>＋</span>
+                      <span style={{ textDecoration: 'underline', color: '#cbd5e1' }}>{opt.name}</span>
+                      <span style={{ fontSize: 22, color: '#64748b' }}>— oluştur ve ekle</span>
+                    </div>
+                  ) : (
+                    <div key={opt.id} onClick={() => pickRoomOption(opt)}
                       onMouseEnter={() => setRoomActiveIdx(i)}
                       style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.04)', color: '#e2e8f0', fontSize: 26,
                         background: i === roomActive ? 'rgba(96,165,250,0.12)' : 'transparent' }}>
-                      <span>🏠</span><span>{room.name}</span>
+                      <span>🏠</span><span>{opt.name}</span>
                     </div>
                   ))}
-                  {noMatch && (
-                    <div onClick={() => createRoomLink(roomSearchText.trim())}
-                      onMouseEnter={() => setRoomActiveIdx(0)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px', cursor: 'pointer', color: '#94a3b8', fontSize: 26,
-                        background: roomActive === 0 ? 'rgba(148,163,184,0.1)' : 'transparent' }}>
-                      <span>🏠</span>
-                      <span style={{ textDecoration: 'underline', color: '#cbd5e1' }}>{roomSearchText.trim()}</span>
-                      <span style={{ fontSize: 22, color: '#64748b' }}>— oluştur ve ekle</span>
-                    </div>
-                  )}
                   {!roomSearchText && rooms.length === 0 && (
                     <div style={{ padding: '20px', color: '#64748b', fontSize: 24, textAlign: 'center' }}>Henüz oda yok</div>
                   )}

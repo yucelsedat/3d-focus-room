@@ -86,11 +86,11 @@ export function NewNotebookPage() {
 }
 
 // Oluşturma formu: rota ve oyundaki form overlay'i aynısını kullanır; onDone(yeni defterin id'si)
-export function NewNotebookForm({ categoryId = GENERAL_CATEGORY_ID, onDone, onCancel }) {
+export function NewNotebookForm({ categoryId = GENERAL_CATEGORY_ID, title = '', onDone, onCancel }) {
   return (
     <NotebookForm
       mode="create"
-      initial={{ ...defaultSettings(), category_id: categoryId }}
+      initial={{ ...defaultSettings(), category_id: categoryId, title }}
       onSubmit={(settings) => createNotebook(settings)}
       onDone={onDone}
       onCancel={onCancel}

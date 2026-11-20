@@ -525,3 +525,20 @@ export function makeNotebookItem(meta, c) {
     ? { ...base, color: meta.color, binding: meta.binding, year: meta.year ?? null }
     : { ...base, cover: meta.cover }
 }
+
+// ── İsimle arama (oda / defter menüleri) ─────────────────────────────────────
+// Eşleşenler benzerliğe göre sıralanır: birebir aynı ad, adla başlayan, adı içeren (her grupta
+// özgün sıra korunur). exact: birebir eşleşme var mı — yoksa menü yazılan adı "oluştur" seçeneği
+// olarak listenin başında vurgular, Enter yeni oda / defter açar.
+const foldName = (s) => (s ?? '').trim().toLocaleLowerCase('tr-TR')
+export function searchByName(list, query, nameOf) {
+  const q = foldName(query)
+  if (!q) return { query: '', matches: list, exact: false }
+  const rank = (n) => n === q ? 0 : n.startsWith(q) ? 1 : n.includes(q) ? 2 : -1
+  const matches = list
+    .map((it, i) => ({ it, i, r: rank(foldName(nameOf(it))) }))
+    .filter(m => m.r >= 0)
+    .sort((a, b) => (a.r - b.r) || (a.i - b.i))
+    .map(m => m.it)
+  return { query: query.trim(), matches, exact: matches.length > 0 && foldName(nameOf(matches[0])) === q }
+}
