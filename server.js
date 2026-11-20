@@ -1330,6 +1330,52 @@ app.post('/api/header', async (req, res) => {
   }
 });
 
+// Sticky note tile — duvarda renkli yapışkan not. content: { text, color }.
+// Metin/punto sığdırma tamamen istemcide; burada yalnız girdi temizlenir.
+const STICKY_MAX_CHARS = 1000;
+const STICKY_DEFAULT_COLOR = '#fde96b';
+function stickyContent(text, color) {
+  const t = typeof text === 'string' ? text.replace(/\r\n?/g, '\n').slice(0, STICKY_MAX_CHARS) : '';
+  const c = typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : STICKY_DEFAULT_COLOR;
+  return JSON.stringify({ text: t, color: c });
+}
+
+app.post('/api/sticky', async (req, res) => {
+  try {
+    const { tileId, width, height, position, rotation, color, text } = req.body;
+    if (!tileId) return res.status(400).json({ error: 'tileId gerekli' });
+    let pos, rot;
+    try { pos = JSON.parse(position); rot = JSON.parse(rotation) } catch { return res.status(400).json({ error: 'Geçersiz konum/rotasyon' }) }
+    if (!Array.isArray(pos) || !Array.isArray(rot)) return res.status(400).json({ error: 'Geçersiz konum/rotasyon' });
+    const size = v => { const n = parseFloat(v); return Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 4 };
+
+    const media = await prisma.media.create({
+      data: {
+        id: BigInt(Date.now()),
+        roomId: activeRoomId,
+        tileId,
+        type: 'sticky',
+        url: null,
+        content: stickyContent(text, color),
+        width: size(width),
+        height: size(height),
+        posX: parseFloat(pos[0]) || 0,
+        posY: parseFloat(pos[1]) || 0,
+        posZ: parseFloat(pos[2]) || 0,
+        rotX: parseFloat(rot[0]) || 0,
+        rotY: parseFloat(rot[1]) || 0,
+        rotZ: parseFloat(rot[2]) || 0,
+        rotOrder: String(rot[3] || 'XYZ'),
+      },
+    });
+
+    res.json(serializeMedia(media));
+  } catch (err) {
+    console.error('[sticky] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Defter tile — Claude'a bağlı OLMAYAN yerel not defteri. İçerik tamamen
 // content alanında JSON olarak tutulur: { pages: [{ title, blocks: [str] }] }.
 // Kaydetme/güncelleme generic PUT /api/media/:id (content) ile yapılır.
@@ -3267,6 +3313,11 @@ async function extractRoomTexts(roomId) {
       try {
         const h = JSON.parse(m.content)
         if (h.text?.trim()) docs.push({ id: String(m.id), tileId: m.tileId, kind: 'baslik', text: h.text.trim() })
+      } catch {}
+    } else if (m.type === 'sticky' && m.content) {
+      try {
+        const n = JSON.parse(m.content)
+        if (typeof n.text === 'string' && n.text.trim()) docs.push({ id: String(m.id), tileId: m.tileId, kind: 'not', text: n.text.trim() })
       } catch {}
     } else if (m.type === 'canvas' && m.content) {
       try {

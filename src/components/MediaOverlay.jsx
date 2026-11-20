@@ -2,6 +2,7 @@ import React, { Suspense, Component, useState, useEffect, useMemo, useRef } from
 import { createPortal } from 'react-dom'
 import CanvasMesh from './CanvasMesh'
 import HeaderMesh from './HeaderMesh'
+import StickyNoteMesh from './StickyNoteMesh'
 import MultiAgentTile from './MultiAgentTile'
 import { useTexture, useVideoTexture, Html } from '@react-three/drei'
 import * as THREE from 'three'
@@ -2939,6 +2940,7 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isEmbed    = type === 'embed'
   const isCanvas   = type === 'canvas'
   const isHeader   = type === 'header'
+  const isSticky   = type === 'sticky'
   const isSession  = type === 'session'
   const isRoomChat = type === 'roomchat'
   const isRoomSession = type === 'roomsession'
@@ -2947,7 +2949,7 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
   const isSlide    = type === 'slide'
   const isDefter   = type === 'defter'
   const isMultiAgent = type === 'multiagent'
-  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSession && !isRoomChat && !isRoomSession && !isProjectView && !isBluprint && !isSlide && !isDefter && !isMultiAgent
+  const isGif      = !isVideo && !isYoutube && !isMarkdown && !isEmbed && !isCanvas && !isHeader && !isSticky && !isSession && !isRoomChat && !isRoomSession && !isProjectView && !isBluprint && !isSlide && !isDefter && !isMultiAgent
     && typeof url === 'string' && url.toLowerCase().includes('.gif')
 
   const offsetX = (width - 1) / 2
@@ -2958,6 +2960,8 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
       <group position={[offsetX, offsetY, 0]}>
         {isHeader ? (
           <HeaderMesh id={id} content={content} width={width} height={height} />
+        ) : isSticky ? (
+          <StickyNoteMesh id={id} content={content} width={width} height={height} />
         ) : isSession ? (
           <SessionMesh id={id} width={width} height={height} />
         ) : isRoomChat ? (
