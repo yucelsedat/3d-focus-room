@@ -106,8 +106,8 @@ export function EditModal() {
       .catch(() => {})
   }, [activeTab])
 
-  // Markdown: h=4 sabit, içerik tile ile aynı düzende ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*4 (4×4 sütun)
-  const MD_H = 4                                  // sabit 3D yükseklik
+  // Markdown: h=5 sabit, içerik tile ile aynı düzende ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*4 (4 geniş × 5 yüksek sütun)
+  const MD_H = 5                                  // sabit 3D yükseklik
   const MD_COL_W = MD_COL_PX_W / MD_PX_PER_UNIT   // = 640/160 = 4 birim/sütun
 
   useEffect(() => {
