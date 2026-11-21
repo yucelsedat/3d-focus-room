@@ -35,7 +35,7 @@ export const parseMd = (content, { newTabLinks = false } = {}) => {
 // olduğundan kolon sayısı kaç olursa olsun her kolon aynı genişlikte kalır
 // (MD_COL_PX_W − MD_COL_GAP) ve ölçüm sondası tile ile birebir aynı düzeni kurar.
 export const MD_PX_PER_UNIT = 200
-export const MD_COL_PX_W    = 600
+export const MD_COL_PX_W    = 800   // = 4 birim/sütun
 const MD_COL_PAD     = 24
 const MD_COL_GAP     = MD_COL_PAD * 2
 

@@ -54,6 +54,19 @@ const ICONS = {
       <path {...STROKE} d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6" />
     </g>
   ),
+  image: (
+    <g {...STROKE}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <circle cx="9" cy="10" r="1.8" />
+      <path d="M20.5 16l-5-5-8.5 8.5" />
+    </g>
+  ),
+  'markdown-raw': (
+    <g {...STROKE}>
+      <rect x="2.5" y="5.5" width="19" height="13" rx="2.5" />
+      <path d="M6 15V9l2.5 3L11 9v6M16.5 9v6M14.5 13l2 2 2-2" />
+    </g>
+  ),
   attach: (
     <g {...STROKE}>
       <path d="M16.5 7.5l-7.6 7.6a2 2 0 0 0 2.8 2.8l8.3-8.3a4 4 0 0 0-5.7-5.7l-8.6 8.6a6 6 0 0 0 8.5 8.5L19.5 15" />
@@ -83,10 +96,15 @@ export function DocumentBar({
   onCode,
   onMicPress,
   onClipPress,
+  // İsteğe bağlı (duvardaki metin tile): görsel linki ekle, ham Markdown'a geç
+  onImagePress,
+  onRawPress,
+  rawActive = false,
   notice,
+  style,
 }) {
   return (
-    <div style={styles.bar}>
+    <div style={{ ...styles.bar, ...style }}>
       {notice !== null && (
         <div style={styles.notice} role="status">
           <span style={styles.noticeText}>{notice}</span>
@@ -96,22 +114,26 @@ export function DocumentBar({
         <Tool label="Biçimli yapıştır" onPress={onPaste} accent>
           <Icon name="clipboard-outline" color={colors.accent} />
         </Tool>
-        <Tool label="Kalem rengi" onPress={onSwatchPress}>
-          <span
-            style={{
-              ...styles.swatch,
-              backgroundColor: pen.active ? highlighterOf(pen.color).color : inkOf(pen.ink).color,
-            }}
-          />
-        </Tool>
-        <Tool
-          label={pen.active ? 'Fosforlu kalemi bırak' : 'Fosforlu kalem'}
-          onPress={onHighlighterPress}
-          selected={pen.active}
-          tint={pen.active ? highlightFill(pen.color, 0.35) : undefined}
-        >
-          <Icon name="marker" />
-        </Tool>
+        {pen && onSwatchPress && (
+          <Tool label="Kalem rengi" onPress={onSwatchPress}>
+            <span
+              style={{
+                ...styles.swatch,
+                backgroundColor: pen.active ? highlighterOf(pen.color).color : inkOf(pen.ink).color,
+              }}
+            />
+          </Tool>
+        )}
+        {pen && onHighlighterPress && (
+          <Tool
+            label={pen.active ? 'Fosforlu kalemi bırak' : 'Fosforlu kalem'}
+            onPress={onHighlighterPress}
+            selected={pen.active}
+            tint={pen.active ? highlightFill(pen.color, 0.35) : undefined}
+          >
+            <Icon name="marker" />
+          </Tool>
+        )}
         <Tool label="Başlık" onPress={onHeading}>
           <span style={{ ...styles.glyph, ...fonts.displayBold }}>H</span>
         </Tool>
@@ -133,9 +155,26 @@ export function DocumentBar({
         <Tool label={listening ? 'Dinlemeyi durdur' : 'Sesle yaz'} onPress={onMicPress}>
           <Icon name={listening ? 'mic' : 'mic-outline'} color={listening ? colors.accent : undefined} />
         </Tool>
-        <Tool label="Ek ekle" onPress={onClipPress}>
-          <Icon name="attach" />
-        </Tool>
+        {onImagePress && (
+          <Tool label="Görsel ekle (link ya da dosya)" onPress={onImagePress}>
+            <Icon name="image" />
+          </Tool>
+        )}
+        {onRawPress && (
+          <Tool
+            label={rawActive ? 'Biçimli yazmaya dön' : "Markdown'ı ham düzenle"}
+            onPress={onRawPress}
+            selected={rawActive}
+            tint={rawActive ? 'rgba(11, 92, 173, 0.14)' : undefined}
+          >
+            <Icon name="markdown-raw" color={rawActive ? docPage.link : undefined} />
+          </Tool>
+        )}
+        {onClipPress && (
+          <Tool label="Ek ekle" onPress={onClipPress}>
+            <Icon name="attach" />
+          </Tool>
+        )}
       </div>
     </div>
   )

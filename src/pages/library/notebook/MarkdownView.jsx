@@ -16,6 +16,8 @@ const SIZE = docPage.fontSize
 
 const NO_MARKS = []
 const SAFE_LINK = /^(https?:|mailto:)/i
+// Varsayılan: yalnızca https görseller. Yüzey (ör. duvardaki metin tile) kendi süzgecini verebilir.
+const HTTPS_IMAGE = (uri) => /^https:\/\//i.test(uri)
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
 
 // marked metin token'larındaki HTML varlıklarını çözmez
@@ -301,7 +303,11 @@ function renderBlocks(tokens, ctx, key = 'b') {
       i++
     }
     out.push(
-      run.length === 1 ? <MdImage key={k} uri={run[0].href} alt={run[0].text} /> : <ImageCarousel key={k} images={run} />,
+      run.length === 1 ? (
+        <MdImage key={k} uri={run[0].href} alt={run[0].text} imageOk={ctx.imageOk} />
+      ) : (
+        <ImageCarousel key={k} images={run} imageOk={ctx.imageOk} />
+      ),
     )
   }
   return out
@@ -474,9 +480,9 @@ function CodeBlock({ code, lang }) {
 }
 
 // Yalnızca https görseller; oran korunarak genişliğe sığar
-function MdImage({ uri, alt }) {
+function MdImage({ uri, alt, imageOk = HTTPS_IMAGE }) {
   const [failed, setFailed] = useState(false)
-  if (!/^https:\/\//i.test(uri) || failed) {
+  if (!imageOk(uri) || failed) {
     return alt ? <div style={{ ...styles.paragraph, color: docPage.muted }}>{`[${decode(alt)}]`}</div> : null
   }
   return <img src={uri} alt={decode(alt)} onError={() => setFailed(true)} style={styles.image} loading="lazy" />
@@ -486,7 +492,7 @@ function MdImage({ uri, alt }) {
 // bırakınca kart yerine oturur. Altta kaçıncı görselde olunduğunu gösteren noktalar.
 const CARD_GAP = 10
 
-function ImageCarousel({ images }) {
+function ImageCarousel({ images, imageOk }) {
   const ref = useRef(null)
   const [width, setWidth] = useState(0)
   const [index, setIndex] = useState(0)
@@ -511,7 +517,7 @@ function ImageCarousel({ images }) {
           }}
         >
           {images.map((image, i) => (
-            <CarouselCard key={`${i}-${image.href}`} image={image} width={card} label={`${i + 1}. görsel, ${images.length} görselden`} />
+            <CarouselCard key={`${i}-${image.href}`} image={image} width={card} imageOk={imageOk} label={`${i + 1}. görsel, ${images.length} görselden`} />
           ))}
         </div>
       )}
@@ -524,9 +530,9 @@ function ImageCarousel({ images }) {
   )
 }
 
-function CarouselCard({ image, width, label }) {
+function CarouselCard({ image, width, label, imageOk = HTTPS_IMAGE }) {
   const [failed, setFailed] = useState(false)
-  const shown = /^https:\/\//i.test(image.href) && !failed
+  const shown = imageOk(image.href) && !failed
   const alt = decode(image.text)
   return (
     <div style={{ width, flexShrink: 0, scrollSnapAlign: 'start' }}>
@@ -542,7 +548,7 @@ function CarouselCard({ image, width, label }) {
   )
 }
 
-export function MarkdownView({ value, onToggleTask, highlights = NO_MARKS, inks = NO_MARKS, parsed: given, editor }) {
+export function MarkdownView({ value, onToggleTask, highlights = NO_MARKS, inks = NO_MARKS, parsed: given, editor, imageOk }) {
   const rootRef = useRef(null)
   const own = useMemo(() => (given ? null : parseMarkdown(value)), [given, value])
   const parsed = given ?? own
@@ -558,12 +564,13 @@ export function MarkdownView({ value, onToggleTask, highlights = NO_MARKS, inks 
     source: value,
     unitOf,
     editor,
+    imageOk,
   }
   // Fosforlu kalemin boyası yazının arkasında; yazı onun üstünde
   return (
     <div ref={rootRef} style={{ position: 'relative' }}>
       {highlights.length > 0 && <HighlightLayer rootRef={rootRef} highlights={highlights} version={value} />}
-      <div style={styles.root}>{renderBlocks(tokens, ctx)}</div>
+      <div data-md-root style={styles.root}>{renderBlocks(tokens, ctx)}</div>
     </div>
   )
 }
