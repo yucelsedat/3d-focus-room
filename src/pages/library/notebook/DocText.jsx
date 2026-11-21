@@ -37,7 +37,7 @@ function wrapperStyle({ indent, push = 0, collapsed = false }) {
 // Odaktayken ham hâliyle yazılır, odaktan çıkınca biçimli görünür; biçimli yazıya tıklayınca
 // yeniden yazma açılır. Yazı alanı yalnızca yazarken kuruludur; odak ve imleç istekleri yazı alanı
 // kurulana kadar bekletilir.
-function RawDocText({
+export function RawDocText({
   ref,
   value,
   readOnly = false,
@@ -54,6 +54,7 @@ function RawDocText({
   onPasteMarkdown,
   onPasteImage,
   onPasteLink,
+  imageOk,
   ...layout
 }) {
   const inputRef = useRef(null)
@@ -179,6 +180,7 @@ function RawDocText({
             value={value}
             highlights={highlights}
             inks={inks}
+            imageOk={imageOk}
             onToggleTask={readOnly ? undefined : (index) => onChangeText(toggleTask(value, index))}
           />
         </div>
@@ -192,7 +194,7 @@ function RawDocText({
 // olur; alan birimin ham yazısını taşır, satır içi işaretleri soluk görünür. Yazılan her harf
 // bölümün bütün yazısına işlenir; yazı yeniden ayrışınca birim değişmişse (ör. başına "# " yazılıp
 // başlık olunca) imleç yeni birime geçer.
-function LiveDocText({
+export function LiveDocText({
   ref,
   value,
   readOnly = false,
@@ -209,6 +211,7 @@ function LiveDocText({
   onPasteMarkdown,
   onPasteImage,
   onPasteLink,
+  imageOk,
   ...layout
 }) {
   const parsed = parseMarkdown(value)
@@ -415,6 +418,7 @@ function LiveDocText({
         parsed={parsed}
         highlights={highlights}
         inks={inks}
+        imageOk={imageOk}
         onToggleTask={readOnly ? undefined : (index) => commit(toggleTask(value, index))}
         editor={
           readOnly

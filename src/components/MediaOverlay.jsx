@@ -1,16 +1,16 @@
-import React, { Suspense, Component, useState, useEffect, useMemo, useRef } from 'react'
+import React, { Suspense, Component, useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import CanvasMesh from './CanvasMesh'
 import HeaderMesh from './HeaderMesh'
 import StickyNoteMesh from './StickyNoteMesh'
 import MultiAgentTile from './MultiAgentTile'
+import { MarkdownTile } from './MarkdownTile'
 import { useTexture, useVideoTexture, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { marked } from 'marked'
 import { useStore } from '../store/useStore'
-import { useSpeechToText } from '../hooks/useSpeechToText'
-import { clipboardToMarkdown, padForInsertion, pasteRichTextAsMarkdown, showPasteNotice, missingLinksMessage } from '../utils/richTextToMarkdown'
-import { parseMd, fitMdCols, mdTileWidth, MD_PX_PER_UNIT, MD_COL_PX_W } from '../utils/markdownRender'
+import { pasteRichTextAsMarkdown } from '../utils/richTextToMarkdown'
+import { MD_PX_PER_UNIT } from '../utils/markdownRender'
 
 // Kısa "x önce" göreli zaman (recall göstergesi için)
 function relTime(iso) {
@@ -218,250 +218,19 @@ function SlideMesh({ url, width, height }) {
   )
 }
 
-function getCaretOffset(el) {
-  const sel = window.getSelection()
-  if (!sel || !sel.rangeCount) return 0
-  const r = sel.getRangeAt(0)
-  const pre = r.cloneRange()
-  pre.selectNodeContents(el)
-  pre.setEnd(r.startContainer, r.startOffset)
-  return pre.toString().length
-}
-
-function rangeFromPoint(x, y) {
-  if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y)
-  if (document.caretPositionFromPoint) {
-    const pos = document.caretPositionFromPoint(x, y)
-    if (!pos) return null
-    const r = document.createRange()
-    r.setStart(pos.offsetNode, pos.offset)
-    r.collapse(true)
-    return r
-  }
-  return null
-}
-
-function insertAtCursor(text) {
-  const sel = window.getSelection()
-  if (!sel || !sel.rangeCount) return
-  const range = sel.getRangeAt(0)
-  range.deleteContents()
-  const node = document.createTextNode(text)
-  range.insertNode(node)
-  range.setStartAfter(node)
-  range.collapse(true)
-  sel.removeAllRanges()
-  sel.addRange(range)
-}
-
-
+// Metin tile: PDF defterinin satır satır biçimli yazması + alt biçim çubuğu (bkz. MarkdownTile)
 function MarkdownMesh({ id, content, width, height }) {
-  const [isEditing, setIsEditing] = useState(false)
-  const [editNCols, setEditNCols] = useState(1)
-  const editRef          = useRef(null)
-  const clickPosRef      = useRef(null)
-  const pendingCursorRef = useRef(null)
-  const cursorPlacedRef  = useRef(false)
-  const afterCursorRef   = useRef('')
-  const speech           = useSpeechToText()
-  const updateMedia      = useStore(s => s.updateMedia)
-
   const w           = parseFloat(width)
   const h           = parseFloat(height)
   const pxWidth     = Math.round(w * MD_PX_PER_UNIT)
-  const pxHeight    = Math.round(h * MD_PX_PER_UNIT)
-  const nCols       = Math.max(1, Math.round(pxWidth / MD_COL_PX_W))
   const scaleFactor = w * 40 / pxWidth
-
-  // Canvas metin kutusuyla aynı zengin render (hljs kod blokları, tablo, alıntı, DOMPurify)
-  const html = useMemo(() => parseMd(content, { newTabLinks: true }), [content])
-
-  // EDIT: ham metin tile'a sığmıyorsa düzenleme yüzeyi sağa doğru kolon kolon genişler
-  const refitEditCols = () => setEditNCols(fitMdCols(editRef.current, nCols))
-
-  // Faz 1: edit moda gir → textContent yaz (corruption yok) + sütun say
-  useEffect(() => {
-    if (!isEditing || !editRef.current) return
-    editRef.current.textContent = content   // textContent: \n → text node, <br> yok
-    // <Html> içeriği ayrı React kökünde sonradan render olur; kolon ölçümü/odak için hemen göster
-    editRef.current.style.display = 'block'
-    editRef.current.focus()
-    cursorPlacedRef.current = false
-    pendingCursorRef.current = clickPosRef.current
-    clickPosRef.current = null
-    refitEditCols()
-  }, [isEditing])
-
-  // Faz 2: editNCols DOM'a yansıdı → cursor koy
-  useEffect(() => {
-    if (!isEditing || cursorPlacedRef.current || !pendingCursorRef.current) return
-    const pos = pendingCursorRef.current
-    cursorPlacedRef.current = true
-    requestAnimationFrame(() => {
-      if (!editRef.current) return
-      const range = rangeFromPoint(pos.x, pos.y)
-      if (range) {
-        const sel = window.getSelection()
-        if (sel) { sel.removeAllRanges(); sel.addRange(range) }
-      }
-    })
-  }, [editNCols, isEditing])
-
-  const handleSave = async () => {
-    if (!editRef.current) return
-    const current = editRef.current.textContent.trim()  // textContent: mükemmel round-trip
-    if (current === content.trim()) return
-    // Metin uzadıysa tile da kolon kolon genişler (yalnız büyür; elle verilen genişlik küçültülmez)
-    const neededW = mdTileWidth(current, h)
-    try {
-      const r = await fetch(`/api/media/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(neededW > w ? { content: current, width: neededW } : { content: current }),
-      })
-      if (r.ok) updateMedia(await r.json())
-    } catch (e) {
-      console.error('[MarkdownMesh] save failed', e)
-    }
-  }
-
-  const handleBlur = (e) => {
-    if (e.currentTarget.contains(e.relatedTarget)) return
-    setIsEditing(false)
-    if (speech.listening) speech.stop()
-    handleSave()
-  }
-
-  const handleMicToggle = () => {
-    if (speech.listening) { speech.stop(); return }
-    const currentText = editRef.current?.textContent ?? content
-    const cursor = isEditing && editRef.current ? getCaretOffset(editRef.current) : currentText.length
-    const before = currentText.slice(0, cursor)
-    afterCursorRef.current = currentText.slice(cursor)
-    if (!isEditing) setIsEditing(true)
-    speech.start(before, (txt) => {
-      if (!editRef.current) return
-      editRef.current.textContent = txt + afterCursorRef.current
-      refitEditCols()
-      // Cursor'ı konuşulan kısmın sonuna taşı
-      const textNode = editRef.current.firstChild
-      if (textNode?.nodeType === Node.TEXT_NODE) {
-        const range = document.createRange()
-        range.setStart(textNode, Math.min(txt.length, textNode.length))
-        range.collapse(true)
-        const sel = window.getSelection()
-        if (sel) { sel.removeAllRanges(); sel.addRange(range) }
-      }
-    })
-  }
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      e.stopPropagation()
-      insertAtCursor('\n')  // <br>/<div> değil, saf \n text node
-      refitEditCols()
-      return
-    }
-    if (e.key === 'f' || e.key === 'F') {
-      e.preventDefault()
-      e.stopPropagation()
-      handleMicToggle()
-      return
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      setIsEditing(false)
-      if (speech.listening) speech.stop()
-      handleSave()
-    }
-  }
-
-  const baseStyle = {
-    position: 'absolute',
-    inset: 0,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: '8px',
-    overflow: 'hidden',
-    pointerEvents: 'auto',
-    cursor: 'text',
-  }
 
   return (
     <mesh position={[0, 0, 0.02]}>
       <planeGeometry args={[w, h]} />
       <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
       <Html transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
-        <style>{`@keyframes micPulse{0%,100%{opacity:1}50%{opacity:0.35}}`}</style>
-        <div
-          style={{ position: 'relative', width: `${pxWidth}px`, height: `${pxHeight}px` }}
-          onBlur={handleBlur}
-          onClick={e => e.stopPropagation()}
-        >
-          {/* Mikrofon butonu */}
-          <button
-            onMouseDown={e => { e.preventDefault(); e.stopPropagation() }}
-            onClick={handleMicToggle}
-            title={speech.listening ? 'Kaydı durdur (F)' : 'Sesle yaz (F)'}
-            style={{
-              position: 'absolute', top: '8px', left: '8px', zIndex: 10,
-              background: speech.listening ? 'rgba(239,68,68,0.85)' : 'rgba(0,0,0,0.5)',
-              border: `1px solid ${speech.listening ? '#ef4444' : 'rgba(255,255,255,0.2)'}`,
-              borderRadius: '6px', padding: '4px 10px',
-              cursor: 'pointer', fontSize: '14px',
-              color: speech.listening ? '#fff' : 'rgba(255,255,255,0.7)',
-              backdropFilter: 'blur(4px)',
-              animation: speech.listening ? 'micPulse 1.2s ease-in-out infinite' : 'none',
-              pointerEvents: 'auto',
-            }}
-          >🎤</button>
-
-          {/* VIEW: çok sütunlu rendered markdown */}
-          <div
-            className="mdtile cvmd cvmd-light"
-            style={{ ...baseStyle, columnCount: nCols, display: isEditing ? 'none' : 'block' }}
-            onClick={(e) => {
-              if (e.target.closest('a')) return
-              e.stopPropagation()
-              clickPosRef.current = { x: e.clientX, y: e.clientY }
-              setIsEditing(true)
-            }}
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-
-          {/* EDIT: çok sütunlu contentEditable, textContent round-trip, pre-wrap \n */}
-          <div
-            ref={editRef}
-            className="mdtile"
-            contentEditable
-            suppressContentEditableWarning
-            onKeyDown={handleKeyDown}
-            onInput={refitEditCols}
-            onPaste={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              // Biçimli metin (web, Docs, Word…) → Markdown; biçimsizse eskisi gibi düz metin
-              const { text, rich, missingLinks } = clipboardToMarkdown(e.clipboardData)
-              if (!rich) { insertAtCursor(text); refitEditCols(); return }
-              const full  = editRef.current?.textContent ?? ''
-              const caret = editRef.current ? getCaretOffset(editRef.current) : full.length
-              insertAtCursor(padForInsertion(text, full.slice(0, caret), full.slice(caret)))
-              refitEditCols()
-              if (missingLinks) showPasteNotice(missingLinksMessage(missingLinks), editRef.current)
-            }}
-            style={{
-              ...baseStyle,
-              right: 'auto',
-              width: `${editNCols * MD_COL_PX_W}px`,
-              columnCount: editNCols,
-              display: isEditing ? 'block' : 'none',
-              outline: 'none',
-              whiteSpace: 'pre-wrap',
-              borderColor: speech.listening ? '#ef4444' : '#60a5fa',
-            }}
-          />
-        </div>
+        <MarkdownTile id={id} content={content ?? ''} width={w} height={h} />
       </Html>
     </mesh>
   )
