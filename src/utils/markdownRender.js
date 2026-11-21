@@ -34,8 +34,9 @@ export const parseMd = (content, { newTabLinks = false } = {}) => {
 // Tile sabit yükseklikte, içerik kolonlara akar. Kolon aralığı = sol+sağ iç boşluk
 // olduğundan kolon sayısı kaç olursa olsun her kolon aynı genişlikte kalır
 // (MD_COL_PX_W − MD_COL_GAP) ve ölçüm sondası tile ile birebir aynı düzeni kurar.
-export const MD_PX_PER_UNIT = 200
-export const MD_COL_PX_W    = 800   // = 4 birim/sütun
+// Birim başına piksel ne kadar azsa tile'daki yazı o kadar büyük görünür (160 → 200'e göre %25 büyük)
+export const MD_PX_PER_UNIT = 160
+export const MD_COL_PX_W    = 640   // = 4 birim/sütun
 const MD_COL_PAD     = 24
 const MD_COL_GAP     = MD_COL_PAD * 2
 
