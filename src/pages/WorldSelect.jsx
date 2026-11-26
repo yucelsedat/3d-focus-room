@@ -902,8 +902,8 @@ export default function WorldSelect() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
           <button
-            onClick={() => navigate('/')}
-            title="Defterlerin durduğu kitaplık (ana sayfa)"
+            onClick={() => navigate('/kitaplik')}
+            title="Defterlerin durduğu kitaplık"
             style={{
               display: 'flex', alignItems: 'center', gap: 8,
               padding: '8px 14px', borderRadius: 10, background: 'transparent',

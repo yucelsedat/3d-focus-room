@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { colors, fonts, HAND_TAIL, notebook } from './theme.js'
-import { portalRoot } from './portalRoot.js'
+import { usePortalBox, usePortalRoot } from './portalRoot.js'
 
 // Yırtık kenarın dişlerinin derinliği; içerik bu kadar içeriden başlar
 const TEAR = 6
@@ -78,7 +78,10 @@ export function HandCheckbox({ checked, tilt }) {
 // options: { label, onPress, danger?, checked? }
 export function TornPaperMenu({ visible, title, message, options = [], children, onClose }) {
   const paperRef = useRef(null)
-  const [viewport, setViewport] = useState(() => window.innerWidth)
+  const box = usePortalBox()
+  const target = usePortalRoot()
+  const [windowWidth, setViewport] = useState(() => window.innerWidth)
+  const viewport = box?.width ?? windowWidth
   const width = Math.min(viewport - 64, 300)
   const [height, setHeight] = useState(0)
   const shape = useMemo(() => height > 0 && paperShape(width, height, 7), [width, height])
@@ -173,7 +176,7 @@ export function TornPaperMenu({ visible, title, message, options = [], children,
         ))}
       </div>
     </div>,
-    portalRoot(),
+    target,
   )
 }
 

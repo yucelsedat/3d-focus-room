@@ -108,7 +108,7 @@ const PATHS = {
       <path d="M20.5 6C18 4.6 15 4.6 12 6.4V20c3-1.6 6-1.6 8.5-.2z" />
     </g>
   ),
-  // Kitaplıktan 3B odalara (eski ana sayfa)
+  // Kitaplıktan 3B odalara (ana sayfa)
   'cube-outline': (
     <g {...STROKE}>
       <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" />

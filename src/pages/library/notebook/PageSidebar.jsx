@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom'
 
 import { colors, fonts, HAND_TAIL, notebook } from '../theme.js'
 import { HandDrawing, HandIcon } from './HandIcon.jsx'
-import { portalRoot } from '../portalRoot.js'
+import { usePortalBox, usePortalRoot } from '../portalRoot.js'
 
 const TEAR = 7
 const MARGIN = 34
@@ -36,7 +36,10 @@ function stripShape(width, height) {
 
 // sections: [{ title, items: [{ label, hint?, icon, onPress, danger?, disabled? }] }]
 export function PageSidebar({ visible, title, subtitle, sections, onClose }) {
-  const [size, setSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }))
+  const box = usePortalBox()
+  const target = usePortalRoot()
+  const [windowSize, setSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }))
+  const size = box ? { w: box.width, h: box.height } : windowSize
   const width = Math.min(Math.round(size.w * 0.8), 330)
   const height = size.h
   const shape = useMemo(() => stripShape(width, height), [width, height])
@@ -134,7 +137,7 @@ export function PageSidebar({ visible, title, subtitle, sections, onClose }) {
         </div>
       </div>
     </div>,
-    portalRoot(),
+    target,
   )
 }
 

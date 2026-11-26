@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom'
 import './index.css'
 import App from './App.jsx'
 import WorldSelect from './pages/WorldSelect.jsx'
@@ -18,8 +18,9 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
-        {/* Ana sayfa: Seyir Defteri kitaplığı (all-books). Dünya seçimi /worlds'te. */}
-        <Route path="/" element={<LibraryPage />} />
+        {/* Ana sayfa: odalar (dünya seçimi). Seyir Defteri kitaplığı /kitaplik'te. */}
+        <Route path="/" element={<WorldSelect />} />
+        <Route path="/kitaplik" element={<LibraryPage />} />
         <Route path="/new-notebook" element={<NewNotebookPage />} />
         <Route path="/edit-notebook/:id" element={<EditNotebookPage />} />
         <Route path="/notebook" element={<NotebookScreen />} />
@@ -27,7 +28,8 @@ createRoot(document.getElementById('root')).render(
         <Route path="/calendar" element={<CalendarScreen />} />
         <Route path="/pano" element={<BoardScreen />} />
         <Route path="/pano/:id" element={<BoardNoteScreen />} />
-        <Route path="/worlds" element={<WorldSelect />} />
+        {/* Eski adres: yer imleri / açık sekmeler ana sayfaya düşsün */}
+        <Route path="/worlds" element={<Navigate to="/" replace />} />
         <Route path="/game" element={<App />} />
         <Route path="/timeline" element={<TimelineRoute />} />
         <Route path="/canvas" element={<CanvasRoute />} />

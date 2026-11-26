@@ -56,7 +56,7 @@ export default function CanvasPage() {
   }, [menuOpen])
 
   // Uygulama içinden gelindiyse bir adım geri, doğrudan açıldıysa ana sayfa
-  const goBack = () => (window.history.state?.idx > 0 ? navigate(-1) : navigate('/worlds'))
+  const goBack = () => (window.history.state?.idx > 0 ? navigate(-1) : navigate('/'))
 
   // Oda kartı / not linki: oyunu o odada aç (App açılışta lastRoomId'yi yükler)
   const openRoom = (room) => {

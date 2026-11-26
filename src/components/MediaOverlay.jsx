@@ -5,6 +5,8 @@ import HeaderMesh from './HeaderMesh'
 import StickyNoteMesh from './StickyNoteMesh'
 import MultiAgentTile from './MultiAgentTile'
 import { MarkdownTile } from './MarkdownTile'
+import { LibraryNotebookTile } from './LibraryNotebookTile'
+import { parseDefterTile } from './notebook/defterTile'
 import { useTexture, useVideoTexture, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { marked } from 'marked'
@@ -231,6 +233,27 @@ function MarkdownMesh({ id, content, width, height }) {
       <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
       <Html transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
         <MarkdownTile id={id} content={content ?? ''} width={w} height={h} />
+      </Html>
+    </mesh>
+  )
+}
+
+// Defter tile: kitaplıktaki defterin kendisi, metin tile boyutunda (bkz. LibraryNotebookTile).
+// İçerik { notebook: 'lib:<id>' } değilse eski yerel defter tile'ıdır (DefterMesh) — eski
+// tile'lardaki yazılar kaybolmasın diye onlar eskisi gibi çizilir.
+function DefterTileMesh({ id, content, width, height }) {
+  const notebookId = parseDefterTile(content)
+  if (notebookId === null) return <DefterMesh id={id} content={content} width={width} height={height} />
+  const w           = parseFloat(width)
+  const h           = parseFloat(height)
+  const pxWidth     = Math.round(w * MD_PX_PER_UNIT)
+  const scaleFactor = w * 40 / pxWidth
+  return (
+    <mesh position={[0, 0, 0.02]}>
+      <planeGeometry args={[w, h]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      <Html transform position={[0, 0, 0.01]} scale={scaleFactor} style={{ pointerEvents: 'none' }}>
+        <LibraryNotebookTile id={id} notebookId={notebookId} width={w} height={h} />
       </Html>
     </mesh>
   )
@@ -2744,7 +2767,7 @@ export function MediaOverlay({ id, type, url, width, height, position, rotation,
         ) : isMultiAgent ? (
           <MultiAgentTile id={id} width={width} height={height} />
         ) : isDefter ? (
-          <DefterMesh id={id} content={content} width={width} height={height} />
+          <DefterTileMesh id={id} content={content} width={width} height={height} />
         ) : isSlide ? (
           <SlideMesh url={url} width={width} height={height} />
         ) : isCanvas ? (

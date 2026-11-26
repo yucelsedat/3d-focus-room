@@ -317,7 +317,7 @@ export default function LibraryPage() {
             leading={
               <button
                 type="button"
-                onClick={() => navigate('/worlds')}
+                onClick={() => navigate('/')}
                 aria-label="Odalar"
                 title="3B odalara git"
                 className="lib-press"

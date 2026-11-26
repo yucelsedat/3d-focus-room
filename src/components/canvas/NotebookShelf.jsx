@@ -13,7 +13,7 @@ const FONT_DISPLAY = "'Fraunces', Georgia, serif"
 const PAPER = '#f7f2e4'
 
 // ── Menü ─────────────────────────────────────────────────────────────────────
-// Kitaplığın (ana sayfa) defterleri, kategorilerine göre (new-defter-system). Eski oda /
+// Kitaplığın (/kitaplik) defterleri, kategorilerine göre (new-defter-system). Eski oda /
 // bağımsız defterler kaldırıldı.
 // u: ölçek (canvas tile 2 — 1920 px'lik yüzeyde okunur kalsın; timeline 1).
 // onPick(meta) seçilen deftere kart ekler (meta.lib = true, key 'lib:<id>'). "+ Yeni defter" ve
@@ -22,7 +22,8 @@ const PAPER = '#f7f2e4'
 // Üstteki arama kutusu (oda aramasıyla aynı davranış): eşleşenler benzerliğe göre sıralanır; yazılan ad
 // birebir bir defter değilse listenin başında vurgulu "oluştur ve ekle" durur — Enter formu o adla açar.
 // ↑/↓ satırlar arasında gezer, Enter vurgulu satırı seçer.
-export function NotebookShelfMenu({ u = 1, style, onPick }) {
+// pickTitle: satırın ipucu (medya modalında "Duvara defter olarak ekle")
+export function NotebookShelfMenu({ u = 1, style, onPick, pickTitle = "Canvas'a kart olarak ekle" }) {
   const { books, categories, state } = useLibrary()
   const held = useStore(st => st.heldNotebook)
   const [busy, setBusy] = useState(false)
@@ -103,7 +104,7 @@ export function NotebookShelfMenu({ u = 1, style, onPick }) {
     const sub = pinned ? 'elinde'
       : [withCategory && catName.get(known.has(b.category_id) ? b.category_id : 'other'), KIND_LABEL[b.kind] ?? 'Defter', b.year].filter(Boolean).join(' · ')
     return rowShell(`${pinned ? 'held' : 'b'}-${b.id}`, i, (<>
-      <button type="button" title="Canvas'a kart olarak ekle" onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); pick(b) }}
+      <button type="button" title={pickTitle} onMouseDown={stopEvt} onClick={(e) => { stopEvt(e); pick(b) }}
         style={{ display: 'flex', alignItems: 'center', gap: 12 * u, flex: 1, minWidth: 0, padding: `${8 * u}px ${4 * u}px ${8 * u}px ${12 * u}px`, background: 'transparent',
           border: 0, cursor: 'pointer', textAlign: 'left', color: PAPER }}>
         <span style={{ position: 'relative', width: 24 * u, height: 32 * u, flexShrink: 0, overflow: 'hidden',
@@ -137,7 +138,7 @@ export function NotebookShelfMenu({ u = 1, style, onPick }) {
         boxShadow: '0 18px 40px -18px rgba(0,0,0,0.8)', overflow: 'hidden', fontFamily: FONT_UI, ...style }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 * u, padding: `${12 * u}px ${12 * u}px`, borderBottom: '1px solid rgba(247,242,228,0.1)' }}>
         <span style={{ flex: 1, font: `italic 200 ${22 * u}px ${FONT_DISPLAY}`, color: PAPER }}>Kitaplık</span>
-        <a href="/" target="_blank" rel="noopener" onMouseDown={stopEvt} onClick={stopEvt} title="Kitaplığı yeni sekmede aç" aria-label="Kitaplığı yeni sekmede aç"
+        <a href="/kitaplik" target="_blank" rel="noopener" onMouseDown={stopEvt} onClick={stopEvt} title="Kitaplığı yeni sekmede aç" aria-label="Kitaplığı yeni sekmede aç"
           style={{ padding: `${7 * u}px ${9 * u}px`, borderRadius: 4 * u, border: '1px solid rgba(247,242,228,0.2)', color: 'rgba(247,242,228,0.8)',
             textDecoration: 'none', font: `800 ${10 * u}px ${FONT_UI}` }}>
           ↗

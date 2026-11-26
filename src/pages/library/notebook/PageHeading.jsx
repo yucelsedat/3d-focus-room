@@ -29,7 +29,8 @@ const DOC_TITLE_TIERS = [
 export function PageTopBar({ onBack, tight = false, children }) {
   return (
     <div style={styles.top}>
-      <HandIcon shape="back" label="Geri dön" size={28} onPress={onBack} />
+      {/* Duvardaki defter tile'ında geri yoktur; sağdaki düğmeler yine sağda kalsın diye yer tutulur */}
+      {onBack ? <HandIcon shape="back" label="Geri dön" size={28} onPress={onBack} /> : <span />}
       <div style={{ ...styles.topActions, ...(tight ? { gap: 7 } : null) }}>{children}</div>
     </div>
   )
