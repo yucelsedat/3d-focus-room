@@ -1,4 +1,4 @@
-// Oyunda (ve /canvas, /timeline'da) açılan kitaplık defteri: ana sayfadaki kitaplığın defter
+// Oyunda (ve /canvas, /timeline'da) açılan kitaplık defteri: kitaplığın (/kitaplik) defter
 // ekranının (NotebookView) kendisi, tam ekran overlay olarak. Ayrı chunk — NotebookHost lazy yükler.
 //
 // Katman: z-index nişangahınkiyle (Crosshair) aynı en üst değer; App'te ondan sonra geldiği için

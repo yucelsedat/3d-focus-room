@@ -259,7 +259,7 @@ export function MainMenu() {
               <button style={s.otherBtn} onClick={() => { setView('rooms'); setError('') }} disabled={loading}>
                 Odalar
               </button>
-              <button style={s.exitBtn} onClick={() => navigate('/worlds')}>
+              <button style={s.exitBtn} onClick={() => navigate('/')}>
                 ← Ana Menüye Çık
               </button>
             </div>

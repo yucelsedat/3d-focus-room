@@ -190,7 +190,7 @@ export function BottomNav({ active, onReselect, tone, orientation = 'vertical' }
 
   function goToLibrary() {
     if (active === 'library') onReselect?.()
-    else navigate('/')
+    else navigate('/kitaplik')
   }
 
   // Pano, takvim ve ayraçlar aynı seviyededir: birinden ötekine geçilince yerine açılır

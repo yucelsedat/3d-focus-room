@@ -458,3 +458,10 @@
     0 0 26px rgba(255, 120, 70, 0.35) !important;
 }
 
+
+/* Duvardaki defter tile'ı (LibraryNotebookTile): ekranı değil verilen kutuyu doldurur */
+.lib-root.lib-root--tile {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+}

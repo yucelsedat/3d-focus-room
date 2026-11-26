@@ -1376,27 +1376,38 @@ app.post('/api/sticky', async (req, res) => {
   }
 });
 
-// Defter tile — Claude'a bağlı OLMAYAN yerel not defteri. İçerik tamamen
-// content alanında JSON olarak tutulur: { pages: [{ title, blocks: [str] }] }.
-// Kaydetme/güncelleme generic PUT /api/media/:id (content) ile yapılır.
+// Defter tile — kitaplıktaki bir defterin duvardaki görünümü. İçerik yalnızca referanstır:
+// { notebook: 'lib:<ShelfBook.id>' }; defterin sayfaları kitaplıkta (ShelfBook) durur, tile
+// kopyalanınca da aynı deftere bakar. Varsayılan boyut metin tile'ı gibi 4 × 5.
+// notebook gönderilmezse eski yerel defter (content: { pages: [...] }) oluşturulur — eski
+// istemciler bozulmasın; eski tile'lar syncRoomDefterRaw ile raw/'a izdüşmeye devam eder.
 app.post('/api/defter', async (req, res) => {
   try {
-    const { tileId, width, height, position, rotation } = req.body;
+    const { tileId, width, height, position, rotation, notebook } = req.body;
+    const roomId = req.body.roomId || activeRoomId;
     const pos = JSON.parse(position);
     const rot = JSON.parse(rotation);
     const id = BigInt(Date.now());
-    const content = JSON.stringify({ pages: [{ title: '', blocks: [] }] });
+    let content;
+    if (notebook !== undefined) {
+      if (typeof notebook !== 'string' || !/^lib:\d{1,12}$/.test(notebook)) {
+        return res.status(400).json({ error: 'Geçersiz defter' });
+      }
+      content = JSON.stringify({ notebook });
+    } else {
+      content = JSON.stringify({ pages: [{ title: '', blocks: [] }] });
+    }
 
     const media = await prisma.media.create({
       data: {
         id,
-        roomId: activeRoomId,
+        roomId,
         tileId,
         type: 'defter',
         url: null,
         content,
-        width: parseFloat(width) || 6,
-        height: parseFloat(height) || 4,
+        width: parseFloat(width) || (notebook ? 4 : 6),
+        height: parseFloat(height) || (notebook ? 5 : 4),
         posX: parseFloat(pos[0]) || 0,
         posY: parseFloat(pos[1]) || 0,
         posZ: parseFloat(pos[2]) || 0,

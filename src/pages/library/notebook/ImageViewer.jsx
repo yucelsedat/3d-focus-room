@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom'
 import { fonts } from '../theme.js'
 import { attachmentUrl } from './attachments.js'
 import { HandIcon } from './HandIcon.jsx'
-import { portalRoot } from '../portalRoot.js'
+import { usePortalRoot } from '../portalRoot.js'
 
 const MAX_SCALE = 6
 const MIN_CROP = 0.05
@@ -20,6 +20,7 @@ export function ImageViewer({ images, startIndex, onClose, onCrop }) {
   const [busy, setBusy] = useState(false)
   const image = images[index]
   const drag = useRef(null)
+  const target = usePortalRoot()
 
   function go(next) {
     if (next < 0 || next >= images.length) return
@@ -116,7 +117,7 @@ export function ImageViewer({ images, startIndex, onClose, onCrop }) {
         </>
       )}
     </div>,
-    portalRoot(),
+    target,
   )
 }
 

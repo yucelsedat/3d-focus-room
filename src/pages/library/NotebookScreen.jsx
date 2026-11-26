@@ -20,6 +20,7 @@ import { DEFAULT_PEN } from './notebook/marks.js'
 import { NotebookPage } from './notebook/NotebookPage.jsx'
 import { PageFilterMenu } from './notebook/PageFilterMenu.jsx'
 import { PageIndex } from './notebook/PageIndex.jsx'
+import { PageTurnButton } from './notebook/PageTurnButton.jsx'
 import { lastPageKey, rememberNotebook, storageGet, storageSet } from './state.js'
 import { colors, fonts, HAND_TAIL } from './theme.js'
 
@@ -34,6 +35,10 @@ const TURN_VELOCITY = 600
 const LOADER_TIMEOUT = 8000
 // Geniş ekranda kâğıt bu kadar enlidir; iki yanında masa görünür
 const SHEET_MAX = 820
+// Sayfa düğmeleri: çapı (simge + çerçeve) ve kâğıttan uzaklığı. Masada yer yoksa kâğıdın kenarına biner.
+const TURN_ICON = 36
+const TURN_BUTTON = TURN_ICON + 4 + 8
+const TURN_GAP = 16
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v))
 const clampPage = (index, count) => Math.min(count - 1, Math.max(0, index))
@@ -140,7 +145,12 @@ export default function NotebookScreen() {
 // Defterin kendisi: /notebook rotası ve oyundaki defter (LibraryNotebookOverlay) aynısını çizer.
 // onClose verilirse (gömülü) geri düğmesi ve Esc onu çağırır — onClose('button' | 'escape');
 // verilmezse geri, tarayıcı geçmişinde bir adım geri gider. onMissing: defter bulunamadı.
-export function NotebookView({ notebookId, pageKey, onClose, onMissing }) {
+//
+// tile: duvardaki defter tile'ı (LibraryNotebookTile). Defter ekranı kaplamaz, verilen kutuyu
+// doldurur; geri düğmesi yoktur; ok tuşları sayfa çevirmez (oyunda yürür) — sayfa tile'ın yanındaki
+// düğmelerle (controlRef.current.turn(±1)) çevrilir. Kalınan sayfa kitaplığa değil onPageChange'le
+// tile'a yazılır; turnState({ canPrev, canNext }) düğmelerin durumunu bildirir.
+export function NotebookView({ notebookId, pageKey, onClose, onMissing, tile = false, controlRef, onPageChange, onTurnState }) {
   const [notebook, setNotebook] = useState(null)
   const [missing, setMissing] = useState(false)
   const [ready, setReady] = useState(false)
@@ -189,9 +199,20 @@ export function NotebookView({ notebookId, pageKey, onClose, onMissing }) {
   }, [missing])
 
   return (
-    <div className="lib-root">
+    <div className={tile ? 'lib-root lib-root--tile' : 'lib-root'}>
       <div className="lib-app" style={styles.desk}>
-        {notebook && <OpenNotebook notebook={notebook} pageKey={pageKey} onReady={markReady} onClose={onClose} />}
+        {notebook && (
+          <OpenNotebook
+            notebook={notebook}
+            pageKey={pageKey}
+            onReady={markReady}
+            onClose={onClose}
+            tile={tile}
+            controlRef={controlRef}
+            onPageChange={onPageChange}
+            onTurnState={onTurnState}
+          />
+        )}
         {missing && (
           <div style={{ ...styles.center, flexDirection: 'column', gap: 18 }}>
             <div style={styles.title}>{'Defter bulunamadı' + HAND_TAIL}</div>
@@ -231,7 +252,7 @@ async function writtenPageIndices(notebookId, layout, count, kinds) {
 
 const ADD_TURN_DURATION = 560
 
-function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
+function OpenNotebook({ notebook, pageKey, onReady, onClose, tile, controlRef, onPageChange, onTurnState }) {
   const navigate = useNavigate()
   const notebookId = notebook.id
   const isNotes = hasNumberedPages(notebook.kind)
@@ -284,9 +305,10 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
     return () => ro.disconnect()
   }, [])
 
+  // Duvardaki tile kitaplığın "en son açılan defter"ini değiştirmez
   useEffect(() => {
-    rememberNotebook(notebookId)
-  }, [notebookId])
+    if (!tile) rememberNotebook(notebookId)
+  }, [notebookId, tile])
 
   useEffect(() => {
     const timer = setTimeout(() => setPreload(PRELOAD), LOADER_TIMEOUT)
@@ -311,7 +333,9 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
   }
 
   function remember(index) {
-    storageSet(lastPageKey(notebookId), slotKey(layout.slotAt(index)))
+    const key = slotKey(layout.slotAt(index))
+    if (tile) onPageChange?.(key)
+    else storageSet(lastPageKey(notebookId), key)
   }
 
   function settle(order) {
@@ -324,7 +348,7 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
   function back() {
     if (onClose) onClose('button')
     else if (window.history.state?.idx > 0) navigate(-1)
-    else navigate('/', { replace: true })
+    else navigate('/kitaplik', { replace: true })
   }
 
   // Çevirme yarıda bırakılınca hedefe süzülür
@@ -473,6 +497,22 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
     openFirstOf([`${key}:month-goals`, `${key}:month-habits`, `${key}:month-review`, key])
   }
 
+  // Tile'ın yanındaki sayfa düğmeleri: her çizimde güncel turnTo'yu görsün
+  useEffect(() => {
+    if (!controlRef) return
+    controlRef.current = { turn: (delta) => turnTo(Math.round(position.get()) + delta) }
+  })
+  // Takvim açıkken, yaprak silinirken, seçim / çizim modunda sayfa çevrilmez: düğmeler de sönük
+  const turnBlocked = indexOpen || ghost !== null || locked
+  const canPrev = !turnBlocked && page > 0
+  const canNext = !turnBlocked && page < pageCount - 1
+  useEffect(() => {
+    onTurnState?.({ canPrev, canNext })
+  }, [onTurnState, canPrev, canNext])
+  useEffect(() => () => {
+    if (controlRef) controlRef.current = null
+  }, [controlRef])
+
   const hasMonthPages = notebook.month_goals === 1 || notebook.month_review === 1 || notebook.habits === 'month'
   const currentSlot = layout.slotAt(pageAt(page))
 
@@ -499,7 +539,11 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
   function onPointerDown(e) {
     if (!canStartDrag(e)) return
     position.cancel()
-    drag.current = { x: e.clientX, y: e.clientY, id: e.pointerId, start: position.get(), active: false, samples: [] }
+    // Duvardaki tile 3D'de ölçekli durur: ekrandaki sürükleme kâğıdın kendi genişliğine oranlanır
+    const el = deskRef.current
+    const rect = el?.getBoundingClientRect()
+    const scale = rect && el.offsetWidth ? rect.width / el.offsetWidth : 1
+    drag.current = { x: e.clientX, y: e.clientY, id: e.pointerId, start: position.get(), active: false, samples: [], scale: scale || 1 }
   }
 
   function onPointerMove(e) {
@@ -528,7 +572,7 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
     if (d.samples.length > 5) d.samples.shift()
     const base = Math.round(d.start)
     // Sola sürükleyince sayfa ilerler; bir seferde tek sayfa çevrilir
-    const next = d.start - dx / width
+    const next = d.start - dx / (width * d.scale)
     position.set(clampPage(Math.min(base + 1, Math.max(base - 1, next)), turnCount.current))
   }
 
@@ -540,7 +584,7 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
     if (!d.active) return
     const first = d.samples[0]
     const last = d.samples[d.samples.length - 1]
-    const velocity = first && last && last.t > first.t ? ((last.x - first.x) / (last.t - first.t)) * 1000 : 0
+    const velocity = first && last && last.t > first.t ? ((last.x - first.x) / (last.t - first.t)) * (1000 / d.scale) : 0
     const base = Math.round(d.start)
     const moved = position.get() - base
     let target = base
@@ -550,7 +594,9 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
   }
 
   // ─── Klavye ve trackpad ──────────────────────────────────────────────────────
+  // Duvardaki tile'da ok tuşları oyunda yürür; sayfa tile'ın düğmeleriyle çevrilir
   useEffect(() => {
+    if (tile) return
     const editing = () => {
       const el = document.activeElement
       return el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)
@@ -618,7 +664,7 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
     notebookId,
     layout,
     paper: notebook.paper,
-    onBack: back,
+    onBack: tile ? undefined : back,
     reading,
     onReadingChange: changeReading,
     filtering: kinds !== null,
@@ -700,8 +746,22 @@ function OpenNotebook({ notebook, pageKey, onReady, onClose }) {
           )}
         </div>
       )}
+      {/* Sayfa düğmeleri (duvardaki tile kendi düğmelerini tile'ın dışına koyar) */}
+      {!tile && width > 0 && (
+        <>
+          <PageTurnButton side="left" size={TURN_ICON} style={turnButtonStyle('left', deskWidth, width)} disabled={!canPrev} onPress={() => turnTo(Math.round(position.get()) - 1)} />
+          <PageTurnButton side="right" size={TURN_ICON} style={turnButtonStyle('right', deskWidth, width)} disabled={!canNext} onPress={() => turnTo(Math.round(position.get()) + 1)} />
+        </>
+      )}
     </div>
   )
+}
+
+// Kâğıdın iki yanındaki masada, dikeyde ortada; masa dar ise kâğıdın kenarında
+function turnButtonStyle(side, deskWidth, sheetWidth) {
+  const margin = (deskWidth - sheetWidth) / 2
+  const offset = margin >= TURN_BUTTON + TURN_GAP * 2 ? margin - TURN_BUTTON - TURN_GAP : 8
+  return { position: 'absolute', top: '50%', [side]: offset, transform: 'translateY(-50%)', zIndex: 20 }
 }
 
 // Defterin bir sayfası: notlu sayfa ya da alışkanlık takibi. Sayfa eklenip çıkarılınca yaprak

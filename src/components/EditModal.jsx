@@ -6,6 +6,7 @@ import { useSpeechToText } from '../hooks/useSpeechToText'
 import { loadRoom } from '../utils/loadRoom'
 import { pasteRichTextAsMarkdown } from '../utils/richTextToMarkdown'
 import { mdTileWidth, MD_PX_PER_UNIT, MD_COL_PX_W } from '../utils/markdownRender'
+import { NotebookShelfMenu } from './canvas/NotebookShelf'
 
 const micPulseStyle = `@keyframes micPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }`
 
@@ -109,6 +110,9 @@ export function EditModal() {
   // Markdown: h=5 sabit, içerik tile ile aynı düzende ölçülüp kaç sütun gerektiği hesaplanır → w=nCols*4 (4 geniş × 5 yüksek sütun)
   const MD_H = 5                                  // sabit 3D yükseklik
   const MD_COL_W = MD_COL_PX_W / MD_PX_PER_UNIT   // = 640/160 = 4 birim/sütun
+  // Defter tile: metin tile'ının bir sütunu kadar (4 geniş × 5 yüksek)
+  const DEFTER_W = MD_COL_W
+  const DEFTER_H = MD_H
 
   useEffect(() => {
     if (activeTab !== 'markdown') return
@@ -208,6 +212,37 @@ export function EditModal() {
 
   // Kopyala/Kes butonları için medya tip etiketleri
   const mediaTypeLabel = { image: 'Resim', video: 'Video', youtube: 'YouTube', embed: 'Embed', markdown: 'Metin', canvas: 'Canvas', header: 'Başlık', sticky: 'Sticky Not', session: 'AI Session', roomchat: 'Oda Sohbeti', roomsession: 'Oda Projesi', projectview: 'ProjectView', bluprint: 'Blueprint', defter: 'Defter' }
+
+  // Defter sekmesi: kitaplıktan seçilen (ya da yeni oluşturulan) defter duvara metin tile
+  // boyutunda (4 × 5) basılır. Tile yalnızca referans tutar: { notebook: 'lib:<id>' }.
+  const addDefterTile = async (meta) => {
+    if (!meta?.key || !selectedTile || loading) return
+    setLoading(true)
+    setLoadingStep('saving')
+    try {
+      const r = await fetch('/api/defter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tileId: selectedTile.id,
+          notebook: meta.key,
+          width: DEFTER_W,
+          height: DEFTER_H,
+          position: JSON.stringify(selectedTile.position),
+          rotation: JSON.stringify(selectedTile.rotation),
+        })
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Defter eklenemedi')
+      addMedia(d)
+      closeModal()
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setLoading(false)
+      setLoadingStep('')
+    }
+  }
 
   const handlePaste = async () => {
     if (!clonedMedia || !selectedTile) return
@@ -353,32 +388,8 @@ export function EditModal() {
     }
 
     if (activeTab === 'defter') {
-      setLoading(true)
-      setLoadingStep('saving')
-      try {
-        const r = await fetch('/api/defter', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tileId: selectedTile.id,
-            width,
-            height,
-            position: JSON.stringify(selectedTile.position),
-            rotation: JSON.stringify(selectedTile.rotation),
-          })
-        })
-        const d = await r.json()
-        if (!r.ok) throw new Error(d.error || 'Defter oluşturulamadı')
-        addMedia(d)
-        closeModal()
-        setWidth(6)
-        setHeight(4)
-      } catch (err) {
-        alert(err.message)
-      } finally {
-        setLoading(false)
-        setLoadingStep('')
-      }
+      // Defter, listeden seçilince (ya da oluşturulunca) hemen duvara eklenir (addDefterTile)
+      alert('Listeden bir defter seç ya da aradığın adla yeni defter oluştur.')
       return
     }
 
@@ -1230,7 +1241,7 @@ export function EditModal() {
           </button>
           <button
             style={activeTab === 'defter' ? s.activeTab : s.tab}
-            onClick={() => { setActiveTab('defter'); setWidth(6); setHeight(4) }}
+            onClick={() => { setActiveTab('defter'); setWidth(DEFTER_W); setHeight(DEFTER_H) }}
           >
             📒 Defter
           </button>
@@ -1337,10 +1348,16 @@ export function EditModal() {
           {activeTab === 'defter' && (
             <div style={s.inputGroup}>
               <p style={{ color: '#e0b050', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>📒 Defter</p>
-              <p style={{ color: '#777', fontSize: '11px', margin: 0, lineHeight: 1.5 }}>
-                Yerel not defteri — <b>Claude'a bağlı değildir</b>. Sayfalar arası gezinir, alt alta yazı
-                blokları eklersin; her bloğu kopyalayabilir, defteri kaydedebilirsin. İçerik tile'da saklanır.
+              <p style={{ color: '#777', fontSize: '11px', margin: '0 0 10px', lineHeight: 1.5 }}>
+                Kitaplıktaki bir defteri ara ve seç; yoksa aradığın adla oluştur. Defter duvara metin tile
+                boyutunda basılır — kitaplıktaki defterin kendisidir, yazdıkların kitaplıkta da görünür.
+                Sayfaları tile'ın yanındaki ◀ ▶ düğmeleriyle çevirirsin.
               </p>
+              <NotebookShelfMenu
+                pickTitle="Duvara defter olarak ekle"
+                onPick={addDefterTile}
+                style={{ width: '100%', boxSizing: 'border-box', opacity: loading ? 0.6 : 1, pointerEvents: loading ? 'none' : 'auto' }}
+              />
             </div>
           )}
 
@@ -1744,7 +1761,7 @@ export function EditModal() {
           )}
 
           {/* URL input */}
-          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'sticky' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
+          {activeTab !== 'markdown' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'sticky' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && activeTab !== 'defter' && (
           <div style={s.inputGroup}>
             <label style={s.label}>
               {activeTab === 'image' ? 'Resim Linki' : activeTab === 'video' ? 'Video Linki' : activeTab === 'embed' ? 'Site URL' : 'YouTube Linki (veya iframe)'}
@@ -1773,7 +1790,7 @@ export function EditModal() {
           )}
 
           {/* File input */}
-          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'sticky' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && (
+          {activeTab !== 'youtube' && activeTab !== 'markdown' && activeTab !== 'embed' && activeTab !== 'canvas' && activeTab !== 'header' && activeTab !== 'sticky' && activeTab !== 'session' && activeTab !== 'roomchat' && activeTab !== 'roomsession' && activeTab !== 'projectview' && activeTab !== 'bluprint' && activeTab !== 'slide' && activeTab !== 'defter' && (
             <div style={s.inputGroup}>
               <label style={s.label}>
                 {activeTab === 'image' ? 'veya Dosya Seç' : 'veya Video Dosyası Seç'}
@@ -1819,8 +1836,8 @@ export function EditModal() {
             </div>
           )}
 
-          {/* Size inputs — loop düzenleme modunda gizli (tile boyutu değişmez) */}
-          <div style={loopEditMode ? { display: 'none' } : s.row}>
+          {/* Size inputs — loop düzenleme modunda gizli (tile boyutu değişmez); defter sabit 4 × 5 */}
+          <div style={(loopEditMode || activeTab === 'defter') ? { display: 'none' } : s.row}>
             <div style={{ flex: 1 }}>
               <label style={s.label}>
                 Genişlik (tile) {activeTab === 'markdown' ? '⚡ otomatik' : activeTab === 'session' ? '⚡ 3' : activeTab === 'slide' ? '⚡ 8.89 (16:9)' : ''}
@@ -1856,9 +1873,12 @@ export function EditModal() {
         {/* Actions */}
         <div style={s.actions}>
           <button style={s.cancelBtn} onClick={closeModal}>İptal</button>
-          <button style={s.applyBtn} onClick={handleApply} disabled={loading}>
-            {loading ? loadingLabel : loopEditMode ? 'Kaydet' : 'Uygula'}
-          </button>
+          {/* Defter listeden seçilince eklenir; Uygula yalnızca eklenirken durumu gösterir */}
+          {(activeTab !== 'defter' || loading) && (
+            <button style={s.applyBtn} onClick={handleApply} disabled={loading}>
+              {loading ? loadingLabel : loopEditMode ? 'Kaydet' : 'Uygula'}
+            </button>
+          )}
         </div>
 
       </div>
