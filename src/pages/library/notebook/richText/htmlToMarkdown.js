@@ -2,6 +2,7 @@
 // Web: HTML tarayıcının DOMParser'ıyla ayrıştırılır (mobilde linkedom); script çalıştırmaz,
 // görselleri yüklemez (belge etkin değildir)
 import TurndownService from 'turndown';
+import { copiedMarkdown } from './markdownCopy.js';
 const BLOCK_TAGS = new Set([
     'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'BODY', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
     'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
@@ -526,6 +527,10 @@ export function isBareUrl(text) {
 // Markdown'a çevrilen panodaki yazı. HTML yoksa, tek bir adresse ya da biçim taşımıyorsa düz metin
 // olduğu gibi döner (rich: false).
 export function clipboardToMarkdown({ html, plain }) {
+    // Metin tile'ından / defterden kopyalanan yazı: Markdown'ın kendisi panoda (bkz. markdownCopy.js)
+    const copied = copiedMarkdown({ html, plain });
+    if (copied !== null)
+        return { text: copied, rich: true, missingLinks: 0 };
     const plainText = (plain ?? '').replace(/\r\n?/g, '\n');
     const asPlain = (missingLinks = 0) => ({
         text: plainText,

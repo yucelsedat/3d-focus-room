@@ -12,6 +12,7 @@ import { docPage, fonts } from '../theme.js'
 import { useRawMarkdown } from './documentSettings.js'
 import { MarkdownView } from './MarkdownView.jsx'
 import { clipboardToMarkdown } from './richText/htmlToMarkdown.js'
+import { copyMarkdownSelection } from './richText/markdownCopy.js'
 import { markdownEnter, toggleTask } from './richText/markdownEdit.js'
 import { BLANK_BLOCK, parseMarkdown, unitAt, unitPrefix } from './richText/markdownUnits.js'
 
@@ -411,8 +412,21 @@ export function LiveDocText({
     )
   }
 
+  // Kopyalarken seçilen yerin ham Markdown'ı panoya gider: başka bir metin alanına yapıştırınca
+  // HTML'den yeniden üretilmez, aynı biçimle girer
+  function onCut(e) {
+    const field = inputRef.current
+    const sel = window.getSelection?.()
+    const inField = !readOnly && field && sel?.rangeCount && field.contains(sel.anchorNode) && field.contains(sel.focusNode)
+    if (copyMarkdownSelection(e, e.currentTarget, latest.current) && inField) document.execCommand('delete')
+  }
+
   return (
-    <div style={{ ...wrapperStyle(layout), ...styles.rendered }}>
+    <div
+      style={{ ...wrapperStyle(layout), ...styles.rendered }}
+      onCopy={(e) => copyMarkdownSelection(e, e.currentTarget, latest.current)}
+      onCut={onCut}
+    >
       <MarkdownView
         value={value}
         parsed={parsed}
