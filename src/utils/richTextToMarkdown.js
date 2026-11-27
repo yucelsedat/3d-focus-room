@@ -1,4 +1,5 @@
 import TurndownService from 'turndown'
+import { copiedMarkdown } from '../pages/library/notebook/richText/markdownCopy.js'
 
 // ── Rich text (panodaki text/html) → Markdown ────────────────────────────────
 // Web sayfası, Google Docs, Word/LibreOffice, Notion vb. yerlerden kopyalanan biçimli
@@ -336,6 +337,9 @@ const isBareUrl = (text) => /^\s*https?:\/\/\S+\s*$/i.test(text || '')
 export function clipboardToMarkdown(clipboardData) {
   const plain = clipboardData?.getData('text/plain') || ''
   const html = clipboardData?.getData('text/html') || ''
+  // Metin tile'ından / defterden kopyalanan yazı: Markdown'ın kendisi panoda (bkz. markdownCopy.js)
+  const copied = copiedMarkdown({ html, plain })
+  if (copied !== null) return { text: copied, rich: true, missingLinks: 0 }
   if (!html || isBareUrl(plain)) return { text: plain, rich: false, missingLinks: 0 }
   try {
     const { md, missingLinks } = convertHtml(html, plain)

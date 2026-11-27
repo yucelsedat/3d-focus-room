@@ -198,6 +198,16 @@ function rawAttrs(from, length, exact) {
   return { 'data-raw': from, 'data-len': length, 'data-exact': exact ? '1' : '0' }
 }
 
+// Bölünmeyen bloğun (kod, tablo, görsel, çizgi) ham yazıdaki yeri: seçip kopyalarken blok bütün
+// alınır (bkz. richText/markdownCopy.js)
+function srcAttrs(first, last, ctx, kind) {
+  const a = ctx.offsets.get(first)
+  const b = ctx.offsets.get(last)
+  if (a === undefined || b === undefined) return null
+  const end = b + last.raw.replace(/\s+$/, '').length
+  return { 'data-src': a, 'data-src-len': Math.max(0, end - a), ...(kind ? { 'data-src-kind': kind } : null) }
+}
+
 function leafStyle(inline) {
   const font =
     inline.heading !== null
@@ -297,16 +307,18 @@ function renderBlocks(tokens, ctx, key = 'b') {
       continue
     }
     const run = [...images]
+    const first = blocks[i]
     let next
     while (i + 1 < blocks.length && (next = blockImages(blocks[i + 1]))) {
       run.push(...next)
       i++
     }
+    const attrs = srcAttrs(first, blocks[i], ctx)
     out.push(
       run.length === 1 ? (
-        <MdImage key={k} uri={run[0].href} alt={run[0].text} imageOk={ctx.imageOk} />
+        <MdImage key={k} uri={run[0].href} alt={run[0].text} imageOk={ctx.imageOk} attrs={attrs} />
       ) : (
-        <ImageCarousel key={k} images={run} imageOk={ctx.imageOk} />
+        <ImageCarousel key={k} images={run} imageOk={ctx.imageOk} attrs={attrs} />
       ),
     )
   }
@@ -336,7 +348,7 @@ function renderBlock(token, ctx, k) {
     case 'text':
       return <BlockText key={k} block={token} tokens={token.tokens ?? [token]} inline={PLAIN} ctx={ctx} style={{ ...styles.paragraph, color: ctx.ink }} />
     case 'code':
-      return <CodeBlock key={k} code={token.text} lang={token.lang} />
+      return <CodeBlock key={k} code={token.text} lang={token.lang} attrs={srcAttrs(token, token, ctx, 'code')} />
     case 'blockquote':
       return (
         <div key={k} style={styles.quote}>
@@ -346,13 +358,13 @@ function renderBlock(token, ctx, k) {
     case 'list':
       return <List key={k} list={token} ctx={ctx} k={k} />
     case 'table':
-      return <Table key={k} table={token} ctx={ctx} />
+      return <Table key={k} table={token} ctx={ctx} attrs={srcAttrs(token, token, ctx)} />
     case 'hr':
-      return <div key={k} style={styles.hr} />
+      return <div key={k} style={styles.hr} {...srcAttrs(token, token, ctx)} />
     case 'html': {
       const text = token.text.trim()
       return text ? (
-        <div key={k} style={styles.rawHtml}>
+        <div key={k} style={styles.rawHtml} {...srcAttrs(token, token, ctx)}>
           {text}
         </div>
       ) : null
@@ -431,14 +443,14 @@ function TaskBox({ checked }) {
 }
 
 // GFM tablosu: yana kayar; sütun genişliği o sütundaki en uzun yazıya göre
-function Table({ table, ctx }) {
+function Table({ table, ctx, attrs }) {
   const rows = [table.header, ...table.rows]
   const widths = table.header.map((_, col) => {
     const longest = Math.max(...rows.map((row) => (row[col]?.text ?? '').length))
     return Math.min(260, Math.max(72, longest * 7.6 + 24))
   })
   return (
-    <div style={styles.tableScroll}>
+    <div style={styles.tableScroll} {...attrs}>
       <div style={styles.table}>
         {rows.map((row, r) => (
           <div key={r} style={{ ...styles.tableRow, ...(r > 0 ? { borderTop: `1px solid ${docPage.rule}` } : null) }}>
@@ -469,10 +481,10 @@ function Table({ table, ctx }) {
 }
 
 // Kod bloğu: koyu kutu, sağ üstte dil etiketi, uzun satırlar yana kayar
-function CodeBlock({ code, lang }) {
+function CodeBlock({ code, lang, attrs }) {
   const label = (lang ?? '').split(/\s/)[0]
   return (
-    <div style={styles.code}>
+    <div style={styles.code} {...attrs}>
       {label !== '' && <span style={styles.codeLabel}>{label}</span>}
       <pre style={{ ...styles.codeText, ...(label !== '' ? styles.codeTextLabeled : null) }}>{code.replace(/\n$/, '')}</pre>
     </div>
@@ -480,19 +492,23 @@ function CodeBlock({ code, lang }) {
 }
 
 // Yalnızca https görseller; oran korunarak genişliğe sığar
-function MdImage({ uri, alt, imageOk = HTTPS_IMAGE }) {
+function MdImage({ uri, alt, imageOk = HTTPS_IMAGE, attrs }) {
   const [failed, setFailed] = useState(false)
   if (!imageOk(uri) || failed) {
-    return alt ? <div style={{ ...styles.paragraph, color: docPage.muted }}>{`[${decode(alt)}]`}</div> : null
+    return alt ? (
+      <div style={{ ...styles.paragraph, color: docPage.muted }} {...attrs}>
+        {`[${decode(alt)}]`}
+      </div>
+    ) : null
   }
-  return <img src={uri} alt={decode(alt)} onError={() => setFailed(true)} style={styles.image} loading="lazy" />
+  return <img src={uri} alt={decode(alt)} onError={() => setFailed(true)} style={styles.image} loading="lazy" {...attrs} />
 }
 
 // Art arda görseller: yana kayan şerit. Kart alanın %82'si genişliğinde, sonraki kartın ucu görünür;
 // bırakınca kart yerine oturur. Altta kaçıncı görselde olunduğunu gösteren noktalar.
 const CARD_GAP = 10
 
-function ImageCarousel({ images, imageOk }) {
+function ImageCarousel({ images, imageOk, attrs }) {
   const ref = useRef(null)
   const [width, setWidth] = useState(0)
   const [index, setIndex] = useState(0)
@@ -506,7 +522,7 @@ function ImageCarousel({ images, imageOk }) {
   const card = Math.round(width * 0.82)
   const step = card + CARD_GAP
   return (
-    <div ref={ref}>
+    <div ref={ref} {...attrs}>
       {width > 0 && (
         <div
           className="nb-carousel"
