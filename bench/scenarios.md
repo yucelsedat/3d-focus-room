@@ -54,3 +54,13 @@ Sonuç: `data/bench/<label>-<senaryo>-<ts>.json`
 - Tur-tur birikim için sunucu logunda `[turn-usage]` satırlarını grep'le:
   `grep turn-usage <sunucu-log>` → `cr=` sütununun büyüme eğrisi.
 - Fazlar arası karşılaştırma tablosu: `bench/BASELINE.md` ("önce" sütunu).
+
+## 5. `roomsession-chat-idlegap` — roomsession sohbet (Aşama 3 TTL A/B)
+
+- **Mesajlar:** 3 küçük deterministik kodlama isteği (package.json yaz, index.js yaz,
+  `npm start` çalıştır), turlar arası 360 sn.
+- **Kollar:** sunucu `FOCUS_ROOM_LOOP_TTL=5m` (varsayılan: `FORCE_PROMPT_CACHING_5M`) veya
+  `FOCUS_ROOM_LOOP_TTL=1h` (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`). Kod aynı, fark yalnız env.
+- **Ne ölçer:** 5 dk'yı aşan boşluktan sonra 2./3. turun soğuk mu (prefix yeniden yazılır)
+  sıcak mı (okunur) olduğu; `coldTurns`, `cw5m`/`cw1h`, `quotaPoints`. Süreç 15 dk idle
+  sınırı sayesinde canlı kalır, yani fark respawn'dan değil TTL'den gelir.

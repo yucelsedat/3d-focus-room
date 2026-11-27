@@ -59,6 +59,20 @@ const SCENARIOS = {
     ],
     note: 'roomchat — 3 tur, turlar arası 6 dk boşluk; 1H cache + uzun idle doğrulaması',
   },
+  // Aşama 3 TTL A/B: Oda Projesi tile'ında SOHBET (loop değil), turlar arası 6 dk.
+  // 5m TTL'de 2./3. tur prefix'i yeniden yazar (soğuk); 1h'de okur (sıcak). Süreç
+  // PERSIST_IDLE_MS (15 dk) sayesinde canlı kalır → fark yalnız TTL'den gelir.
+  // Kol seçimi sunucu env'iyle: FOCUS_ROOM_LOOP_TTL=5m|1h (bench etiketi kolu yazar).
+  'roomsession-chat-idlegap': {
+    tileType: 'roomsession',
+    gapSec: 360,
+    chatPrompts: [
+      "Bu klasöre package.json yaz: name 'idlegap-demo', scripts.start 'node index.js'. Sadece dosyayı yaz, açıklama yapma.",
+      "index.js yaz: konsola 'merhaba' yazdırsın. Sadece dosyayı yaz, açıklama yapma.",
+      "npm start çalıştır ve çıktıyı tek satırla söyle.",
+    ],
+    note: 'roomsession sohbet — 3 tur, 6 dk boşluk; TTL kolu FOCUS_ROOM_LOOP_TTL ile',
+  },
 }
 
 // ── CLI argümanları ───────────────────────────────────────────────────────────
@@ -285,11 +299,26 @@ async function runRoomchat3turn() {
   return { mediaId: media.id, recall: null }
 }
 
+async function runRoomsessionChatIdlegap() {
+  const media = await api('POST', '/api/roomsession', tileBody())
+  console.log(`  tile oluşturuldu: ${media.id}`)
+  for (let i = 0; i < scenario.chatPrompts.length; i++) {
+    if (i > 0) {
+      console.log(`  ${scenario.gapSec}s bekleniyor (TTL ölçümü)…`)
+      await sleep(scenario.gapSec * 1000)
+    }
+    console.log(`  tur ${i + 1}/${scenario.chatPrompts.length}`)
+    await driveSSE('POST', '/api/roomsession/message', { mediaId: media.id, message: scenario.chatPrompts[i] })
+  }
+  return { mediaId: media.id, recall: null }
+}
+
 const RUNNERS = {
   'direct-cafe': runDirectCafe,
   'roomsession-crud': runRoomsessionCrud,
   'roomchat-3turn': runRoomchat3turn,
   'roomchat-idlegap': runRoomchat3turn,
+  'roomsession-chat-idlegap': runRoomsessionChatIdlegap,
 }
 
 // ── Ana akış ──────────────────────────────────────────────────────────────────

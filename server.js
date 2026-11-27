@@ -2513,6 +2513,7 @@ class PersistentSession {
     const { args: a, env: envOverrides } = Spawn.persistent({
       tile, settings: this.settings, sys: this.sys, maxTurns: this.maxTurns,
       tools: this.tools, maxBudgetUsd: this.maxBudgetUsd, sessionId: this.sessionId,
+      loopTtl: process.env.FOCUS_ROOM_LOOP_TTL,   // Aşama 3 TTL A/B deney anahtarı (yoksa 5m)
     }, SPAWN_CTX)
 
     // detached: claude kendi süreç grubunun lideri olur → dispose'da grup kill

@@ -218,6 +218,18 @@ test('Aşama 3: kod yazan tile\'lar varsayılan skill kapalı + medium; sohbet t
     assert.equal(S.persistent({ tile, settings: { effort: 'low' } }, ctx).env.CLAUDE_EFFORT, undefined)
   }
 })
+test('Aşama 3 TTL deney anahtarı: varsayılan 5m aynen, 1h ve default ayrık', () => {
+  for (const tile of ['roomsession', 'multiagent']) {
+    assert.deepEqual(S.persistent({ tile, settings: {} }, ctx).env, { FORCE_PROMPT_CACHING_5M: '1' })
+    assert.deepEqual(S.persistent({ tile, settings: {}, loopTtl: '5m' }, ctx).env, { FORCE_PROMPT_CACHING_5M: '1' })
+    assert.deepEqual(S.persistent({ tile, settings: {}, loopTtl: '1h' }, ctx).env, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' })
+    assert.deepEqual(S.persistent({ tile, settings: {}, loopTtl: 'default' }, ctx).env, {})
+    // argv TTL'den etkilenmez
+    assert.deepEqual(S.persistent({ tile, settings: {}, loopTtl: '1h' }, ctx).args, S.persistent({ tile, settings: {} }, ctx).args)
+  }
+  // Sohbet tile'ları anahtardan etkilenmez.
+  assert.deepEqual(S.persistent({ tile: 'roomchat', settings: {}, loopTtl: '5m' }, ctx).env, { ENABLE_PROMPT_CACHING_1H: '1' })
+})
 test('Aşama 3: skill kullanan profiller (graf, blueprint, VS Code köprüsü) izole edilmez', () => {
   for (const name of ['roomchat-graph', 'bluprint-build', 'live-session']) {
     const a = S.oneShot(name, inputs[0], ctx).args

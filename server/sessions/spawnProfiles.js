@@ -182,7 +182,10 @@ export function oneShot(name, opts, ctx) {
 // settings: { model, effort, permissionMode }
 // sys/maxTurns/tools/maxBudgetUsd: PersistentSession kurucusundan
 // sessionId: varsa --resume
-export function persistent({ tile, settings = {}, sys, maxTurns, tools, maxBudgetUsd, sessionId }, ctx) {
+// loopTtl (deney anahtarı, Aşama 3 TTL A/B): roomsession/multiagent için
+//   '5m' (varsayılan, Faz 2 kararı) · '1h' (ana konuşma 1 saat, subagent'lar 5 dk) ·
+//   'default' (env yok → abonelikte ana konuşma 1 saat). server.js FOCUS_ROOM_LOOP_TTL'den verir.
+export function persistent({ tile, settings = {}, sys, maxTurns, tools, maxBudgetUsd, sessionId, loopTtl }, ctx) {
   const def = PERSISTENT_DEFAULTS[tile] || { skills: true, effort: null }
   const skills = typeof settings.skills === 'boolean' ? settings.skills : def.skills
   const effort = settings.effort && settings.effort !== 'normal' ? settings.effort : def.effort
@@ -206,8 +209,12 @@ export function persistent({ tile, settings = {}, sys, maxTurns, tools, maxBudge
   const env = {}
   // Faz 2 İş 2.2: hot loop (roomsession/multiagent) 5m, interaktif sohbet 1h.
   // Aşama 3'te abonelik varsayılanına (1h) karşı A/B ile yeniden değerlendirilecek.
-  if (tile === 'roomsession' || tile === 'multiagent') env.FORCE_PROMPT_CACHING_5M = '1'
-  else env.ENABLE_PROMPT_CACHING_1H = '1'
+  if (tile === 'roomsession' || tile === 'multiagent') {
+    const ttl = loopTtl || '5m'
+    if (ttl === '5m') env.FORCE_PROMPT_CACHING_5M = '1'
+    else if (ttl === '1h') env.CLAUDE_CODE_PROMPT_CACHE_TTL = '1h'
+    // 'default': env yok
+  } else env.ENABLE_PROMPT_CACHING_1H = '1'
 
   return { args: a, env }
 }
