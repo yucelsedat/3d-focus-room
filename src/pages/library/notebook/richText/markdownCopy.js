@@ -179,7 +179,31 @@ export function copyMarkdownSelection(e, root, source) {
   const range = sel.getRangeAt(0)
   const at = rangeToSource(root, range)
   if (!at) return false
-  const md = sliceMarkdown(source, at.start, at.end)
+  return writeMarkdown(e, range, sliceMarkdown(source, at.start, at.end))
+}
+
+// Seçim birden çok bloğa yayılıyorsa (duvardaki metin tile'ı): her bloğun seçilen yeri kendi
+// Markdown'ıyla alınır, aralarına boş satır girer. parts: [{ root, source }] sayfadaki sırasıyla.
+export function copyMarkdownAcross(e, parts) {
+  const sel = window.getSelection?.()
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !e.clipboardData) return false
+  const range = sel.getRangeAt(0)
+  const pieces = []
+  for (const { root, source } of parts) {
+    if (!root || !range.intersectsNode(root)) continue
+    const sub = document.createRange()
+    sub.selectNodeContents(root)
+    if (root.contains(range.startContainer)) sub.setStart(range.startContainer, range.startOffset)
+    if (root.contains(range.endContainer)) sub.setEnd(range.endContainer, range.endOffset)
+    const at = rangeToSource(root, sub)
+    const md = at ? sliceMarkdown(source, at.start, at.end) : ''
+    if (md.trim()) pieces.push(md)
+  }
+  if (pieces.length === 0) return false
+  return writeMarkdown(e, range, pieces.join('\n\n'))
+}
+
+function writeMarkdown(e, range, md) {
   if (!md.trim()) return false
   const holder = document.createElement('div')
   holder.appendChild(range.cloneContents())
