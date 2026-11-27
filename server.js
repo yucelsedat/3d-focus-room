@@ -1939,10 +1939,18 @@ function permissionArgs(mode) {
 }
 
 // CLI'a verilecek inline settings (PreToolUse hook'u verilen matcher ile kaydeder).
+// Her modda ikinci bir PreToolUse girdisi: Bash koruma kilidi (bash-guard-hook.js).
+// Ajanın pkill/killall vb. ile Focus Room backend'ini öldürmesini engeller
+// (2026-11-28 olayı: `pkill -f "node server.js"` bench sunucusunu öldürdü).
+// 'ask' modunda '*' matcher'ı da Bash'i kapsar; iki hook da çalışır, deny kazanır.
 function permSettingsJson(matcher) {
   const hookPath = path.join(__dirname, 'permission-hook.js')
+  const guardPath = path.join(__dirname, 'bash-guard-hook.js')
   return JSON.stringify({
-    hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] },
+    hooks: { PreToolUse: [
+      { matcher, hooks: [{ type: 'command', command: `node "${hookPath}"` }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${guardPath}"` }] },
+    ] },
   })
 }
 
@@ -2177,7 +2185,7 @@ function setSSEHeaders(res) {
 }
 
 function buildSpawnEnv(envOverrides) {
-  const env = { ...process.env, ...(envOverrides || {}), FOCUS_ROOM_PORT: String(port) }
+  const env = { ...process.env, ...(envOverrides || {}), FOCUS_ROOM_PORT: String(port), FOCUS_ROOM_PID: String(process.pid) }
   for (const v of CLAUDE_VOLATILE_ENV) delete env[v]
   return env
 }
@@ -2289,7 +2297,7 @@ app.get('/api/usage/weights', (req, res) => {
 function streamClaudeToSSE(res, args, opts = {}) {
   setSSEHeaders(res)
 
-  const spawnEnv = { ...process.env, ...(opts.envOverrides || {}), FOCUS_ROOM_PORT: String(port) }
+  const spawnEnv = { ...process.env, ...(opts.envOverrides || {}), FOCUS_ROOM_PORT: String(port), FOCUS_ROOM_PID: String(process.pid) }
   for (const v of CLAUDE_VOLATILE_ENV) {
     delete spawnEnv[v]
   }
