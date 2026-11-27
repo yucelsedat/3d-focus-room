@@ -14,6 +14,9 @@ import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 import { getGifFrames } from './server/gifFrames.js';
 import * as Quota from './server/quotaLedger.js';
+// Aşama 2: tüm claude spawn argv/env'leri tek kaynaktan (server/sessions/spawnProfiles.js).
+import * as Spawn from './server/sessions/spawnProfiles.js';
+import { cliModel, VERIFY_MODEL, PARTIAL_STREAM_TILES } from './server/sessions/spawnProfiles.js';
 import { registerLibraryRoutes } from './server/library.js';
 import { sanitizeTimeline, createEmptyTimeline, sanitizeTimelineName, noteToText, itemAssetUrls, TL_LIMITS } from './src/utils/timelineModel.js';
 
@@ -220,6 +223,9 @@ const _MCP_PROFILES = (() => {
 // type: 'roomchat' | 'roomsession' | 'bluprint' | 'verify' | 'ai-session'
 //       | 'architect' | 'orchestrate' (multiagent tek-atış ajanları — MCP yükü istemez)
 //       | 'multiagent' (worker'lar — kod yazan rolün MCP tanım/RAM yüküne ihtiyacı yok)
+// Aşama 2: spawnProfiles.js'in yan etkili bağımlılıkları (fonksiyon bildirimleri hoisted).
+const SPAWN_CTX = { mcpArgs: (t) => mcpArgs(t), permissionArgs: (m) => permissionArgs(m) }
+
 function mcpArgs(type) {
   if (type === 'roomchat')  return _MCP_PROFILES.roomchat
   if (type === 'bluprint')  return _NO_MCP
@@ -2051,12 +2057,7 @@ app.post('/api/permission/decision', (req, res) => {
   res.json({ ok: true })
 })
 
-// Standalone claude CLI bazı UI model adlarını (ör. claude-fable-5) tanımıyor.
-// --model'e geçmeden önce desteklenen bir ada normalize et. Fable 5 ≈ Opus.
-function cliModel(model) {
-  if (!model || /fable/i.test(model)) return 'opus'
-  return model
-}
+// cliModel(): server/sessions/spawnProfiles.js (Aşama 2).
 
 function parseLiveMessages(content) {
   const messages = []
@@ -2154,23 +2155,18 @@ app.post('/api/session/live/message', (req, res) => {
   const info = getLiveSession()
   if (!info) return res.status(404).json({ error: 'Aktif session yok' })
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--resume', info.sessionId, '--dangerously-skip-permissions',
-    message.trim()
-  ], { usageType: 'live-session' })
+  const sp = Spawn.oneShot('live-session', { sessionId: info.sessionId, message: message.trim() }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, { usageType: sp.usageType, envOverrides: sp.env })
 })
 
 // ─── Ortak yardımcılar (hem tek-atış streamClaudeToSSE hem kalıcı oturum yolu) ──
 // CLI stream-json çıktısında tarayıcıya ilettiğimiz event türleri.
 const FORWARD_TYPES = new Set(['assistant', 'tool', 'result', 'system'])
 
-// Faz D: token-token akış. Bu tile'ların spawn'ına --include-partial-messages
-// eklenir; CLI'dan gelen stream_event/text_delta parçaları SSE'ye kompakt
-// {type:'delta', id, text} olarak iner (ham stream_event iletilmez — hacim
-// küçük kalır, SSE sözleşmesi geriye uyumlu ek alır). multiagent bilinçli
-// hariç: hot-loop, UI'ı delta render etmiyor, ek çıktı hacmi gereksiz.
-const PARTIAL_STREAM_TILES = new Set(['ai-session', 'roomchat', 'bluprint', 'roomsession'])
+// Faz D: token-token akış. PARTIAL_STREAM_TILES (spawnProfiles.js) tile'larının
+// spawn'ına --include-partial-messages eklenir; CLI'dan gelen stream_event/text_delta
+// parçaları SSE'ye kompakt {type:'delta', id, text} olarak iner (ham stream_event
+// iletilmez — hacim küçük kalır, SSE sözleşmesi geriye uyumlu ek alır).
 // Spawn edilen claude'a sızdırmamamız gereken oynak env değişkenleri.
 const CLAUDE_VOLATILE_ENV = ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
   'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']
@@ -2512,36 +2508,12 @@ class PersistentSession {
 
   _spawn() {
     const tile = this.key.split(':')[0]
-    const a = [
-      '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-      '--model', cliModel(this.settings.model),
-      // Faz 2 İş 2.1: dinamik system-prompt bölümlerini (cwd/env/git/memory) ilk user
-      // mesajına taşı → cache prefix'i spawn'lar arası SABİT kalır, respawn sonrası
-      // cacheWrite yerine cache-hit. Default prompt + --append-system-prompt ile uyumlu.
-      '--exclude-dynamic-system-prompt-sections',
-      ...mcpArgs(tile),
-    ]
-    // Faz D: interaktif tile'larda token-token akış (stream_event → SSE delta).
-    if (PARTIAL_STREAM_TILES.has(tile)) a.push('--include-partial-messages')
-    if (this.sys) a.push('--append-system-prompt', this.sys)
-    if (this.maxTurns) a.push('--max-turns', String(this.maxTurns))
-    // Tool kısıtı: system prompt'a giren tool tanımı sayısını (→ her spawn'ın
-    // cacheWrite'ı) düşürür; ayrıca worker'ın Task/WebSearch gibi token
-    // çarpanlarına erişimini keser (plan.md P2-B).
-    if (this.tools) a.push('--tools', this.tools)
-    if (this.maxBudgetUsd) a.push('--max-budget-usd', String(this.maxBudgetUsd))
-    a.push(...permissionArgs(this.settings.permissionMode))
-    if (this.sessionId) a.push('--resume', this.sessionId)   // geçmişi koru
-
-    const envOverrides = {}
-    if (this.settings.effort && this.settings.effort !== 'normal') envOverrides.CLAUDE_EFFORT = this.settings.effort
-    // Faz 2 İş 2.2 (TTL doğrulandı: result.usage.cache_creation kırılımı env'leri birebir izliyor):
-    // - hot loop (roomsession/multiagent): turlar dakikalar içinde ardışık → 5m TTL yeter,
-    //   cacheWrite 1.25× (1h'lik 2× yerine) — yazma %37.5 ucuz.
-    // - interaktif sohbet (roomchat/ai-session/bluprint): kullanıcı arada uzun düşünür →
-    //   1h TTL; geri dönünce cache-hit (5dk'da düşmüş cache'i yeniden yazmak yok).
-    if (tile === 'roomsession' || tile === 'multiagent') envOverrides.FORCE_PROMPT_CACHING_5M = '1'
-    else envOverrides.ENABLE_PROMPT_CACHING_1H = '1'
+    // Aşama 2: argv + env (model, MCP profili, partial stream, sys, tool kısıtı,
+    // bütçe, izin modu, --resume, efor, cache TTL) spawnProfiles.persistent'te.
+    const { args: a, env: envOverrides } = Spawn.persistent({
+      tile, settings: this.settings, sys: this.sys, maxTurns: this.maxTurns,
+      tools: this.tools, maxBudgetUsd: this.maxBudgetUsd, sessionId: this.sessionId,
+    }, SPAWN_CTX)
 
     // detached: claude kendi süreç grubunun lideri olur → dispose'da grup kill
     // ile MCP çocukları (context7/exa vb.) da ölür, orphan birikmez.
@@ -3106,13 +3078,8 @@ function runSpecForKind(kind) {
 // Belirsiz projelerde Haiku'ya klasörü inceletip tür etiketini al (verifyGoal deseni).
 async function detectKindWithHaiku(dir) {
   const prompt = `Bir web projesi klasörünü inceleyip türünü belirle. package.json, config dosyaları ve index.html gibi dosyaları oku. node_modules'a BAKMA.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"kind":"next|vite|cra|static|unknown"}\n- next: Next.js  - vite: Vite  - cra: create-react-app (react-scripts)\n- static: derleme gerektirmeyen düz index.html sitesi  - unknown: emin değilsen`
-  const { text, failed } = await runClaudeCapture([
-    '--print', '--output-format=stream-json', '--verbose', '--max-turns', '6',
-    '--tools', 'Read,Glob,Grep',
-    '--exclude-dynamic-system-prompt-sections',
-    '--no-session-persistence',
-    '--model', cliModel(VERIFY_MODEL), ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
-  ], { cwd: dir, usageType: 'projectview-detect', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+  const sp = Spawn.oneShot('projectview-detect', { prompt }, SPAWN_CTX)
+  const { text, failed } = await runClaudeCapture(sp.args, { cwd: dir, usageType: sp.usageType, envOverrides: sp.env })
   if (failed || !text) return 'unknown'
   const m = text.match(/\{[\s\S]*\}/)
   if (!m) return 'unknown'
@@ -3578,17 +3545,11 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
     ? `graphify skill'ini (Skill tool, skill adı "graphify") --update (artımlı) modunda geçerli çalışma dizinindeki ./raw klasörü üzerinde çalıştır. Yalnızca yeni eklenen veya içeriği değişen dosyaları yeniden işle, silinen dosyaların düğümlerini mevcut grafdan çıkar ve sonucu mevcut graphify-out/graph.json ile birleştir; ardından clustering ve GRAPH_REPORT.md'yi tazele. Bana hiçbir şey sorma, onay bekleme — doğrudan yap. Bittiğinde tek satırla kaç node ve kaç community olduğunu söyle.`
     : `graphify skill'ini (Skill tool, skill adı "graphify") geçerli çalışma dizinindeki ./raw klasörü üzerinde çalıştır ve bilgi grafını kur. Tam pipeline'ı uygula: detect → extract → cluster → report → graph.json + GRAPH_REPORT.md üret. Çıktılar graphify-out/ altına yazılmalı. Bana hiçbir şey sorma, onay bekleme — doğrudan kur. Bittiğinde tek satırla kaç node ve kaç community oluştuğunu söyle.`
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(model),
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-    '--no-session-persistence',                   // Faz 3 İş 3.3: graf-build tek-atış, JSONL yazma
-    ...mcpArgs('roomchat'),
-    '--dangerously-skip-permissions',
-    prompt,
-  ], {
+  const sp = Spawn.oneShot('roomchat-graph', { model, prompt }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, {
     cwd: dir,
-    usageType: 'roomchat-graph',
+    usageType: sp.usageType,
+    envOverrides: sp.env,
     onEvent: (ev) => {
       if (ev.type === 'result') {
         const cur = parseSessionContent(media.content)
@@ -4042,21 +4003,12 @@ function parseVerdict(text) {
 // Doğrulanabilir hedefi kontrol eden ayrı (ucuz) Claude ajanı.
 // --max-turns tavanı: dosya okuma sarmalını sınırlar (token freni).
 // Doğrulama "dosyalara bak, tek satır JSON döndür" işi — pahalı tile modeliyle
-// koşturmak israf; her yerde haiku'ya sabit.
-const VERIFY_MODEL = 'claude-haiku-4-5-20251001'
+// koşturmak israf; her yerde haiku'ya sabit (VERIFY_MODEL: spawnProfiles.js).
 async function verifyGoal({ goal, dir, model }) {
-  const vModel = cliModel(model || VERIFY_MODEL)
   const prompt = `Sen bir doğrulama ajanısın. Aşağıdaki hedefin ŞU AN karşılanıp karşılanmadığını değerlendir.\n\n## Hedef\n${goal}\n\n## Proje klasörü\n${dir}\nKlasördeki dosyaları oku/incele. node_modules, dist, .git gibi bağımlılık/üretim klasörlerini İNCELEME. Sadece gerçekten doğrulayabildiğini "met:true" say.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"met": true|false, "reason": "kısa gerekçe", "remaining": ["kalan iş", ...]}`
-  const { text, failed, usage, quota } = await runClaudeCapture([
-    '--print', '--output-format=stream-json', '--verbose', '--max-turns', '12',
-    // Doğrulayıcı salt-okur (+ test koşturabilsin diye Bash): tool tanım yükü ve
-    // yanlışlıkla dosya değiştirme riski birlikte iner (plan.md P2-B).
-    '--tools', 'Read,Glob,Grep,Bash',
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1: prefix sabit → spawn'lar arası cache-hit
-    // Faz 3 İş 3.3: tek-atış — asla --resume edilmez; JSONL yazma (disk + session listesi kirliliği).
-    '--no-session-persistence',
-    '--model', vModel, ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
-  ], { cwd: dir, usageType: 'verify', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+  // Doğrulayıcı salt-okur (+ test koşturabilsin diye Bash); argv: spawnProfiles 'verify'.
+  const sp = Spawn.oneShot('verify', { model, prompt }, SPAWN_CTX)
+  const { text, failed, usage, quota } = await runClaudeCapture(sp.args, { cwd: dir, usageType: sp.usageType, envOverrides: sp.env })
   // API-düzeyi hata veya boş çıktı: "hedef karşılanmadı" DEĞİL, altyapı arızası.
   // error:true dönen verdict loop'u iterasyon yakmadan durdurur (matbaa vakası:
   // limit dolunca 8 iterasyon boşa dönmüştü).
@@ -4501,12 +4453,8 @@ class MultiAgentRunner extends LoopRunner {
 
     const doneList = rec.tasks.filter(t => t.status === 'done').map(t => `- [${t.role}] ${t.task}`).join('\n') || '- (yok)'
     const p = `Sen çok-ajanlı bir yazılım projesinin orkestratörüsün. Tüm planlı görevler bitti ama hedef doğrulanamadı; kalan işlerden TEK birini en uygun role somut görev olarak ata.\n\n## Proje\n${manifest.projectBrief || manifest.goal}\n\n## Ekip rolleri\n${manifest.team.map(m => `- ${m.role}`).join('\n')}\n\n## Tamamlanan görevler\n${doneList}\n\n## Doğrulamada kalan işler\nGerekçe: ${rec.lastCheck.reason}\n${remaining.map(r => `- ${r}`).join('\n')}\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"nextRole": "<rol>", "task": "<somut görev>"}`
-    const { text, failed, quota } = await runClaudeCapture([
-      '--print', '--output-format=stream-json', '--verbose', '--max-turns', '4',
-      '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-      '--no-session-persistence',                   // Faz 3 İş 3.3: tek-atış, JSONL yazma
-      '--model', cliModel('sonnet'), ...mcpArgs('orchestrate'), '--dangerously-skip-permissions', p,
-    ], { cwd: this.dir, usageType: 'orchestrate', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+    const sp = Spawn.oneShot('orchestrate', { prompt: p }, SPAWN_CTX)
+    const { text, failed, quota } = await runClaudeCapture(sp.args, { cwd: this.dir, usageType: sp.usageType, envOverrides: sp.env })
     addUsage(rec, quota)
     if (failed) throw new Error(`Orkestratör çalıştırılamadı: ${failed}`)
     const m = (text || '').match(/\{[\s\S]*\}/)
@@ -4761,19 +4709,12 @@ app.post('/api/multiagent/:mediaId/architect', async (req, res) => {
   const workers = listAgentProfiles().filter(n => n !== 'project-architect')
   const prompt = `Proje fikri:\n${idea}\n\nKurulu agent profilleri (agentProfile alanında SADECE bunları kullan):\n${workers.map(w => `- ${w}`).join('\n')}\n\nSistem yönergendeki formatta SADECE JSON manifest üret. Bana soru sorma, onay bekleme.`
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(profile.model || 'opus'),
-    '--tools', 'Read',   // mimar yalnız okur + JSON üretir; tool tanım yükünü kıs
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-    '--no-session-persistence',                   // Faz 3 İş 3.3: tek-atış, JSONL yazma
-    ...mcpArgs('architect'),
-    '--append-system-prompt', profile.body,
-    '--dangerously-skip-permissions',
-    prompt,
-  ], {
+  // Mimar yalnız okur + JSON üretir; argv: spawnProfiles 'architect'.
+  const sp = Spawn.oneShot('architect', { model: profile.model, systemPrompt: profile.body, prompt }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, {
     cwd: dir,
-    usageType: 'architect',
+    usageType: sp.usageType,
+    envOverrides: sp.env,
     onEvent: (ev) => {
       if (ev.type !== 'result' || typeof ev.result !== 'string') return
       const manifest = parseManifest(ev.result)
@@ -5104,17 +5045,11 @@ app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
   const { model } = settings
   const prompt = entry.prompt(repo, out, scope)
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(model),
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-    '--no-session-persistence',                   // Faz 3 İş 3.3: spec-build tek-atış, JSONL yazma
-    ...mcpArgs('bluprint'),
-    '--dangerously-skip-permissions',
-    prompt,
-  ], {
+  const sp = Spawn.oneShot('bluprint-build', { model, prompt }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, {
     cwd: out,
-    usageType: 'bluprint-build',
+    usageType: sp.usageType,
+    envOverrides: sp.env,
     onEvent: (ev) => {
       if (ev.type === 'result') {
         if (entry.bestEffort) importBestEffortOutputs(out)

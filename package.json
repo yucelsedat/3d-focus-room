@@ -14,7 +14,8 @@
     "db:studio": "npx prisma studio",
     "verify:timeline": "node scripts/verify-timeline-model.mjs",
     "verify:quota": "node scripts/verify-quota-ledger.mjs",
-    "verify:guard": "node scripts/verify-bash-guard.mjs"
+    "verify:guard": "node scripts/verify-bash-guard.mjs",
+    "verify:spawn": "node scripts/verify-spawn-argv.mjs"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.7.0",
