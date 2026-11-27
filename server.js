@@ -13,6 +13,7 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 import { getGifFrames } from './server/gifFrames.js';
+import * as Quota from './server/quotaLedger.js';
 import { registerLibraryRoutes } from './server/library.js';
 import { sanitizeTimeline, createEmptyTimeline, sanitizeTimelineName, noteToText, itemAssetUrls, TL_LIMITS } from './src/utils/timelineModel.js';
 
@@ -2210,21 +2211,29 @@ function _flushUsageDaily() {
   } catch (e) { console.error('[usage-daily] yazım hatası:', e.message) }
 }
 
-function recordGlobalUsage(tileType, u) {
-  if (!u || !tileType) return
+// Aşama 1: kota ağırlıkları. data/quota-weights.json varsa varsayılanların üstüne
+// yazar (kendi sayaç okumalarımızla kalibrasyon için); yoksa server/quotaLedger.js
+// içindeki üçüncü taraf tahmin kullanılır.
+const QUOTA_WEIGHTS = Quota.loadWeights(() =>
+  JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'quota-weights.json'), 'utf8')))
+
+// result olayından tur kaydı (kota puanı, soğuk tur, model kırılımı) üret.
+// prevModelUsage: kalıcı süreçte önceki result'ın modelUsage'ı (birikimli alan).
+function quotaRecord(ev, fallbackModel, prevModelUsage = null) {
+  return Quota.turnRecord(ev, { fallbackModel, prevModelUsage, weights: QUOTA_WEIGHTS })
+}
+
+// rec: quotaRecord() çıktısı (tur kaydı). Eski çağrı biçimi (ham usage) kabul edilmez —
+// tüm çağıranlar Aşama 1'de tur kaydına geçti.
+function recordGlobalUsage(tileType, rec) {
+  if (!rec || !tileType) return
   const store = _loadUsageDaily()
   const day = new Date().toISOString().slice(0, 10)
   const byType = store[day] || (store[day] = {})
   const t = byType[tileType] || (byType[tileType] = { calls: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, processedTotal: 0 })
-  t.calls += 1
-  t.input += u.input_tokens || 0
-  t.cacheWrite += u.cache_creation_input_tokens || 0
-  t.cacheRead += u.cache_read_input_tokens || 0
-  t.output += u.output_tokens || 0
-  // processedTotal: oturum penceresini tüketen asıl büyüklük — cacheRead dahil
-  // (dolar maliyeti düşük olsa da pencereyi doldurur, faz1 İş 1.2).
-  t.processedTotal = (t.processedTotal || 0) + (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
-    + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0)
+  // processedTotal korunur (eski bench'lerle kıyas için); asıl metrik artık
+  // quotaPoints — abonelik sayacının token türlerine verdiği ağırlıkla.
+  Quota.accumulate(t, rec)
   if (!_usageFlushTimer) {
     _usageFlushTimer = setTimeout(_flushUsageDaily, 5000)
     if (_usageFlushTimer.unref) _usageFlushTimer.unref()
@@ -2233,14 +2242,13 @@ function recordGlobalUsage(tileType, u) {
 
 // Tur-başı yapılandırılmış usage logu (faz1 İş 1.1): cacheRead'in tur tur nasıl
 // biriktiği çıplak gözle okunsun — multiagent 2.46M cacheRead kök nedeni bu
-// birikimdi. Tek satır, grep-dostu format.
-function logTurnUsage({ tile, key, turn, model, usage }) {
-  if (!usage) return
-  const inTok = usage.input_tokens || 0
-  const cw = usage.cache_creation_input_tokens || 0
-  const cr = usage.cache_read_input_tokens || 0
-  const out = usage.output_tokens || 0
-  console.error(`[turn-usage] tile=${tile || '?'} key=${key || '-'} turn=${turn || 1} in=${inTok} cw=${cw} cr=${cr} out=${out} total=${inTok + cw + cr + out} model=${model || '-'}`)
+// birikimdi. Tek satır, grep-dostu format. Aşama 1: q= kota puanı (haftalık %),
+// cold= turun ilk isteği prefix'i yeniden yazdı mı, tools= araç-tur sayısı.
+function logTurnUsage({ tile, key, turn, model, rec }) {
+  if (!rec) return
+  const u = rec.usage
+  const total = u.input + u.cacheWrite + u.cacheRead + u.output
+  console.error(`[turn-usage] tile=${tile || '?'} key=${key || '-'} turn=${turn || 1} in=${u.input} cw=${u.cacheWrite} cr=${u.cacheRead} out=${u.output} total=${total} q=${rec.points.toFixed(4)} cold=${rec.cold ? 1 : 0} tools=${rec.turns} cw1h=${u.cw1h} cw5m=${u.cw5m} model=${model || rec.family || '-'}`)
 }
 
 // Spawn arg listesinden bir bayrağın değerini oku (turn-usage logunda model için).
@@ -2253,8 +2261,22 @@ app.get('/api/usage/daily', (req, res) => {
   const days = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 7))
   const store = _loadUsageDaily()
   const out = {}
-  for (const day of Object.keys(store).sort().slice(-days)) out[day] = store[day]
+  for (const day of Object.keys(store).sort().slice(-days)) {
+    out[day] = {}
+    for (const [tile, t] of Object.entries(store[day])) {
+      // Aşama 1 öncesi kayıtlarda quotaPoints yok → token toplamından tahmin et ve
+      // işaretle (model bilinmediği için varsayılan aile). Saklanan veri değişmez.
+      out[day][tile] = t.quotaPoints == null
+        ? { ...t, quotaPoints: Quota.estimateLegacyPoints(t, QUOTA_WEIGHTS), quotaEstimated: true }
+        : t
+    }
+  }
   res.json(out)
+})
+
+// Kota ağırlıkları ve kaynakları (Kota Panosu tile'ı ve bench raporu için).
+app.get('/api/usage/weights', (req, res) => {
+  res.json(QUOTA_WEIGHTS)
 })
 
 // Spawns the claude CLI and streams its stream-json output to an SSE response.
@@ -2306,8 +2328,12 @@ function streamClaudeToSSE(res, args, opts = {}) {
     try {
       const ev = JSON.parse(line)
       if (ev.type === 'result' && ev.usage) {
-        recordGlobalUsage(opts.usageType, ev.usage)
-        logTurnUsage({ tile: opts.usageType, key: opts.usageKey || opts.usageType, turn: 1, model: cliArgValue(args, '--model'), usage: ev.usage })
+        // Tek-atış süreç: modelUsage birikimli ama tek result olduğundan delta = tamamı.
+        const model = cliArgValue(args, '--model')
+        const rec = quotaRecord(ev, model)
+        recordGlobalUsage(opts.usageType, rec)
+        logTurnUsage({ tile: opts.usageType, key: opts.usageKey || opts.usageType, turn: 1, model, rec })
+        ev.quota = rec   // tarayıcı (Aşama 8 arayüzü) ve loop turn sink'i okur
       }
       opts.onEvent?.(ev)
       if (FORWARD_TYPES.has(ev.type)) {
@@ -2457,6 +2483,7 @@ class PersistentSession {
     this.lastResult = ''                     // son tamamlanan turun result metni (recall özeti)
     this.turnCount = 0                       // bu oturum nesnesinin tamamlanan tur sayısı (turn-usage logu)
     this.respawns = 0                        // --resume ile yeniden doğuş sayısı (faz1 İş 1.4)
+    this._prevModelUsage = null              // Aşama 1: süreç içi birikimli modelUsage snapshot'ı (delta için)
     this.pendingControls = new Map()         // Faz B: request_id → {resolve, reject, timeout} (control_response eşleştirme)
     this.status = 'idle'                     // Faz E: idle | running | input_needed | error (frontend rozeti)
     this.pendingAction = null                // Faz E: input_needed'da ne beklendiği { kind, toolUseId, toolName? }
@@ -2513,6 +2540,7 @@ class PersistentSession {
     // Respawn sayacı (faz1 İş 1.4): sessionId varken spawn = --resume ile yeniden
     // doğuş (idle evict / çökme / ayar değişimi). Faz 3'ün etkisi bu sayıyla ölçülür.
     if (this.sessionId) this.respawns += 1
+    this._prevModelUsage = null   // Aşama 1: modelUsage yeni süreçte sıfırdan birikir
     this.proc = spawn(CLAUDE_CLI, a, { cwd: this.cwd, env: buildSpawnEnv(envOverrides), detached: true })
     console.error(`[persist] SPAWN key=${this.key} pid=${this.proc.pid} resume=${this.sessionId || 'none'} respawns=${this.respawns}`)
     // Resume-şişkinlik göstergesi: respawn sonrası İLK turun input+cacheWrite'ı
@@ -2571,14 +2599,23 @@ class PersistentSession {
       }
       if (this.sink) sessionStreams.set(this.sessionId, this.sink)  // izin köprüsü
     }
+    // Aşama 1: tur kaydını forward'dan ÖNCE üret — ev.quota tarayıcıya ve loop'un
+    // turn sink'ine (makeTurnSink) aynı olayla gider. modelUsage süreç boyunca
+    // birikimli: delta için bir önceki snapshot kullanılır (respawn'da sıfırlanır).
+    let quotaRec = null
+    if (ev.type === 'result' && ev.usage) {
+      quotaRec = quotaRecord(ev, cliModel(this.settings.model), this._prevModelUsage)
+      if (ev.modelUsage) this._prevModelUsage = ev.modelUsage
+      ev.quota = quotaRec
+    }
     if (this.sink && FORWARD_TYPES.has(ev.type)) {
       try { this.sink.write(sseLine(ev)) } catch {}
     }
     if (ev.type === 'result') {
       if (ev.usage) {
         this.turnCount += 1
-        recordGlobalUsage(this.key.split(':')[0], ev.usage)
-        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: this.settings.model, usage: ev.usage })
+        recordGlobalUsage(this.key.split(':')[0], quotaRec)
+        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: this.settings.model, rec: quotaRec })
         if (this._logResumeCost) {
           this._logResumeCost = false
           const input = ev.usage.input_tokens || 0
@@ -3935,10 +3972,10 @@ function removeSessionRecall(mediaId) {
 // normal çıktı sanmak loop'un hata üstüne iterasyon yakmasına yol açar.
 function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
   return new Promise((resolve) => {
-    let buf = '', text = '', failed = null, usage = null
+    let buf = '', text = '', failed = null, usage = null, quota = null
     let proc
     try { proc = spawn(CLAUDE_CLI, args, { cwd: cwd || process.cwd(), env: buildSpawnEnv(envOverrides || {}) }) }
-    catch (e) { return resolve({ text: '', failed: e.message, usage: null }) }
+    catch (e) { return resolve({ text: '', failed: e.message, usage: null, quota: null }) }
     proc.stdout.on('data', (c) => {
       buf += c.toString()
       const lines = buf.split('\n'); buf = lines.pop() ?? ''
@@ -3952,7 +3989,10 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
         }
         if (ev.type === 'result') {
           if (typeof ev.result === 'string') text = ev.result
-          if (ev.usage) usage = ev.usage
+          if (ev.usage) {
+            usage = ev.usage
+            quota = quotaRecord(ev, cliArgValue(args, '--model'))   // tek-atış: delta = tamamı
+          }
           if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
             failed = failed || (text ? text.slice(0, 200) : `sonuç hatası (${ev.subtype || 'bilinmiyor'})`)
           }
@@ -3961,27 +4001,22 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
     })
     proc.stderr.on('data', (c) => console.error('[loop-verify stderr]', c.toString().slice(0, 200)))
     proc.on('close', () => {
-      recordGlobalUsage(usageType, usage)
-      logTurnUsage({ tile: usageType, key: usageType, turn: 1, model: cliArgValue(args, '--model'), usage })
-      resolve({ text, failed, usage })
+      recordGlobalUsage(usageType, quota)
+      logTurnUsage({ tile: usageType, key: usageType, turn: 1, model: cliArgValue(args, '--model'), rec: quota })
+      resolve({ text, failed, usage, quota })
     })
-    proc.on('error', (e) => resolve({ text: '', failed: e.message, usage: null }))
+    proc.on('error', (e) => resolve({ text: '', failed: e.message, usage: null, quota: null }))
   })
 }
 
-// Kümülatif token muhasebesi: her turun/spawn'ın usage'ını recall'a işler.
+// Kümülatif token muhasebesi: her turun/spawn'ın tur kaydını recall'a işler.
 // Amaç görünürlük (UI'da tüketim) + bütçe freni (MultiAgentRunner).
-function addUsage(rec, u) {
-  if (!u) return
+// q: quotaRecord() çıktısı. Aşama 1: quotaPoints/coldTurns/turns da birikir;
+// processedTotal aynen korunur (bütçe freni hâlâ ona bakıyor — davranış değişmedi).
+function addUsage(rec, q) {
+  if (!q) return
   const t = rec.usage || (rec.usage = { calls: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, processedTotal: 0 })
-  t.calls += 1
-  t.input += u.input_tokens || 0
-  t.cacheWrite += u.cache_creation_input_tokens || 0
-  t.cacheRead += u.cache_read_input_tokens || 0
-  t.output += u.output_tokens || 0
-  // İşlenen toplam: oturum penceresini tüketen asıl büyüklük (faz1 İş 1.2).
-  t.processedTotal = (t.processedTotal || 0) + (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
-    + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0)
+  Quota.accumulate(t, q)
 }
 
 // Verifier çıktısını güvenli parse et: JSON bulunamazsa met:false (güvenli taraf).
@@ -4004,7 +4039,7 @@ const VERIFY_MODEL = 'claude-haiku-4-5-20251001'
 async function verifyGoal({ goal, dir, model }) {
   const vModel = cliModel(model || VERIFY_MODEL)
   const prompt = `Sen bir doğrulama ajanısın. Aşağıdaki hedefin ŞU AN karşılanıp karşılanmadığını değerlendir.\n\n## Hedef\n${goal}\n\n## Proje klasörü\n${dir}\nKlasördeki dosyaları oku/incele. node_modules, dist, .git gibi bağımlılık/üretim klasörlerini İNCELEME. Sadece gerçekten doğrulayabildiğini "met:true" say.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"met": true|false, "reason": "kısa gerekçe", "remaining": ["kalan iş", ...]}`
-  const { text, failed, usage } = await runClaudeCapture([
+  const { text, failed, usage, quota } = await runClaudeCapture([
     '--print', '--output-format=stream-json', '--verbose', '--max-turns', '12',
     // Doğrulayıcı salt-okur (+ test koşturabilsin diye Bash): tool tanım yükü ve
     // yanlışlıkla dosya değiştirme riski birlikte iner (plan.md P2-B).
@@ -4018,9 +4053,9 @@ async function verifyGoal({ goal, dir, model }) {
   // error:true dönen verdict loop'u iterasyon yakmadan durdurur (matbaa vakası:
   // limit dolunca 8 iterasyon boşa dönmüştü).
   if (failed || !text.trim()) {
-    return { met: false, reason: failed || 'doğrulayıcı boş yanıt verdi', remaining: [], error: true, usage }
+    return { met: false, reason: failed || 'doğrulayıcı boş yanıt verdi', remaining: [], error: true, usage, quota }
   }
-  return { ...parseVerdict(text), usage }
+  return { ...parseVerdict(text), usage, quota }
 }
 
 // İş turunu mevcut roomsession PersistentSession'ı üzerinden sürmek için proxy sink.
@@ -4032,6 +4067,7 @@ function makeTurnSink(getClientSink) {
   let summary = ''
   let failure = null   // API-düzeyi hata (limit vb.) — tur "başarılı" sayılmamalı
   let usage = null     // turun result olayındaki token kullanımı (muhasebe için)
+  let quota = null     // Aşama 1: PersistentSession'ın result'a iliştirdiği tur kaydı (ev.quota)
   const sink = {
     setHeader() {}, flushHeaders() {},
     write(chunk) {
@@ -4047,6 +4083,7 @@ function makeTurnSink(getClientSink) {
           }
           if (ev.type === 'result') {
             if (ev.usage) usage = ev.usage
+            if (ev.quota) quota = ev.quota
             if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
               failure = failure || String(ev.result || ev.subtype || 'bilinmeyen tur hatası').slice(0, 200)
             }
@@ -4060,7 +4097,7 @@ function makeTurnSink(getClientSink) {
     end() { resolveDone() },
     on() {},
   }
-  return { sink, done: done.then(() => ({ summary, failure, usage })) }
+  return { sink, done: done.then(() => ({ summary, failure, usage, quota })) }
 }
 
 // Tek mediaId için tekil otonom loop sürücüsü (PersistentSession desenine analog).
@@ -4157,7 +4194,7 @@ class LoopRunner {
   // Doğrulama turu — subclass, gereksiz spawn'ı atlamak için override edebilir.
   async _verifyTurn(rec) {
     const verdict = await verifyGoal({ goal: this.spec.goal, dir: this.dir, model: VERIFY_MODEL })
-    addUsage(rec, verdict.usage)
+    addUsage(rec, verdict.quota)
     return verdict
   }
 
@@ -4179,7 +4216,7 @@ class LoopRunner {
       },
     })
     const turn = await done
-    addUsage(rec, turn.usage)
+    addUsage(rec, turn.quota)
     rec.respawns = (rec.respawns || 0) + Math.max(0, sess.respawns - respawns0)
     if (turn.failure) throw new Error(`İş turu başarısız: ${turn.failure}`)
     return turn.summary
@@ -4456,13 +4493,13 @@ class MultiAgentRunner extends LoopRunner {
 
     const doneList = rec.tasks.filter(t => t.status === 'done').map(t => `- [${t.role}] ${t.task}`).join('\n') || '- (yok)'
     const p = `Sen çok-ajanlı bir yazılım projesinin orkestratörüsün. Tüm planlı görevler bitti ama hedef doğrulanamadı; kalan işlerden TEK birini en uygun role somut görev olarak ata.\n\n## Proje\n${manifest.projectBrief || manifest.goal}\n\n## Ekip rolleri\n${manifest.team.map(m => `- ${m.role}`).join('\n')}\n\n## Tamamlanan görevler\n${doneList}\n\n## Doğrulamada kalan işler\nGerekçe: ${rec.lastCheck.reason}\n${remaining.map(r => `- ${r}`).join('\n')}\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"nextRole": "<rol>", "task": "<somut görev>"}`
-    const { text, failed, usage } = await runClaudeCapture([
+    const { text, failed, quota } = await runClaudeCapture([
       '--print', '--output-format=stream-json', '--verbose', '--max-turns', '4',
       '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
       '--no-session-persistence',                   // Faz 3 İş 3.3: tek-atış, JSONL yazma
       '--model', cliModel('sonnet'), ...mcpArgs('orchestrate'), '--dangerously-skip-permissions', p,
     ], { cwd: this.dir, usageType: 'orchestrate', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
-    addUsage(rec, usage)
+    addUsage(rec, quota)
     if (failed) throw new Error(`Orkestratör çalıştırılamadı: ${failed}`)
     const m = (text || '').match(/\{[\s\S]*\}/)
     if (m) {
@@ -4540,7 +4577,7 @@ class MultiAgentRunner extends LoopRunner {
       },
     })
     const turn = await done
-    addUsage(rec, turn.usage)
+    addUsage(rec, turn.quota)
     rec.respawns = (rec.respawns || 0) + Math.max(0, sess.respawns - respawns0)
     // Limit/API arızasında turu "başarılı" sayma: görev done işaretlenmez, loop
     // status=error ile durur, recall korunur → limit yenilenince devam edilir.

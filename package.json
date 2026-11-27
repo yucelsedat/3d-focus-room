@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "migrate": "node prisma/migrate.js",
     "db:studio": "npx prisma studio",
-    "verify:timeline": "node scripts/verify-timeline-model.mjs"
+    "verify:timeline": "node scripts/verify-timeline-model.mjs",
+    "verify:quota": "node scripts/verify-quota-ledger.mjs"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.7.0",

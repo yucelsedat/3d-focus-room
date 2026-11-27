@@ -13,6 +13,8 @@
 //   3. GET /api/usage/daily snapshot'ı alınır, senaryo koşulur, snapshot tekrar alınır.
 //   4. Delta (tile-tipi kırılımı + processedTotal) + varsa recall (iterasyon, respawns,
 //      rec.usage) data/bench/<label>-<ts>.json'a yazılır.
+//      Aşama 1: quotaPoints (tahmini haftalık sayaç %'si — asıl karşılaştırma metriği),
+//      coldTurns, turns (araç-tur), cw1h/cw5m (TTL kırılımı), thinking de delta'ya girer.
 //
 // DİKKAT: gerçek API tüketir — senaryolar küçük tutuldu; gün başına 1 baseline yeter.
 
@@ -161,7 +163,10 @@ async function pollLoopUntilDone(statusUrl, { timeoutMs = 30 * 60 * 1000, interv
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 // ── usage-daily snapshot + delta ──────────────────────────────────────────────
-const FIELDS = ['calls', 'input', 'cacheWrite', 'cacheRead', 'output', 'processedTotal']
+const FIELDS = ['calls', 'input', 'cacheWrite', 'cacheRead', 'output', 'processedTotal',
+  // Aşama 1 (server/quotaLedger.js): Aşama 1 öncesi sunucuda bu alanlar 0 gelir.
+  'quotaPoints', 'turns', 'coldTurns', 'cw1h', 'cw5m', 'thinking']
+const round6 = (x) => Math.round(x * 1e6) / 1e6
 
 async function usageSnapshot() {
   const days = await api('GET', '/api/usage/daily?days=1')
@@ -177,7 +182,7 @@ function usageDelta(before, after) {
     const d = {}
     let any = false
     for (const f of FIELDS) {
-      d[f] = (a[f] || 0) - (b[f] || 0)
+      d[f] = round6((a[f] || 0) - (b[f] || 0))
       if (d[f]) any = true
     }
     if (any) delta[tile] = d
@@ -187,7 +192,7 @@ function usageDelta(before, after) {
 
 function sumDelta(delta) {
   const total = Object.fromEntries(FIELDS.map(f => [f, 0]))
-  for (const d of Object.values(delta)) for (const f of FIELDS) total[f] += d[f] || 0
+  for (const d of Object.values(delta)) for (const f of FIELDS) total[f] = round6(total[f] + (d[f] || 0))
   return total
 }
 
@@ -341,6 +346,8 @@ async function main() {
   fs.writeFileSync(file, JSON.stringify(out, null, 2))
   console.log(`[bench] sonuç yazıldı: ${path.relative(ROOT, file)}`)
   console.log(`[bench] toplam: ${JSON.stringify(out.totals)}`)
+  const t = out.totals
+  console.log(`[bench] kota: ${t.quotaPoints.toFixed(4)}% haftalık (tahmin) · soğuk tur ${t.coldTurns}/${t.calls} · araç-tur ${t.turns}`)
 
   // Temizlik: tile'ı sil (recall zaten dosyaya kondu), önceki odayı geri aktive et.
   if (!KEEP && result.mediaId) {
