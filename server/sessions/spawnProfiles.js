@@ -19,7 +19,10 @@ export function cliModel(model) {
 }
 
 // Doğrulama ve proje-türü tespiti: pahalı tile modeliyle koşturmak israf.
-export const VERIFY_MODEL = 'claude-haiku-4-5-20251001'
+// Aşama 3: Haiku 4.5 → 5.5. Aynı doğrulama, --effort low (4.5 eforu desteklemiyor):
+// liste maliyeti $0.0065-0.0089 → $0.0006 (~10-14×), çıktı ~650 → ~333, düşünme ~330 → 0,
+// karar aynı (bench/ASAMA3.md). Sabit kimlik: bench tekrarlanabilir kalsın diye takma ad değil.
+export const VERIFY_MODEL = 'claude-haiku-5-5'
 
 // Faz D: token-token akış. Bu tile'ların spawn'ına --include-partial-messages
 // eklenir. multiagent bilinçli hariç: hot-loop, UI'ı delta render etmiyor.
@@ -33,6 +36,34 @@ const STABLE_PREFIX = '--exclude-dynamic-system-prompt-sections'
 const NO_PERSIST = '--no-session-persistence'
 const SKIP_PERMS = '--dangerously-skip-permissions'
 const TTL_5M = { FORCE_PROMPT_CACHING_5M: '1' }
+
+// ─── Aşama 3: spawn diyeti ────────────────────────────────────────────────────
+// Ölçüm (bench/ASAMA3.md): aynı 3 önemsiz tur, haiku, ai-session bayrakları.
+//   varsayılan                       : ilk 3 tur cache yazma 26.1K, 3. tur bağlam 25.6K
+//   --disable-slash-commands         : 19.6K yazma, 16.5K bağlam (skill listesi ~9K)
+//   + --setting-sources project,local: 8.8K yazma, 16.3K bağlam
+// --setting-sources project,local kullanıcı skill'lerini (graphify, reconstruct),
+// eklentilerini ve ~/.claude/CLAUDE.md'yi de kapatır. Bu yüzden:
+//   ISOLATE_FULL → skill/kişisel ayar istemeyen otomasyon rolleri
+//   NO_SKILLS    → kod yazan oturumlar: global CLAUDE.md (ör. tipografi kuralları) korunur
+// --bare KULLANILMAZ: abonelik girişini (OAuth) okumuyor, yalnız ANTHROPIC_API_KEY.
+const ISOLATE_FULL = ['--setting-sources', 'project,local', '--disable-slash-commands']
+const NO_SKILLS = ['--disable-slash-commands']
+
+// Efor: belgelenmiş --effort bayrağı (eski CLAUDE_EFFORT env'i dokümanda yok; etkisi
+// ölçümle kanıtlanamadı). Kullanıcının modelSettings'i (ör. Opus 5.5 = high) aksi halde
+// her spawn'a sızıyor ve düşünme (= çıktı, kotanın en pahalı türü) token'ı yakıyor.
+const effortArgs = (level) => (level ? ['--effort', level] : [])
+
+// Kalıcı tile varsayılanları. Tile ayarı (settings.effort ≠ 'normal', settings.skills)
+// bunların üstüne yazar. Listede olmayan tile = eski davranış (skill açık, efor miras).
+export const PERSISTENT_DEFAULTS = {
+  'ai-session': { skills: true,  effort: null },
+  roomchat:     { skills: true,  effort: null },
+  bluprint:     { skills: true,  effort: null },
+  roomsession:  { skills: false, effort: 'medium' },
+  multiagent:   { skills: false, effort: 'medium' },
+}
 
 // ─── Tek-atış profiller ───────────────────────────────────────────────────────
 // Her profil: build(opts, ctx) → { args, env, usageType }
@@ -57,7 +88,9 @@ export const ONESHOT = {
       '--tools', 'Read,Glob,Grep',
       STABLE_PREFIX,
       NO_PERSIST,
-      '--model', cliModel(VERIFY_MODEL), ...ctx.mcpArgs('verify'), SKIP_PERMS, prompt,
+      '--model', cliModel(VERIFY_MODEL), ...ctx.mcpArgs('verify'),
+      ...ISOLATE_FULL, ...effortArgs('low'),
+      SKIP_PERMS, prompt,
     ],
   },
 
@@ -84,7 +117,9 @@ export const ONESHOT = {
       '--tools', 'Read,Glob,Grep,Bash',
       STABLE_PREFIX,
       NO_PERSIST,
-      '--model', cliModel(model || VERIFY_MODEL), ...ctx.mcpArgs('verify'), SKIP_PERMS, prompt,
+      '--model', cliModel(model || VERIFY_MODEL), ...ctx.mcpArgs('verify'),
+      ...ISOLATE_FULL, ...effortArgs('low'),
+      SKIP_PERMS, prompt,
     ],
   },
 
@@ -96,7 +131,9 @@ export const ONESHOT = {
       ...PRINT_STREAM, '--max-turns', '4',
       STABLE_PREFIX,
       NO_PERSIST,
-      '--model', cliModel('sonnet'), ...ctx.mcpArgs('orchestrate'), SKIP_PERMS, prompt,
+      '--model', cliModel('sonnet'), ...ctx.mcpArgs('orchestrate'),
+      ...ISOLATE_FULL, ...effortArgs('low'),
+      SKIP_PERMS, prompt,
     ],
   },
 
@@ -111,6 +148,8 @@ export const ONESHOT = {
       NO_PERSIST,
       ...ctx.mcpArgs('architect'),
       '--append-system-prompt', systemPrompt,
+      // Mimar planlama yapar: izolasyonla kullanıcı efor ayarı düştüğü için açıkça high.
+      ...ISOLATE_FULL, ...effortArgs('high'),
       SKIP_PERMS,
       prompt,
     ],
@@ -144,11 +183,16 @@ export function oneShot(name, opts, ctx) {
 // sys/maxTurns/tools/maxBudgetUsd: PersistentSession kurucusundan
 // sessionId: varsa --resume
 export function persistent({ tile, settings = {}, sys, maxTurns, tools, maxBudgetUsd, sessionId }, ctx) {
+  const def = PERSISTENT_DEFAULTS[tile] || { skills: true, effort: null }
+  const skills = typeof settings.skills === 'boolean' ? settings.skills : def.skills
+  const effort = settings.effort && settings.effort !== 'normal' ? settings.effort : def.effort
   const a = [
     '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--model', cliModel(settings.model),
     STABLE_PREFIX,
     ...ctx.mcpArgs(tile),
+    ...(skills ? [] : NO_SKILLS),
+    ...effortArgs(effort),
   ]
   if (PARTIAL_STREAM_TILES.has(tile)) a.push('--include-partial-messages')
   if (sys) a.push('--append-system-prompt', sys)
@@ -160,7 +204,6 @@ export function persistent({ tile, settings = {}, sys, maxTurns, tools, maxBudge
   if (sessionId) a.push('--resume', sessionId)
 
   const env = {}
-  if (settings.effort && settings.effort !== 'normal') env.CLAUDE_EFFORT = settings.effort
   // Faz 2 İş 2.2: hot loop (roomsession/multiagent) 5m, interaktif sohbet 1h.
   // Aşama 3'te abonelik varsayılanına (1h) karşı A/B ile yeniden değerlendirilecek.
   if (tile === 'roomsession' || tile === 'multiagent') env.FORCE_PROMPT_CACHING_5M = '1'

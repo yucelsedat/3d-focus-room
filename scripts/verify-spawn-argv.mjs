@@ -111,6 +111,45 @@ function legacyPersistent({ tile, settings, sys, maxTurns, tools, maxBudgetUsd, 
   return { args: a, env }
 }
 
+// ─── Aşama 3: bilinçli argv değişiklikleri ────────────────────────────────────
+// Eski dizi + yalnız burada tarif edilen ekler. Başka her fark testi kırar.
+const ISOLATE = ['--setting-sources', 'project,local', '--disable-slash-commands']
+const AS3_ONESHOT_EXTRA = {
+  'projectview-detect': [...ISOLATE, '--effort', 'low'],
+  verify: [...ISOLATE, '--effort', 'low'],
+  orchestrate: [...ISOLATE, '--effort', 'low'],
+  architect: [...ISOLATE, '--effort', 'high'],
+}
+// Ekler, eski dizideki son --dangerously-skip-permissions'ın hemen önüne girer.
+function withExtra(args, extra) {
+  if (!extra) return args
+  const i = args.lastIndexOf('--dangerously-skip-permissions')
+  return [...args.slice(0, i), ...extra, ...args.slice(i)]
+}
+// Aşama 3: VERIFY_MODEL Haiku 4.5 → 5.5 (verify'da model verilmediğinde, projectview-detect'te her zaman).
+const AS3_VERIFY_MODEL = 'claude-haiku-5-5'
+function withVerifyModel(args) {
+  return args.map((a, i) => (a === VERIFY_MODEL && args[i - 1] === '--model' ? AS3_VERIFY_MODEL : a))
+}
+const AS3_DEFAULTS = {
+  'ai-session': { skills: true, effort: null }, roomchat: { skills: true, effort: null },
+  bluprint: { skills: true, effort: null },
+  roomsession: { skills: false, effort: 'medium' }, multiagent: { skills: false, effort: 'medium' },
+}
+function expectedPersistent(opts) {
+  const { args, env } = legacyPersistent(opts)
+  const def = AS3_DEFAULTS[opts.tile] || { skills: true, effort: null }
+  const st = opts.settings
+  const skills = typeof st.skills === 'boolean' ? st.skills : def.skills
+  const effort = st.effort && st.effort !== 'normal' ? st.effort : def.effort
+  // Ekler mcpArgs'ın hemen ardına (eski dizide mcp 3 eleman, '--exclude-...' sonrası).
+  const i = args.indexOf('--exclude-dynamic-system-prompt-sections') + 1 + 3
+  const extra = [...(skills ? [] : ['--disable-slash-commands']), ...(effort ? ['--effort', effort] : [])]
+  const e2 = { ...env }
+  delete e2.CLAUDE_EFFORT   // efor artık env değil bayrak
+  return { args: [...args.slice(0, i), ...extra, ...args.slice(i)], env: e2 }
+}
+
 // ─── Tek-atış profiller ───────────────────────────────────────────────────────
 const inputs = [
   { sessionId: 'sid-1', message: 'merhaba', prompt: 'P', model: undefined, systemPrompt: 'SYS' },
@@ -119,10 +158,10 @@ const inputs = [
   { sessionId: 'x', message: 'm', prompt: 'p', model: 'claude-haiku-5-5', systemPrompt: 'x' },
 ]
 for (const name of Object.keys(LEGACY)) {
-  test(`oneShot ${name}: argv/env/usageType eskiyle aynı`, () => {
+  test(`oneShot ${name}: argv = eski + Aşama 3 ekleri, env/usageType aynı`, () => {
     for (const inp of inputs) {
       const got = S.oneShot(name, inp, ctx)
-      assert.deepEqual(got.args, LEGACY[name](inp))
+      assert.deepEqual(got.args, withVerifyModel(withExtra(LEGACY[name](inp), AS3_ONESHOT_EXTRA[name])))
       assert.deepEqual(got.env, LEGACY_ENV[name])
       assert.equal(got.usageType, LEGACY_USAGE[name])
     }
@@ -141,7 +180,7 @@ test('oneShot: env kopyası paylaşılmaz (çağıran değiştirse profil bozulm
 })
 
 // ─── Kalıcı oturum: kombinasyon taraması ──────────────────────────────────────
-test('persistent: tüm tile × seçenek kombinasyonlarında eskiyle aynı', () => {
+test('persistent: tüm tile × seçenek kombinasyonlarında eski + Aşama 3 ekleri', () => {
   const tiles = ['ai-session', 'roomchat', 'roomsession', 'bluprint', 'multiagent', 'bilinmeyen']
   const models = [undefined, 'claude-fable-5', 'sonnet', 'opus']
   const efforts = [undefined, 'normal', 'high', 'low']
@@ -156,11 +195,34 @@ test('persistent: tüm tile × seçenek kombinasyonlarında eskiyle aynı', () =
   let n = 0
   for (const tile of tiles) for (const model of models) for (const effort of efforts)
     for (const permissionMode of perms) for (const ex of extras) {
-      const opts = { tile, settings: { model, effort, permissionMode }, ...ex }
-      assert.deepEqual(S.persistent(opts, ctx), legacyPersistent(opts), JSON.stringify(opts))
-      n++
+      for (const skills of [undefined, true, false]) {
+        const opts = { tile, settings: { model, effort, permissionMode, ...(skills === undefined ? {} : { skills }) }, ...ex }
+        assert.deepEqual(S.persistent(opts, ctx), expectedPersistent(opts), JSON.stringify(opts))
+        n++
+      }
     }
-  assert.equal(n, 6 * 4 * 4 * 5 * 5)
+  assert.equal(n, 6 * 4 * 4 * 5 * 5 * 3)
+})
+test('Aşama 3: kod yazan tile\'lar varsayılan skill kapalı + medium; sohbet tile\'ları miras', () => {
+  const rs = S.persistent({ tile: 'roomsession', settings: {} }, ctx).args
+  assert.ok(rs.includes('--disable-slash-commands'))
+  assert.deepEqual(rs.slice(rs.indexOf('--effort'), rs.indexOf('--effort') + 2), ['--effort', 'medium'])
+  const ai = S.persistent({ tile: 'ai-session', settings: { effort: 'normal' } }, ctx).args
+  assert.ok(!ai.includes('--disable-slash-commands') && !ai.includes('--effort'))
+  // Tile ayarı varsayılanı ezer.
+  const rs2 = S.persistent({ tile: 'roomsession', settings: { skills: true, effort: 'high' } }, ctx).args
+  assert.ok(!rs2.includes('--disable-slash-commands'))
+  assert.equal(rs2[rs2.indexOf('--effort') + 1], 'high')
+  // Hiçbir yolda env ile efor verilmez.
+  for (const tile of Object.keys(AS3_DEFAULTS)) {
+    assert.equal(S.persistent({ tile, settings: { effort: 'low' } }, ctx).env.CLAUDE_EFFORT, undefined)
+  }
+})
+test('Aşama 3: skill kullanan profiller (graf, blueprint, VS Code köprüsü) izole edilmez', () => {
+  for (const name of ['roomchat-graph', 'bluprint-build', 'live-session']) {
+    const a = S.oneShot(name, inputs[0], ctx).args
+    assert.ok(!a.includes('--setting-sources') && !a.includes('--disable-slash-commands'), name)
+  }
 })
 
 // ─── Yardımcılar ──────────────────────────────────────────────────────────────
@@ -168,7 +230,7 @@ test('cliModel ve sabitler eskiyle aynı', () => {
   for (const m of [undefined, null, '', 'claude-fable-5', 'FABLE', 'opus', 'sonnet', 'claude-haiku-5-5']) {
     assert.equal(S.cliModel(m), cliModel(m))
   }
-  assert.equal(S.VERIFY_MODEL, VERIFY_MODEL)
+  assert.equal(S.VERIFY_MODEL, AS3_VERIFY_MODEL)   // Aşama 3 bilinçli değişiklik
   assert.deepEqual([...S.PARTIAL_STREAM_TILES].sort(), [...PARTIAL_STREAM_TILES].sort())
 })
 

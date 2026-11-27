@@ -2796,10 +2796,11 @@ class PersistentSession {
   //     Gerekçe: permissionArgs() moda göre spawn-time konfig de değiştiriyor —
   //     'ask' farklı PreToolUse hook matcher'ı ('*'), 'off' --dangerously-skip-
   //     permissions bayrağı taşır. Bunlar control ile değişmez → respawn şart.
-  //   - effort       → CLAUDE_EFFORT env, spawn'da sabit → control'le değişmez, respawn şart.
+  //   - effort       → --effort bayrağı (Aşama 3), spawn'da sabit → control'le değişmez, respawn şart.
+  //   - skills       → --disable-slash-commands (Aşama 3), spawn'da sabit → respawn şart.
   // Control yolu başarısızsa (timeout/error) eski davranışa (dispose→resume) düşülür.
   applySettings(patch) {
-    const SPAWN_FIELDS = ['model', 'effort', 'permissionMode']   // model/permission → CLI arg, effort → CLAUDE_EFFORT env
+    const SPAWN_FIELDS = ['model', 'effort', 'permissionMode', 'skills']   // hepsi spawnProfiles.persistent argv'sine girer
     const changedFields = SPAWN_FIELDS.filter(
       (k) => k in patch && String(patch[k] ?? '') !== String(this.settings[k] ?? '')
     )
@@ -2814,8 +2815,8 @@ class PersistentSession {
       console.error(`[persist] applySettings: süreç ölü, ayarlar sonraki spawn'a bırakıldı key=${this.key} (${changedFields.join(',')})`)
       return
     }
-    // effort env-var → respawn kaçınılmaz.
-    if (changedFields.includes('effort')) { this.dispose(); return }
+    // effort/skills spawn bayrağı → respawn kaçınılmaz.
+    if (changedFields.includes('effort') || changedFields.includes('skills')) { this.dispose(); return }
     // permissionMode değişimi control ile yalnız hook-konfigürasyonu aynı kalan
     // plan↔acceptEdits geçişinde güvenli; ask/off içeren geçişler respawn ister.
     const CONTROL_SAFE_PERM = new Set(['plan', 'acceptEdits'])
