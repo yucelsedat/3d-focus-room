@@ -1,0 +1,41 @@
+{
+  "scenario": "roomchat-3turn",
+  "label": "asama1",
+  "note": "roomchat — 3 turluk sabit sohbet, kalıcı oturumun cache davranışı",
+  "startedAt": "2026-11-27T22:11:00.083Z",
+  "finishedAt": "2026-11-27T22:11:15.525Z",
+  "durationSec": 15,
+  "mediaId": 1795817460109,
+  "error": null,
+  "usageDelta": {
+    "roomchat": {
+      "calls": 3,
+      "input": 10,
+      "cacheWrite": 18711,
+      "cacheRead": 36507,
+      "output": 737,
+      "processedTotal": 55965,
+      "quotaPoints": 0.007758,
+      "turns": 3,
+      "coldTurns": 1,
+      "cw1h": 18711,
+      "cw5m": 0,
+      "thinking": 233
+    }
+  },
+  "totals": {
+    "calls": 3,
+    "input": 10,
+    "cacheWrite": 18711,
+    "cacheRead": 36507,
+    "output": 737,
+    "processedTotal": 55965,
+    "quotaPoints": 0.007758,
+    "turns": 3,
+    "coldTurns": 1,
+    "cw1h": 18711,
+    "cw5m": 0,
+    "thinking": 233
+  },
+  "recall": null
+}

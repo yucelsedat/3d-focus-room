@@ -87,18 +87,25 @@ Bu tile `cwd = process.cwd()` ile repo kökünde açılıyor. Repo `CLAUDE.md`'s
 ayarlar da yükleniyor. Aşama 3'teki `--setting-sources` deneyinin ilk ölçümü bu olmalı:
 aynı 2 tur, önce/sonra `cw` karşılaştırması.
 
-## Açık iş: baseline koşuları
+## Baseline (2026-11-28)
 
-Kabul kriteri olan üç senaryo henüz koşulmadı, çünkü gerçek kota tüketiyorlar:
+İzole düzenek: worktree, veritabanının yedek kopyası, ayrı port ve `USAGE_FILE`.
+Kaynak: `data/bench/asama1-*.json`.
 
-```bash
-node scripts/bench.mjs --scenario roomsession-crud  --label asama1
-node scripts/bench.mjs --scenario roomchat-3turn    --label asama1
-node scripts/bench.mjs --scenario roomchat-idlegap  --label asama1
-```
+| Senaryo | Kod | Kota (%) | Soğuk tur | Araç-tur | Sonuç |
+|---|---|---:|---:|---:|---|
+| roomchat-3turn | `asama1-kota-olcumu` | 0.0078 | 1/3 | 3 | 3 tur |
+| roomsession-crud | `ajan-sunucu-koruma` | 0.0274 | 0/2 | 18 | 1. iterasyonda met |
+| roomchat-idlegap | `ajan-sunucu-koruma` | 0.0032 | 0/3 | 3 | 6 dk boşluklarda önbellek sıcak |
 
-Sonuçlar `data/bench/asama1-*.json`'a yazılır. Bu raporun "Baseline" bölümü o zaman
-doldurulacak.
+### İlk deneme yarım kaldı: ajan backend'i öldürdü
+
+İlk baseline denemesinde roomsession ajanı kendi todo sunucusunu kapatmak için
+`pkill -f "node server.js"` çalıştırdı. Desen bench sunucusunu (aynı komut satırı) da
+öldürdü. Ona bağlı claude süreci kapandı; `roomsession-crud` ve `roomchat-idlegap`
+koşamadı. Düzeltme: `bash-guard-hook.js` (commit `fix: oda ajanlarının Focus Room
+backend'ini öldürmesini engelle`). roomsession ve idlegap baseline'ı bu düzeltmeyle
+yeniden koşuldu. Bench sunucusu artık `node ./server.js` ile başlatılıyor (ek savunma).
 
 ## Sınırlar
 
