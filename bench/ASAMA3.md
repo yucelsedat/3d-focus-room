@@ -101,11 +101,26 @@ sağlam olabilir (Aşama 1 takibi).
 - Skill kullanan üç profilin izole edilmediği ayrıca test ediliyor.
 - `npm run verify:quota`: 17 kontrol.
 
+## `--json-schema` denendi ve UYGULANMADI (olumsuz sonuç)
+
+Yol haritası madde 4, verify'ın JSON'u regex ile avlamak yerine `--json-schema`
+kullanmasını öneriyordu. Asıl verify prompt'u + Haiku 5.5 + Aşama 3 argv'siyle, ikişer
+koşu:
+
+| | çıktı | tur | maliyet | yapılandırılmış çıktı |
+|---|---:|---:|---:|---|
+| şemalı | 479-489 | 4-5 | $0.0008-0.0011 | `result.structured_output` |
+| şemasız | 237-399 | 2-3 | $0.0008-0.0015 | yok (`result` zaten temiz JSON) |
+
+Şema, CLI'ın yapılandırılmış çıktıyı ayrı bir araç turuyla üretmesine yol açıyor. Bu da
+çıktıyı ve tur sayısını artırıyor. Haiku 5.5 şemasız da kod bloğu olmadan tek satır JSON
+döndürüyor, yani `parseVerdict` yeterli. Ayrıca prompt'taki "kısa gerekçe, tek satır"
+talimatı olmadan ilk denemede çıktı 608-639'a çıkmıştı. Kısalığı sağlayan şey prompt.
+
 ## Sırada (bu aşama)
 
 1. Bench karşılaştırması: `asama3` etiketiyle `roomsession-crud` ve `roomchat-3turn`,
    Aşama 1 baseline'ına karşı (`quotaPoints`, soğuk tur, verify geçme).
 2. TTL A/B (`roomsession`: 5m zorlaması / varsayılan 1h / ayrık TTL).
-3. verify ve orchestrate için `--json-schema` (kod bloklu JSON ve boş laf).
-4. Worker ve Oda Projesi için kısa yanıt kuralı.
-5. `--fallback-model`.
+3. Worker ve Oda Projesi için kısa yanıt kuralı (çıktı en pahalı token; bench ile).
+4. `--fallback-model` (maliyet değil güvenilirlik: 529'da döngü durmasın).
