@@ -227,6 +227,10 @@ export function LiveDocText({
   // Değişiklikten sonra imlecin olacağı yer (bütün yazıda) ve yazı alanının o an taşıdığı yazı
   const pendingAt = useRef(null)
   const nativeText = useRef(null)
+  // Uygulanan son odak isteği ve yazılan birimdeki imleç (birimin başına göre): birim yazılırken
+  // yazma alanı yeniden kurulursa (ör. boş madde ilk harfle yazılı maddeye döner) imleç yerinde kalır
+  const appliedRequestRef = useRef(0)
+  const caretRef = useRef(null)
 
   // Yazı değişti: imleç, yeni ayrışmada içinde kaldığı birime geçer. Yazı alanı zaten doğru yazıyı
   // taşıyorsa (harf yazıldı, birim değişmedi) imlece dokunulmaz.
@@ -304,6 +308,7 @@ export function LiveDocText({
     }
     pendingAt.current = range.start + text.length - tail
     nativeText.current = text
+    caretRef.current = { start: text.length - tail, end: text.length - tail }
     live.current = { start: range.start, end: range.start + text.length }
     commit(full)
   }
@@ -382,12 +387,15 @@ export function LiveDocText({
         wrapperStyle={around}
         pieces={pieces}
         request={request?.index === unit.index ? request : null}
+        appliedRequestRef={appliedRequestRef}
+        caretRef={caretRef}
         placeholder={unit.block === BLANK_BLOCK ? placeholder : undefined}
         onInput={(node) => {
           inputRef.current = node
         }}
         onChangeText={changeUnit}
         onSelect={(start, end) => {
+          caretRef.current = { start, end }
           const base = live.current?.start ?? unit.start
           selection.current = { start: base + start, end: base + end }
           onSelectionChange(base + end)
@@ -515,6 +523,8 @@ function UnitInput({
   wrapperStyle: around,
   pieces,
   request,
+  appliedRequestRef,
+  caretRef,
   placeholder,
   onInput,
   onChangeText,
@@ -560,11 +570,20 @@ function UnitInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Odak ve imleç isteği (tıklama, sayfanın isteği ya da birimin değişmesi)
+  // Odak ve imleç isteği (tıklama, sayfanın isteği ya da birimin değişmesi). İstek bir kez uygulanır:
+  // yazılırken yeniden kurulan alan eski isteği değil, imlecin kaldığı yeri alır.
   useLayoutEffect(() => {
     const el = ref.current
     if (!request || !el) return
     onInput(el)
+    if (request.seq !== undefined && request.seq <= appliedRequestRef.current) {
+      const at = caretRef.current
+      if (document.activeElement === el || !at) return
+      el.focus({ preventScroll: true })
+      writeSelection(el, Math.min(at.start, text.length), Math.min(at.end, text.length))
+      return
+    }
+    if (request.seq !== undefined) appliedRequestRef.current = request.seq
     el.focus({ preventScroll: false })
     writeSelection(el, Math.min(request.start, text.length), Math.min(request.end, text.length))
     // Yalnızca yeni istekte
