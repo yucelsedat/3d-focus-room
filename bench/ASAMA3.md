@@ -2,9 +2,9 @@
 
 - **Tarih:** 2026-11-28 · Branch: `asama3-spawn-diyeti` (`asama2-session-cekirdegi` üstünde)
 - **Yol haritası:** `SESSION-YOL-HARITASI.md` §4 Aşama 3
-- **Durum:** dilim 1 (izolasyon, efor, verify modeli) yapıldı ve bench ile ölçüldü: roomsession-crud kotası −%49 (tek koşu). TTL A/B, `--json-schema`,
-  kısa yanıt kuralı ve `--fallback-model` sırada. Bench karşılaştırması Aşama 1 baseline'ı
-  bitince yapılacak.
+- **Durum:** dilim 1 (izolasyon, efor, verify modeli) yapıldı ve bench ile ölçüldü:
+  roomsession-crud kotası −%49 (tek koşu, aynı sonuç). `--json-schema` denendi, reddedildi.
+  Sırada: tekrar koşusu, TTL A/B, kısa yanıt kuralı, `--fallback-model`.
 
 ## Madde 0 — "ikinci tur 11.5K yazıyor" bulgusunun kaynağı
 
