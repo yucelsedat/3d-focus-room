@@ -4196,6 +4196,14 @@ class LoopRunner {
 
   async _workTurn(rec) {
     const key = `roomsession:${this.mediaId}`
+    // Aşama 5 ölçümü (deney anahtarı FOCUS_ROOM_LOOP_EPOCH): 'fresh' → her iterasyon
+    // taze oturum (önceki sürecin bağlamı kapatılır, --resume yok; durum dosyalarda +
+    // _workPrompt'taki iterasyon özetlerinde). Varsayılan 'accumulate' = eski davranış.
+    rec.epochMode = LOOP_EPOCH_MODE
+    if (LOOP_EPOCH_MODE === 'fresh' && rec.iteration > 0) {
+      sessionPool.evict(key)
+      this.settings = { ...this.settings, sessionId: null }
+    }
     let sys
     if (!sessionPool.get(key)) {
       sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${this.dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri burada kurulabilir ve geliştirilebilir.`
@@ -4228,10 +4236,19 @@ class LoopRunner {
         p += `Kalan işler:\n${rec.lastCheck.remaining.map((r) => `- ${r}`).join('\n')}\n`
       }
     }
+    if (LOOP_EPOCH_MODE === 'fresh' && rec.history && rec.history.length) {
+      p += `\n## Önceki iterasyonlar (bu oturum TAZE: önceki sohbet yok, dosya sistemi esas)\n`
+      p += rec.history.map((h) => `- iterasyon ${h.iter}: ${String(h.summary || '').replace(/\s+/g, ' ').trim()}`).join('\n') + '\n'
+      p += `Önce mevcut dosyaları incele, sonra kaldığın yerden devam et.\n`
+    }
     p += `\nBu iterasyonda hedefe yaklaşmak için somut ve eksiksiz çalışma yap; dosyaları doğrudan oluştur/düzenle. Açıklama değil çalışan sonuç üret. Bittiğinde kısaca ne yaptığını özetle.`
     return p
   }
 }
+
+// Aşama 5 ölçümü: döngü iterasyonları birikimli tek oturumda mı ('accumulate', varsayılan)
+// yoksa her iterasyonda taze oturumla mı ('fresh') ilerlesin. Karar bench/ASAMA5.md ölçümüyle.
+const LOOP_EPOCH_MODE = process.env.FOCUS_ROOM_LOOP_EPOCH === 'fresh' ? 'fresh' : 'accumulate'
 
 const loopPool = new Map()
 const MAX_ACTIVE_LOOPS = 2   // eşzamanlı otonom loop tavanı (SessionPool çekişmesi + maliyet koruması)

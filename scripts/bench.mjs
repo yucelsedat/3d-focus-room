@@ -73,6 +73,18 @@ const SCENARIOS = {
     maxIterations: 6,
     note: 'roomsession LoopFlow — zor görev (doğrulama, filtre, sayfalama, testler); kalite deterministik',
   },
+  // Aşama 5 ölçümü: aynı zor görev, ama özellik özellik ilerleme yönergesiyle →
+  // döngü doğal olarak birden çok iterasyona yayılır (Anthropic "bir seferde bir
+  // özellik" deseni). Kollar sunucu env'iyle: FOCUS_ROOM_LOOP_EPOCH=accumulate|fresh.
+  'roomsession-features': {
+    tileType: 'roomsession',
+    goalFrom: 'roomsession-api-plus',
+    subagents: 'Bu hedefi özellik özellik ilerlet. Sıra: (1) CRUD endpointleri, (2) title doğrulaması 400, '
+      + '(3) olmayan id 404, (4) completed filtresi, (5) limit/offset sayfalama, (6) tüm kuralları test eden npm test. '
+      + 'Her iterasyonda YALNIZCA sıradaki en fazla 2 özelliği bitir ve dur; sonraki özelliklere geçme.',
+    maxIterations: 6,
+    note: 'roomsession LoopFlow — çok iterasyonlu (2 özellik/iterasyon); epoch kolu FOCUS_ROOM_LOOP_EPOCH ile',
+  },
   // Aşama 3 TTL A/B: Oda Projesi tile'ında SOHBET (loop değil), turlar arası 6 dk.
   // 5m TTL'de 2./3. tur prefix'i yeniden yazar (soğuk); 1h'de okur (sıcak). Süreç
   // PERSIST_IDLE_MS (15 dk) sayesinde canlı kalır → fark yalnız TTL'den gelir.
@@ -409,8 +421,9 @@ async function checkTodoApiPlus(dir) {
 }
 
 async function runRoomsessionCrud() {
+  const goal = scenario.goal || SCENARIOS[scenario.goalFrom]?.goal
   const media = await api('POST', '/api/roomsession', tileBody({
-    loop: { goal: scenario.goal, maxIterations: scenario.maxIterations },
+    loop: { goal, maxIterations: scenario.maxIterations, ...(scenario.subagents ? { subagents: scenario.subagents } : {}) },
   }))
   console.log(`  tile oluşturuldu: ${media.id}`)
 
@@ -457,6 +470,7 @@ const RUNNERS = {
   'direct-cafe': runDirectCafe,
   'roomsession-crud': runRoomsessionCrud,
   'roomsession-api-plus': runRoomsessionCrud,
+  'roomsession-features': runRoomsessionCrud,
   'roomchat-3turn': runRoomchat3turn,
   'roomchat-idlegap': runRoomchat3turn,
   'roomsession-chat-idlegap': runRoomsessionChatIdlegap,
@@ -486,9 +500,9 @@ async function main() {
   const finishedAt = new Date()
   // Kalite: roomsession-crud için deterministik API kontrolü (model çağırmaz).
   let functional = null
-  if ((scenarioName === 'roomsession-crud' || scenarioName === 'roomsession-api-plus') && !error) {
+  if (['roomsession-crud', 'roomsession-api-plus', 'roomsession-features'].includes(scenarioName) && !error) {
     const dir = path.join(ROOT, 'room-projects', String(bench.id))
-    functional = scenarioName === 'roomsession-api-plus' ? await checkTodoApiPlus(dir) : await checkTodoApi(dir)
+    functional = scenarioName === 'roomsession-crud' ? await checkTodoApi(dir) : await checkTodoApiPlus(dir)
     console.log(`[bench] kalite (API kontrolü): ${functional.ok ? 'GEÇTİ' : 'KALDI'} ${JSON.stringify(functional.checks)}${functional.reason ? ' — ' + functional.reason : ''}`)
   }
   // usage-daily debounce'lu (5 sn) yazılır; flush'ı bekle.
@@ -507,6 +521,8 @@ async function main() {
     error,
     tileModel: TILE_MODEL || null,
     functional,
+    // verify "met" dedi ama deterministik kontrol kaldı → yanlış pozitif
+    verifyFalsePositive: functional && result.recall ? (result.recall.status === 'met' && !functional.ok) : null,
     usageDelta: delta,
     totals: sumDelta(delta),
     recall: result.recall ? {
@@ -515,6 +531,9 @@ async function main() {
       status: result.recall.status,
       respawns: result.recall.respawns || 0,
       usage: result.recall.usage || null,
+      epochMode: result.recall.epochMode || null,
+      // Aşama 5: iterasyon başına verify kararı ve kalan iş sayısı (kalite/ilerleme izi)
+      history: (result.recall.history || []).map((h) => ({ iter: h.iter, met: !!h.check?.met, remaining: (h.check?.remaining || []).length })),
     } : null,
   }
 
