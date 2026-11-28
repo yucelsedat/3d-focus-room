@@ -13,6 +13,10 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@prisma/client';
 import { ROOM_CONFIGS, getDoorInstanceIds, encodeWallId, decodeWallId, defaultFloorTexture } from './src/utils/roomConfig.js';
 import { getGifFrames } from './server/gifFrames.js';
+import * as Quota from './server/quotaLedger.js';
+// Aşama 2: tüm claude spawn argv/env'leri tek kaynaktan (server/sessions/spawnProfiles.js).
+import * as Spawn from './server/sessions/spawnProfiles.js';
+import { cliModel, VERIFY_MODEL, PARTIAL_STREAM_TILES } from './server/sessions/spawnProfiles.js';
 import { registerLibraryRoutes } from './server/library.js';
 import { sanitizeTimeline, createEmptyTimeline, sanitizeTimelineName, noteToText, itemAssetUrls, TL_LIMITS } from './src/utils/timelineModel.js';
 
@@ -219,6 +223,9 @@ const _MCP_PROFILES = (() => {
 // type: 'roomchat' | 'roomsession' | 'bluprint' | 'verify' | 'ai-session'
 //       | 'architect' | 'orchestrate' (multiagent tek-atış ajanları — MCP yükü istemez)
 //       | 'multiagent' (worker'lar — kod yazan rolün MCP tanım/RAM yüküne ihtiyacı yok)
+// Aşama 2: spawnProfiles.js'in yan etkili bağımlılıkları (fonksiyon bildirimleri hoisted).
+const SPAWN_CTX = { mcpArgs: (t) => mcpArgs(t), permissionArgs: (m) => permissionArgs(m) }
+
 function mcpArgs(type) {
   if (type === 'roomchat')  return _MCP_PROFILES.roomchat
   if (type === 'bluprint')  return _NO_MCP
@@ -1938,10 +1945,18 @@ function permissionArgs(mode) {
 }
 
 // CLI'a verilecek inline settings (PreToolUse hook'u verilen matcher ile kaydeder).
+// Her modda ikinci bir PreToolUse girdisi: Bash koruma kilidi (bash-guard-hook.js).
+// Ajanın pkill/killall vb. ile Focus Room backend'ini öldürmesini engeller
+// (2026-11-28 olayı: `pkill -f "node server.js"` bench sunucusunu öldürdü).
+// 'ask' modunda '*' matcher'ı da Bash'i kapsar; iki hook da çalışır, deny kazanır.
 function permSettingsJson(matcher) {
   const hookPath = path.join(__dirname, 'permission-hook.js')
+  const guardPath = path.join(__dirname, 'bash-guard-hook.js')
   return JSON.stringify({
-    hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command: `node "${hookPath}"` }] }] },
+    hooks: { PreToolUse: [
+      { matcher, hooks: [{ type: 'command', command: `node "${hookPath}"` }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: `node "${guardPath}"` }] },
+    ] },
   })
 }
 
@@ -2042,12 +2057,7 @@ app.post('/api/permission/decision', (req, res) => {
   res.json({ ok: true })
 })
 
-// Standalone claude CLI bazı UI model adlarını (ör. claude-fable-5) tanımıyor.
-// --model'e geçmeden önce desteklenen bir ada normalize et. Fable 5 ≈ Opus.
-function cliModel(model) {
-  if (!model || /fable/i.test(model)) return 'opus'
-  return model
-}
+// cliModel(): server/sessions/spawnProfiles.js (Aşama 2).
 
 function parseLiveMessages(content) {
   const messages = []
@@ -2145,23 +2155,18 @@ app.post('/api/session/live/message', (req, res) => {
   const info = getLiveSession()
   if (!info) return res.status(404).json({ error: 'Aktif session yok' })
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--resume', info.sessionId, '--dangerously-skip-permissions',
-    message.trim()
-  ], { usageType: 'live-session' })
+  const sp = Spawn.oneShot('live-session', { sessionId: info.sessionId, message: message.trim() }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, { usageType: sp.usageType, envOverrides: sp.env })
 })
 
 // ─── Ortak yardımcılar (hem tek-atış streamClaudeToSSE hem kalıcı oturum yolu) ──
 // CLI stream-json çıktısında tarayıcıya ilettiğimiz event türleri.
 const FORWARD_TYPES = new Set(['assistant', 'tool', 'result', 'system'])
 
-// Faz D: token-token akış. Bu tile'ların spawn'ına --include-partial-messages
-// eklenir; CLI'dan gelen stream_event/text_delta parçaları SSE'ye kompakt
-// {type:'delta', id, text} olarak iner (ham stream_event iletilmez — hacim
-// küçük kalır, SSE sözleşmesi geriye uyumlu ek alır). multiagent bilinçli
-// hariç: hot-loop, UI'ı delta render etmiyor, ek çıktı hacmi gereksiz.
-const PARTIAL_STREAM_TILES = new Set(['ai-session', 'roomchat', 'bluprint', 'roomsession'])
+// Faz D: token-token akış. PARTIAL_STREAM_TILES (spawnProfiles.js) tile'larının
+// spawn'ına --include-partial-messages eklenir; CLI'dan gelen stream_event/text_delta
+// parçaları SSE'ye kompakt {type:'delta', id, text} olarak iner (ham stream_event
+// iletilmez — hacim küçük kalır, SSE sözleşmesi geriye uyumlu ek alır).
 // Spawn edilen claude'a sızdırmamamız gereken oynak env değişkenleri.
 const CLAUDE_VOLATILE_ENV = ['CLAUDECODE','CLAUDE_CODE_CHILD_SESSION','CLAUDE_CODE_SESSION_ID',
   'CLAUDE_CODE_ENTRYPOINT','AI_AGENT','CLAUDE_AGENT_SDK_VERSION']
@@ -2176,7 +2181,7 @@ function setSSEHeaders(res) {
 }
 
 function buildSpawnEnv(envOverrides) {
-  const env = { ...process.env, ...(envOverrides || {}), FOCUS_ROOM_PORT: String(port) }
+  const env = { ...process.env, ...(envOverrides || {}), FOCUS_ROOM_PORT: String(port), FOCUS_ROOM_PID: String(process.pid) }
   for (const v of CLAUDE_VOLATILE_ENV) delete env[v]
   return env
 }
@@ -2210,21 +2215,37 @@ function _flushUsageDaily() {
   } catch (e) { console.error('[usage-daily] yazım hatası:', e.message) }
 }
 
-function recordGlobalUsage(tileType, u) {
-  if (!u || !tileType) return
+// Aşama 1: kota ağırlıkları. data/quota-weights.json varsa varsayılanların üstüne
+// yazar (kendi sayaç okumalarımızla kalibrasyon için); yoksa server/quotaLedger.js
+// içindeki üçüncü taraf tahmin kullanılır.
+const QUOTA_WEIGHTS = Quota.loadWeights(() =>
+  JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'quota-weights.json'), 'utf8')))
+
+// result olayından tur kaydı (kota puanı, soğuk tur, model kırılımı) üret.
+// prevModelUsage: kalıcı süreçte önceki result'ın modelUsage'ı (birikimli alan).
+// firstUsage: turun ilk ana-konuşma assistant olayının usage'ı (soğuk tur tespiti;
+// result.usage.iterations SON isteği taşır, ilkini değil).
+function quotaRecord(ev, fallbackModel, prevModelUsage = null, firstUsage = null) {
+  return Quota.turnRecord(ev, { fallbackModel, prevModelUsage, firstUsage, weights: QUOTA_WEIGHTS })
+}
+
+// Bir olay turun ilk ana-konuşma API isteğinin usage'ını taşıyor mu? (subagent hariç)
+function mainAssistantUsage(ev) {
+  if (ev?.type !== 'assistant' || ev.parent_tool_use_id || ev.isSidechain) return null
+  return ev.message?.usage || null
+}
+
+// rec: quotaRecord() çıktısı (tur kaydı). Eski çağrı biçimi (ham usage) kabul edilmez —
+// tüm çağıranlar Aşama 1'de tur kaydına geçti.
+function recordGlobalUsage(tileType, rec) {
+  if (!rec || !tileType) return
   const store = _loadUsageDaily()
   const day = new Date().toISOString().slice(0, 10)
   const byType = store[day] || (store[day] = {})
   const t = byType[tileType] || (byType[tileType] = { calls: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, processedTotal: 0 })
-  t.calls += 1
-  t.input += u.input_tokens || 0
-  t.cacheWrite += u.cache_creation_input_tokens || 0
-  t.cacheRead += u.cache_read_input_tokens || 0
-  t.output += u.output_tokens || 0
-  // processedTotal: oturum penceresini tüketen asıl büyüklük — cacheRead dahil
-  // (dolar maliyeti düşük olsa da pencereyi doldurur, faz1 İş 1.2).
-  t.processedTotal = (t.processedTotal || 0) + (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
-    + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0)
+  // processedTotal korunur (eski bench'lerle kıyas için); asıl metrik artık
+  // quotaPoints — abonelik sayacının token türlerine verdiği ağırlıkla.
+  Quota.accumulate(t, rec)
   if (!_usageFlushTimer) {
     _usageFlushTimer = setTimeout(_flushUsageDaily, 5000)
     if (_usageFlushTimer.unref) _usageFlushTimer.unref()
@@ -2233,14 +2254,13 @@ function recordGlobalUsage(tileType, u) {
 
 // Tur-başı yapılandırılmış usage logu (faz1 İş 1.1): cacheRead'in tur tur nasıl
 // biriktiği çıplak gözle okunsun — multiagent 2.46M cacheRead kök nedeni bu
-// birikimdi. Tek satır, grep-dostu format.
-function logTurnUsage({ tile, key, turn, model, usage }) {
-  if (!usage) return
-  const inTok = usage.input_tokens || 0
-  const cw = usage.cache_creation_input_tokens || 0
-  const cr = usage.cache_read_input_tokens || 0
-  const out = usage.output_tokens || 0
-  console.error(`[turn-usage] tile=${tile || '?'} key=${key || '-'} turn=${turn || 1} in=${inTok} cw=${cw} cr=${cr} out=${out} total=${inTok + cw + cr + out} model=${model || '-'}`)
+// birikimdi. Tek satır, grep-dostu format. Aşama 1: q= kota puanı (haftalık %),
+// cold= turun ilk isteği prefix'i yeniden yazdı mı, tools= araç-tur sayısı.
+function logTurnUsage({ tile, key, turn, model, rec }) {
+  if (!rec) return
+  const u = rec.usage
+  const total = u.input + u.cacheWrite + u.cacheRead + u.output
+  console.error(`[turn-usage] tile=${tile || '?'} key=${key || '-'} turn=${turn || 1} in=${u.input} cw=${u.cacheWrite} cr=${u.cacheRead} out=${u.output} total=${total} q=${rec.points.toFixed(4)} cold=${rec.cold ? 1 : 0} tools=${rec.turns} cw1h=${u.cw1h} cw5m=${u.cw5m} model=${model || rec.family || '-'}`)
 }
 
 // Spawn arg listesinden bir bayrağın değerini oku (turn-usage logunda model için).
@@ -2253,8 +2273,22 @@ app.get('/api/usage/daily', (req, res) => {
   const days = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 7))
   const store = _loadUsageDaily()
   const out = {}
-  for (const day of Object.keys(store).sort().slice(-days)) out[day] = store[day]
+  for (const day of Object.keys(store).sort().slice(-days)) {
+    out[day] = {}
+    for (const [tile, t] of Object.entries(store[day])) {
+      // Aşama 1 öncesi kayıtlarda quotaPoints yok → token toplamından tahmin et ve
+      // işaretle (model bilinmediği için varsayılan aile). Saklanan veri değişmez.
+      out[day][tile] = t.quotaPoints == null
+        ? { ...t, quotaPoints: Quota.estimateLegacyPoints(t, QUOTA_WEIGHTS), quotaEstimated: true }
+        : t
+    }
+  }
   res.json(out)
+})
+
+// Kota ağırlıkları ve kaynakları (Kota Panosu tile'ı ve bench raporu için).
+app.get('/api/usage/weights', (req, res) => {
+  res.json(QUOTA_WEIGHTS)
 })
 
 // Spawns the claude CLI and streams its stream-json output to an SSE response.
@@ -2267,7 +2301,7 @@ app.get('/api/usage/daily', (req, res) => {
 function streamClaudeToSSE(res, args, opts = {}) {
   setSSEHeaders(res)
 
-  const spawnEnv = { ...process.env, ...(opts.envOverrides || {}), FOCUS_ROOM_PORT: String(port) }
+  const spawnEnv = { ...process.env, ...(opts.envOverrides || {}), FOCUS_ROOM_PORT: String(port), FOCUS_ROOM_PID: String(process.pid) }
   for (const v of CLAUDE_VOLATILE_ENV) {
     delete spawnEnv[v]
   }
@@ -2277,6 +2311,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
   let idleTimer = null
   let heartbeat = null
   let sawResult = false
+  let firstUsage = null   // Aşama 1 düzeltmesi: turun ilk isteği (soğuk tur tespiti)
 
   function finish() {
     if (finished) return
@@ -2305,9 +2340,14 @@ function streamClaudeToSSE(res, args, opts = {}) {
     if (!line.trim()) return false
     try {
       const ev = JSON.parse(line)
+      if (!firstUsage) firstUsage = mainAssistantUsage(ev)
       if (ev.type === 'result' && ev.usage) {
-        recordGlobalUsage(opts.usageType, ev.usage)
-        logTurnUsage({ tile: opts.usageType, key: opts.usageKey || opts.usageType, turn: 1, model: cliArgValue(args, '--model'), usage: ev.usage })
+        // Tek-atış süreç: modelUsage birikimli ama tek result olduğundan delta = tamamı.
+        const model = cliArgValue(args, '--model')
+        const rec = quotaRecord(ev, model, null, firstUsage)
+        recordGlobalUsage(opts.usageType, rec)
+        logTurnUsage({ tile: opts.usageType, key: opts.usageKey || opts.usageType, turn: 1, model, rec })
+        ev.quota = rec   // tarayıcı (Aşama 8 arayüzü) ve loop turn sink'i okur
       }
       opts.onEvent?.(ev)
       if (FORWARD_TYPES.has(ev.type)) {
@@ -2457,6 +2497,8 @@ class PersistentSession {
     this.lastResult = ''                     // son tamamlanan turun result metni (recall özeti)
     this.turnCount = 0                       // bu oturum nesnesinin tamamlanan tur sayısı (turn-usage logu)
     this.respawns = 0                        // --resume ile yeniden doğuş sayısı (faz1 İş 1.4)
+    this._prevModelUsage = null              // Aşama 1: süreç içi birikimli modelUsage snapshot'ı (delta için)
+    this._turnFirstUsage = null              // Aşama 1 düzeltmesi: bu turun ilk assistant usage'ı
     this.pendingControls = new Map()         // Faz B: request_id → {resolve, reject, timeout} (control_response eşleştirme)
     this.status = 'idle'                     // Faz E: idle | running | input_needed | error (frontend rozeti)
     this.pendingAction = null                // Faz E: input_needed'da ne beklendiği { kind, toolUseId, toolName? }
@@ -2477,42 +2519,21 @@ class PersistentSession {
 
   _spawn() {
     const tile = this.key.split(':')[0]
-    const a = [
-      '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-      '--model', cliModel(this.settings.model),
-      // Faz 2 İş 2.1: dinamik system-prompt bölümlerini (cwd/env/git/memory) ilk user
-      // mesajına taşı → cache prefix'i spawn'lar arası SABİT kalır, respawn sonrası
-      // cacheWrite yerine cache-hit. Default prompt + --append-system-prompt ile uyumlu.
-      '--exclude-dynamic-system-prompt-sections',
-      ...mcpArgs(tile),
-    ]
-    // Faz D: interaktif tile'larda token-token akış (stream_event → SSE delta).
-    if (PARTIAL_STREAM_TILES.has(tile)) a.push('--include-partial-messages')
-    if (this.sys) a.push('--append-system-prompt', this.sys)
-    if (this.maxTurns) a.push('--max-turns', String(this.maxTurns))
-    // Tool kısıtı: system prompt'a giren tool tanımı sayısını (→ her spawn'ın
-    // cacheWrite'ı) düşürür; ayrıca worker'ın Task/WebSearch gibi token
-    // çarpanlarına erişimini keser (plan.md P2-B).
-    if (this.tools) a.push('--tools', this.tools)
-    if (this.maxBudgetUsd) a.push('--max-budget-usd', String(this.maxBudgetUsd))
-    a.push(...permissionArgs(this.settings.permissionMode))
-    if (this.sessionId) a.push('--resume', this.sessionId)   // geçmişi koru
-
-    const envOverrides = {}
-    if (this.settings.effort && this.settings.effort !== 'normal') envOverrides.CLAUDE_EFFORT = this.settings.effort
-    // Faz 2 İş 2.2 (TTL doğrulandı: result.usage.cache_creation kırılımı env'leri birebir izliyor):
-    // - hot loop (roomsession/multiagent): turlar dakikalar içinde ardışık → 5m TTL yeter,
-    //   cacheWrite 1.25× (1h'lik 2× yerine) — yazma %37.5 ucuz.
-    // - interaktif sohbet (roomchat/ai-session/bluprint): kullanıcı arada uzun düşünür →
-    //   1h TTL; geri dönünce cache-hit (5dk'da düşmüş cache'i yeniden yazmak yok).
-    if (tile === 'roomsession' || tile === 'multiagent') envOverrides.FORCE_PROMPT_CACHING_5M = '1'
-    else envOverrides.ENABLE_PROMPT_CACHING_1H = '1'
+    // Aşama 2: argv + env (model, MCP profili, partial stream, sys, tool kısıtı,
+    // bütçe, izin modu, --resume, efor, cache TTL) spawnProfiles.persistent'te.
+    const { args: a, env: envOverrides } = Spawn.persistent({
+      tile, settings: this.settings, sys: this.sys, maxTurns: this.maxTurns,
+      tools: this.tools, maxBudgetUsd: this.maxBudgetUsd, sessionId: this.sessionId,
+      loopTtl: process.env.FOCUS_ROOM_LOOP_TTL,   // Aşama 3 TTL A/B deney anahtarı (yoksa 5m)
+    }, SPAWN_CTX)
 
     // detached: claude kendi süreç grubunun lideri olur → dispose'da grup kill
     // ile MCP çocukları (context7/exa vb.) da ölür, orphan birikmez.
     // Respawn sayacı (faz1 İş 1.4): sessionId varken spawn = --resume ile yeniden
     // doğuş (idle evict / çökme / ayar değişimi). Faz 3'ün etkisi bu sayıyla ölçülür.
     if (this.sessionId) this.respawns += 1
+    this._prevModelUsage = null   // Aşama 1: modelUsage yeni süreçte sıfırdan birikir
+    this._turnFirstUsage = null
     this.proc = spawn(CLAUDE_CLI, a, { cwd: this.cwd, env: buildSpawnEnv(envOverrides), detached: true })
     console.error(`[persist] SPAWN key=${this.key} pid=${this.proc.pid} resume=${this.sessionId || 'none'} respawns=${this.respawns}`)
     // Resume-şişkinlik göstergesi: respawn sonrası İLK turun input+cacheWrite'ı
@@ -2571,14 +2592,25 @@ class PersistentSession {
       }
       if (this.sink) sessionStreams.set(this.sessionId, this.sink)  // izin köprüsü
     }
+    // Aşama 1: tur kaydını forward'dan ÖNCE üret — ev.quota tarayıcıya ve loop'un
+    // turn sink'ine (makeTurnSink) aynı olayla gider. modelUsage süreç boyunca
+    // birikimli: delta için bir önceki snapshot kullanılır (respawn'da sıfırlanır).
+    let quotaRec = null
+    if (!this._turnFirstUsage) this._turnFirstUsage = mainAssistantUsage(ev)
+    if (ev.type === 'result' && ev.usage) {
+      quotaRec = quotaRecord(ev, cliModel(this.settings.model), this._prevModelUsage, this._turnFirstUsage)
+      this._turnFirstUsage = null   // sonraki tur kendi ilk isteğini yakalar
+      if (ev.modelUsage) this._prevModelUsage = ev.modelUsage
+      ev.quota = quotaRec
+    }
     if (this.sink && FORWARD_TYPES.has(ev.type)) {
       try { this.sink.write(sseLine(ev)) } catch {}
     }
     if (ev.type === 'result') {
       if (ev.usage) {
         this.turnCount += 1
-        recordGlobalUsage(this.key.split(':')[0], ev.usage)
-        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: this.settings.model, usage: ev.usage })
+        recordGlobalUsage(this.key.split(':')[0], quotaRec)
+        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: this.settings.model, rec: quotaRec })
         if (this._logResumeCost) {
           this._logResumeCost = false
           const input = ev.usage.input_tokens || 0
@@ -2779,10 +2811,11 @@ class PersistentSession {
   //     Gerekçe: permissionArgs() moda göre spawn-time konfig de değiştiriyor —
   //     'ask' farklı PreToolUse hook matcher'ı ('*'), 'off' --dangerously-skip-
   //     permissions bayrağı taşır. Bunlar control ile değişmez → respawn şart.
-  //   - effort       → CLAUDE_EFFORT env, spawn'da sabit → control'le değişmez, respawn şart.
+  //   - effort       → --effort bayrağı (Aşama 3), spawn'da sabit → control'le değişmez, respawn şart.
+  //   - skills       → --disable-slash-commands (Aşama 3), spawn'da sabit → respawn şart.
   // Control yolu başarısızsa (timeout/error) eski davranışa (dispose→resume) düşülür.
   applySettings(patch) {
-    const SPAWN_FIELDS = ['model', 'effort', 'permissionMode']   // model/permission → CLI arg, effort → CLAUDE_EFFORT env
+    const SPAWN_FIELDS = ['model', 'effort', 'permissionMode', 'skills']   // hepsi spawnProfiles.persistent argv'sine girer
     const changedFields = SPAWN_FIELDS.filter(
       (k) => k in patch && String(patch[k] ?? '') !== String(this.settings[k] ?? '')
     )
@@ -2797,8 +2830,8 @@ class PersistentSession {
       console.error(`[persist] applySettings: süreç ölü, ayarlar sonraki spawn'a bırakıldı key=${this.key} (${changedFields.join(',')})`)
       return
     }
-    // effort env-var → respawn kaçınılmaz.
-    if (changedFields.includes('effort')) { this.dispose(); return }
+    // effort/skills spawn bayrağı → respawn kaçınılmaz.
+    if (changedFields.includes('effort') || changedFields.includes('skills')) { this.dispose(); return }
     // permissionMode değişimi control ile yalnız hook-konfigürasyonu aynı kalan
     // plan↔acceptEdits geçişinde güvenli; ask/off içeren geçişler respawn ister.
     const CONTROL_SAFE_PERM = new Set(['plan', 'acceptEdits'])
@@ -3061,13 +3094,8 @@ function runSpecForKind(kind) {
 // Belirsiz projelerde Haiku'ya klasörü inceletip tür etiketini al (verifyGoal deseni).
 async function detectKindWithHaiku(dir) {
   const prompt = `Bir web projesi klasörünü inceleyip türünü belirle. package.json, config dosyaları ve index.html gibi dosyaları oku. node_modules'a BAKMA.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"kind":"next|vite|cra|static|unknown"}\n- next: Next.js  - vite: Vite  - cra: create-react-app (react-scripts)\n- static: derleme gerektirmeyen düz index.html sitesi  - unknown: emin değilsen`
-  const { text, failed } = await runClaudeCapture([
-    '--print', '--output-format=stream-json', '--verbose', '--max-turns', '6',
-    '--tools', 'Read,Glob,Grep',
-    '--exclude-dynamic-system-prompt-sections',
-    '--no-session-persistence',
-    '--model', cliModel(VERIFY_MODEL), ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
-  ], { cwd: dir, usageType: 'projectview-detect', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+  const sp = Spawn.oneShot('projectview-detect', { prompt }, SPAWN_CTX)
+  const { text, failed } = await runClaudeCapture(sp.args, { cwd: dir, usageType: sp.usageType, envOverrides: sp.env })
   if (failed || !text) return 'unknown'
   const m = text.match(/\{[\s\S]*\}/)
   if (!m) return 'unknown'
@@ -3533,17 +3561,11 @@ app.post('/api/roomchat/:mediaId/rebuild', async (req, res) => {
     ? `graphify skill'ini (Skill tool, skill adı "graphify") --update (artımlı) modunda geçerli çalışma dizinindeki ./raw klasörü üzerinde çalıştır. Yalnızca yeni eklenen veya içeriği değişen dosyaları yeniden işle, silinen dosyaların düğümlerini mevcut grafdan çıkar ve sonucu mevcut graphify-out/graph.json ile birleştir; ardından clustering ve GRAPH_REPORT.md'yi tazele. Bana hiçbir şey sorma, onay bekleme — doğrudan yap. Bittiğinde tek satırla kaç node ve kaç community olduğunu söyle.`
     : `graphify skill'ini (Skill tool, skill adı "graphify") geçerli çalışma dizinindeki ./raw klasörü üzerinde çalıştır ve bilgi grafını kur. Tam pipeline'ı uygula: detect → extract → cluster → report → graph.json + GRAPH_REPORT.md üret. Çıktılar graphify-out/ altına yazılmalı. Bana hiçbir şey sorma, onay bekleme — doğrudan kur. Bittiğinde tek satırla kaç node ve kaç community oluştuğunu söyle.`
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(model),
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-    '--no-session-persistence',                   // Faz 3 İş 3.3: graf-build tek-atış, JSONL yazma
-    ...mcpArgs('roomchat'),
-    '--dangerously-skip-permissions',
-    prompt,
-  ], {
+  const sp = Spawn.oneShot('roomchat-graph', { model, prompt }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, {
     cwd: dir,
-    usageType: 'roomchat-graph',
+    usageType: sp.usageType,
+    envOverrides: sp.env,
     onEvent: (ev) => {
       if (ev.type === 'result') {
         const cur = parseSessionContent(media.content)
@@ -3935,10 +3957,10 @@ function removeSessionRecall(mediaId) {
 // normal çıktı sanmak loop'un hata üstüne iterasyon yakmasına yol açar.
 function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
   return new Promise((resolve) => {
-    let buf = '', text = '', failed = null, usage = null
+    let buf = '', text = '', failed = null, usage = null, quota = null, firstUsage = null
     let proc
     try { proc = spawn(CLAUDE_CLI, args, { cwd: cwd || process.cwd(), env: buildSpawnEnv(envOverrides || {}) }) }
-    catch (e) { return resolve({ text: '', failed: e.message, usage: null }) }
+    catch (e) { return resolve({ text: '', failed: e.message, usage: null, quota: null }) }
     proc.stdout.on('data', (c) => {
       buf += c.toString()
       const lines = buf.split('\n'); buf = lines.pop() ?? ''
@@ -3946,13 +3968,17 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
         if (!line.trim()) continue
         let ev
         try { ev = JSON.parse(line) } catch { continue }
+        if (!firstUsage) firstUsage = mainAssistantUsage(ev)
         if (ev.type === 'assistant' && ev.message?.model === '<synthetic>') {
           const t = (ev.message.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ')
           failed = t || 'API hatası (synthetic yanıt)'
         }
         if (ev.type === 'result') {
           if (typeof ev.result === 'string') text = ev.result
-          if (ev.usage) usage = ev.usage
+          if (ev.usage) {
+            usage = ev.usage
+            quota = quotaRecord(ev, cliArgValue(args, '--model'), null, firstUsage)   // tek-atış: delta = tamamı
+          }
           if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
             failed = failed || (text ? text.slice(0, 200) : `sonuç hatası (${ev.subtype || 'bilinmiyor'})`)
           }
@@ -3961,27 +3987,22 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
     })
     proc.stderr.on('data', (c) => console.error('[loop-verify stderr]', c.toString().slice(0, 200)))
     proc.on('close', () => {
-      recordGlobalUsage(usageType, usage)
-      logTurnUsage({ tile: usageType, key: usageType, turn: 1, model: cliArgValue(args, '--model'), usage })
-      resolve({ text, failed, usage })
+      recordGlobalUsage(usageType, quota)
+      logTurnUsage({ tile: usageType, key: usageType, turn: 1, model: cliArgValue(args, '--model'), rec: quota })
+      resolve({ text, failed, usage, quota })
     })
-    proc.on('error', (e) => resolve({ text: '', failed: e.message, usage: null }))
+    proc.on('error', (e) => resolve({ text: '', failed: e.message, usage: null, quota: null }))
   })
 }
 
-// Kümülatif token muhasebesi: her turun/spawn'ın usage'ını recall'a işler.
+// Kümülatif token muhasebesi: her turun/spawn'ın tur kaydını recall'a işler.
 // Amaç görünürlük (UI'da tüketim) + bütçe freni (MultiAgentRunner).
-function addUsage(rec, u) {
-  if (!u) return
+// q: quotaRecord() çıktısı. Aşama 1: quotaPoints/coldTurns/turns da birikir;
+// processedTotal aynen korunur (bütçe freni hâlâ ona bakıyor — davranış değişmedi).
+function addUsage(rec, q) {
+  if (!q) return
   const t = rec.usage || (rec.usage = { calls: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0, processedTotal: 0 })
-  t.calls += 1
-  t.input += u.input_tokens || 0
-  t.cacheWrite += u.cache_creation_input_tokens || 0
-  t.cacheRead += u.cache_read_input_tokens || 0
-  t.output += u.output_tokens || 0
-  // İşlenen toplam: oturum penceresini tüketen asıl büyüklük (faz1 İş 1.2).
-  t.processedTotal = (t.processedTotal || 0) + (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
-    + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0)
+  Quota.accumulate(t, q)
 }
 
 // Verifier çıktısını güvenli parse et: JSON bulunamazsa met:false (güvenli taraf).
@@ -3999,28 +4020,19 @@ function parseVerdict(text) {
 // Doğrulanabilir hedefi kontrol eden ayrı (ucuz) Claude ajanı.
 // --max-turns tavanı: dosya okuma sarmalını sınırlar (token freni).
 // Doğrulama "dosyalara bak, tek satır JSON döndür" işi — pahalı tile modeliyle
-// koşturmak israf; her yerde haiku'ya sabit.
-const VERIFY_MODEL = 'claude-haiku-4-5-20251001'
+// koşturmak israf; her yerde haiku'ya sabit (VERIFY_MODEL: spawnProfiles.js).
 async function verifyGoal({ goal, dir, model }) {
-  const vModel = cliModel(model || VERIFY_MODEL)
   const prompt = `Sen bir doğrulama ajanısın. Aşağıdaki hedefin ŞU AN karşılanıp karşılanmadığını değerlendir.\n\n## Hedef\n${goal}\n\n## Proje klasörü\n${dir}\nKlasördeki dosyaları oku/incele. node_modules, dist, .git gibi bağımlılık/üretim klasörlerini İNCELEME. Sadece gerçekten doğrulayabildiğini "met:true" say.\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"met": true|false, "reason": "kısa gerekçe", "remaining": ["kalan iş", ...]}`
-  const { text, failed, usage } = await runClaudeCapture([
-    '--print', '--output-format=stream-json', '--verbose', '--max-turns', '12',
-    // Doğrulayıcı salt-okur (+ test koşturabilsin diye Bash): tool tanım yükü ve
-    // yanlışlıkla dosya değiştirme riski birlikte iner (plan.md P2-B).
-    '--tools', 'Read,Glob,Grep,Bash',
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1: prefix sabit → spawn'lar arası cache-hit
-    // Faz 3 İş 3.3: tek-atış — asla --resume edilmez; JSONL yazma (disk + session listesi kirliliği).
-    '--no-session-persistence',
-    '--model', vModel, ...mcpArgs('verify'), '--dangerously-skip-permissions', prompt,
-  ], { cwd: dir, usageType: 'verify', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
+  // Doğrulayıcı salt-okur (+ test koşturabilsin diye Bash); argv: spawnProfiles 'verify'.
+  const sp = Spawn.oneShot('verify', { model, prompt }, SPAWN_CTX)
+  const { text, failed, usage, quota } = await runClaudeCapture(sp.args, { cwd: dir, usageType: sp.usageType, envOverrides: sp.env })
   // API-düzeyi hata veya boş çıktı: "hedef karşılanmadı" DEĞİL, altyapı arızası.
   // error:true dönen verdict loop'u iterasyon yakmadan durdurur (matbaa vakası:
   // limit dolunca 8 iterasyon boşa dönmüştü).
   if (failed || !text.trim()) {
-    return { met: false, reason: failed || 'doğrulayıcı boş yanıt verdi', remaining: [], error: true, usage }
+    return { met: false, reason: failed || 'doğrulayıcı boş yanıt verdi', remaining: [], error: true, usage, quota }
   }
-  return { ...parseVerdict(text), usage }
+  return { ...parseVerdict(text), usage, quota }
 }
 
 // İş turunu mevcut roomsession PersistentSession'ı üzerinden sürmek için proxy sink.
@@ -4032,6 +4044,7 @@ function makeTurnSink(getClientSink) {
   let summary = ''
   let failure = null   // API-düzeyi hata (limit vb.) — tur "başarılı" sayılmamalı
   let usage = null     // turun result olayındaki token kullanımı (muhasebe için)
+  let quota = null     // Aşama 1: PersistentSession'ın result'a iliştirdiği tur kaydı (ev.quota)
   const sink = {
     setHeader() {}, flushHeaders() {},
     write(chunk) {
@@ -4047,6 +4060,7 @@ function makeTurnSink(getClientSink) {
           }
           if (ev.type === 'result') {
             if (ev.usage) usage = ev.usage
+            if (ev.quota) quota = ev.quota
             if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
               failure = failure || String(ev.result || ev.subtype || 'bilinmeyen tur hatası').slice(0, 200)
             }
@@ -4060,7 +4074,7 @@ function makeTurnSink(getClientSink) {
     end() { resolveDone() },
     on() {},
   }
-  return { sink, done: done.then(() => ({ summary, failure, usage })) }
+  return { sink, done: done.then(() => ({ summary, failure, usage, quota })) }
 }
 
 // Tek mediaId için tekil otonom loop sürücüsü (PersistentSession desenine analog).
@@ -4157,7 +4171,7 @@ class LoopRunner {
   // Doğrulama turu — subclass, gereksiz spawn'ı atlamak için override edebilir.
   async _verifyTurn(rec) {
     const verdict = await verifyGoal({ goal: this.spec.goal, dir: this.dir, model: VERIFY_MODEL })
-    addUsage(rec, verdict.usage)
+    addUsage(rec, verdict.quota)
     return verdict
   }
 
@@ -4179,7 +4193,7 @@ class LoopRunner {
       },
     })
     const turn = await done
-    addUsage(rec, turn.usage)
+    addUsage(rec, turn.quota)
     rec.respawns = (rec.respawns || 0) + Math.max(0, sess.respawns - respawns0)
     if (turn.failure) throw new Error(`İş turu başarısız: ${turn.failure}`)
     return turn.summary
@@ -4456,13 +4470,9 @@ class MultiAgentRunner extends LoopRunner {
 
     const doneList = rec.tasks.filter(t => t.status === 'done').map(t => `- [${t.role}] ${t.task}`).join('\n') || '- (yok)'
     const p = `Sen çok-ajanlı bir yazılım projesinin orkestratörüsün. Tüm planlı görevler bitti ama hedef doğrulanamadı; kalan işlerden TEK birini en uygun role somut görev olarak ata.\n\n## Proje\n${manifest.projectBrief || manifest.goal}\n\n## Ekip rolleri\n${manifest.team.map(m => `- ${m.role}`).join('\n')}\n\n## Tamamlanan görevler\n${doneList}\n\n## Doğrulamada kalan işler\nGerekçe: ${rec.lastCheck.reason}\n${remaining.map(r => `- ${r}`).join('\n')}\n\nSADECE tek satır JSON döndür, başka hiçbir şey yazma:\n{"nextRole": "<rol>", "task": "<somut görev>"}`
-    const { text, failed, usage } = await runClaudeCapture([
-      '--print', '--output-format=stream-json', '--verbose', '--max-turns', '4',
-      '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-      '--no-session-persistence',                   // Faz 3 İş 3.3: tek-atış, JSONL yazma
-      '--model', cliModel('sonnet'), ...mcpArgs('orchestrate'), '--dangerously-skip-permissions', p,
-    ], { cwd: this.dir, usageType: 'orchestrate', envOverrides: { FORCE_PROMPT_CACHING_5M: '1' } })
-    addUsage(rec, usage)
+    const sp = Spawn.oneShot('orchestrate', { prompt: p }, SPAWN_CTX)
+    const { text, failed, quota } = await runClaudeCapture(sp.args, { cwd: this.dir, usageType: sp.usageType, envOverrides: sp.env })
+    addUsage(rec, quota)
     if (failed) throw new Error(`Orkestratör çalıştırılamadı: ${failed}`)
     const m = (text || '').match(/\{[\s\S]*\}/)
     if (m) {
@@ -4540,7 +4550,7 @@ class MultiAgentRunner extends LoopRunner {
       },
     })
     const turn = await done
-    addUsage(rec, turn.usage)
+    addUsage(rec, turn.quota)
     rec.respawns = (rec.respawns || 0) + Math.max(0, sess.respawns - respawns0)
     // Limit/API arızasında turu "başarılı" sayma: görev done işaretlenmez, loop
     // status=error ile durur, recall korunur → limit yenilenince devam edilir.
@@ -4716,19 +4726,12 @@ app.post('/api/multiagent/:mediaId/architect', async (req, res) => {
   const workers = listAgentProfiles().filter(n => n !== 'project-architect')
   const prompt = `Proje fikri:\n${idea}\n\nKurulu agent profilleri (agentProfile alanında SADECE bunları kullan):\n${workers.map(w => `- ${w}`).join('\n')}\n\nSistem yönergendeki formatta SADECE JSON manifest üret. Bana soru sorma, onay bekleme.`
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(profile.model || 'opus'),
-    '--tools', 'Read',   // mimar yalnız okur + JSON üretir; tool tanım yükünü kıs
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-    '--no-session-persistence',                   // Faz 3 İş 3.3: tek-atış, JSONL yazma
-    ...mcpArgs('architect'),
-    '--append-system-prompt', profile.body,
-    '--dangerously-skip-permissions',
-    prompt,
-  ], {
+  // Mimar yalnız okur + JSON üretir; argv: spawnProfiles 'architect'.
+  const sp = Spawn.oneShot('architect', { model: profile.model, systemPrompt: profile.body, prompt }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, {
     cwd: dir,
-    usageType: 'architect',
+    usageType: sp.usageType,
+    envOverrides: sp.env,
     onEvent: (ev) => {
       if (ev.type !== 'result' || typeof ev.result !== 'string') return
       const manifest = parseManifest(ev.result)
@@ -5059,17 +5062,11 @@ app.post('/api/bluprint/:mediaId/rebuild', async (req, res) => {
   const { model } = settings
   const prompt = entry.prompt(repo, out, scope)
 
-  streamClaudeToSSE(res, [
-    '--print', '--output-format=stream-json', '--verbose',
-    '--model', cliModel(model),
-    '--exclude-dynamic-system-prompt-sections',   // Faz 2 İş 2.1
-    '--no-session-persistence',                   // Faz 3 İş 3.3: spec-build tek-atış, JSONL yazma
-    ...mcpArgs('bluprint'),
-    '--dangerously-skip-permissions',
-    prompt,
-  ], {
+  const sp = Spawn.oneShot('bluprint-build', { model, prompt }, SPAWN_CTX)
+  streamClaudeToSSE(res, sp.args, {
     cwd: out,
-    usageType: 'bluprint-build',
+    usageType: sp.usageType,
+    envOverrides: sp.env,
     onEvent: (ev) => {
       if (ev.type === 'result') {
         if (entry.bestEffort) importBestEffortOutputs(out)

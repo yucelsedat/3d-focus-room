@@ -13,6 +13,8 @@
 //   3. GET /api/usage/daily snapshot'ı alınır, senaryo koşulur, snapshot tekrar alınır.
 //   4. Delta (tile-tipi kırılımı + processedTotal) + varsa recall (iterasyon, respawns,
 //      rec.usage) data/bench/<label>-<ts>.json'a yazılır.
+//      Aşama 1: quotaPoints (tahmini haftalık sayaç %'si — asıl karşılaştırma metriği),
+//      coldTurns, turns (araç-tur), cw1h/cw5m (TTL kırılımı), thinking de delta'ya girer.
 //
 // DİKKAT: gerçek API tüketir — senaryolar küçük tutuldu; gün başına 1 baseline yeter.
 
@@ -56,6 +58,20 @@ const SCENARIOS = {
       'Bu üç temayı tek bir cümlede birleştirerek özetle.',
     ],
     note: 'roomchat — 3 tur, turlar arası 6 dk boşluk; 1H cache + uzun idle doğrulaması',
+  },
+  // Aşama 3 TTL A/B: Oda Projesi tile'ında SOHBET (loop değil), turlar arası 6 dk.
+  // 5m TTL'de 2./3. tur prefix'i yeniden yazar (soğuk); 1h'de okur (sıcak). Süreç
+  // PERSIST_IDLE_MS (15 dk) sayesinde canlı kalır → fark yalnız TTL'den gelir.
+  // Kol seçimi sunucu env'iyle: FOCUS_ROOM_LOOP_TTL=5m|1h (bench etiketi kolu yazar).
+  'roomsession-chat-idlegap': {
+    tileType: 'roomsession',
+    gapSec: 360,
+    chatPrompts: [
+      "Bu klasöre package.json yaz: name 'idlegap-demo', scripts.start 'node index.js'. Sadece dosyayı yaz, açıklama yapma.",
+      "index.js yaz: konsola 'merhaba' yazdırsın. Sadece dosyayı yaz, açıklama yapma.",
+      "npm start çalıştır ve çıktıyı tek satırla söyle.",
+    ],
+    note: 'roomsession sohbet — 3 tur, 6 dk boşluk; TTL kolu FOCUS_ROOM_LOOP_TTL ile',
   },
 }
 
@@ -161,12 +177,23 @@ async function pollLoopUntilDone(statusUrl, { timeoutMs = 30 * 60 * 1000, interv
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 // ── usage-daily snapshot + delta ──────────────────────────────────────────────
-const FIELDS = ['calls', 'input', 'cacheWrite', 'cacheRead', 'output', 'processedTotal']
+const FIELDS = ['calls', 'input', 'cacheWrite', 'cacheRead', 'output', 'processedTotal',
+  // Aşama 1 (server/quotaLedger.js): Aşama 1 öncesi sunucuda bu alanlar 0 gelir.
+  'quotaPoints', 'turns', 'coldTurns', 'cw1h', 'cw5m', 'thinking']
+const round6 = (x) => Math.round(x * 1e6) / 1e6
 
+// Son 2 günün tile bazında toplamı. Tek gün okumak, koşu UTC gece yarısını geçince
+// sonraki günün turlarını kaçırıyordu (ttl5m-r2: 3. tur sayılmadı, bench/ASAMA3.md).
 async function usageSnapshot() {
-  const days = await api('GET', '/api/usage/daily?days=1')
-  const today = Object.keys(days).sort().pop()
-  return (today && days[today]) || {}
+  const days = await api('GET', '/api/usage/daily?days=2')
+  const sum = {}
+  for (const byTile of Object.values(days)) {
+    for (const [tile, t] of Object.entries(byTile)) {
+      const s = sum[tile] || (sum[tile] = {})
+      for (const f of FIELDS) s[f] = round6((s[f] || 0) + (t[f] || 0))
+    }
+  }
+  return sum
 }
 
 function usageDelta(before, after) {
@@ -177,7 +204,7 @@ function usageDelta(before, after) {
     const d = {}
     let any = false
     for (const f of FIELDS) {
-      d[f] = (a[f] || 0) - (b[f] || 0)
+      d[f] = round6((a[f] || 0) - (b[f] || 0))
       if (d[f]) any = true
     }
     if (any) delta[tile] = d
@@ -187,7 +214,7 @@ function usageDelta(before, after) {
 
 function sumDelta(delta) {
   const total = Object.fromEntries(FIELDS.map(f => [f, 0]))
-  for (const d of Object.values(delta)) for (const f of FIELDS) total[f] += d[f] || 0
+  for (const d of Object.values(delta)) for (const f of FIELDS) total[f] = round6(total[f] + (d[f] || 0))
   return total
 }
 
@@ -280,11 +307,26 @@ async function runRoomchat3turn() {
   return { mediaId: media.id, recall: null }
 }
 
+async function runRoomsessionChatIdlegap() {
+  const media = await api('POST', '/api/roomsession', tileBody())
+  console.log(`  tile oluşturuldu: ${media.id}`)
+  for (let i = 0; i < scenario.chatPrompts.length; i++) {
+    if (i > 0) {
+      console.log(`  ${scenario.gapSec}s bekleniyor (TTL ölçümü)…`)
+      await sleep(scenario.gapSec * 1000)
+    }
+    console.log(`  tur ${i + 1}/${scenario.chatPrompts.length}`)
+    await driveSSE('POST', '/api/roomsession/message', { mediaId: media.id, message: scenario.chatPrompts[i] })
+  }
+  return { mediaId: media.id, recall: null }
+}
+
 const RUNNERS = {
   'direct-cafe': runDirectCafe,
   'roomsession-crud': runRoomsessionCrud,
   'roomchat-3turn': runRoomchat3turn,
   'roomchat-idlegap': runRoomchat3turn,
+  'roomsession-chat-idlegap': runRoomsessionChatIdlegap,
 }
 
 // ── Ana akış ──────────────────────────────────────────────────────────────────
@@ -341,6 +383,8 @@ async function main() {
   fs.writeFileSync(file, JSON.stringify(out, null, 2))
   console.log(`[bench] sonuç yazıldı: ${path.relative(ROOT, file)}`)
   console.log(`[bench] toplam: ${JSON.stringify(out.totals)}`)
+  const t = out.totals
+  console.log(`[bench] kota: ${t.quotaPoints.toFixed(4)}% haftalık (tahmin) · soğuk tur ${t.coldTurns}/${t.calls} · araç-tur ${t.turns}`)
 
   // Temizlik: tile'ı sil (recall zaten dosyaya kondu), önceki odayı geri aktive et.
   if (!KEEP && result.mediaId) {

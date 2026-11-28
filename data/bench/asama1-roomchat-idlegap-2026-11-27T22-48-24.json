@@ -1,0 +1,41 @@
+{
+  "scenario": "roomchat-idlegap",
+  "label": "asama1",
+  "note": "roomchat — 3 tur, turlar arası 6 dk boşluk; 1H cache + uzun idle doğrulaması",
+  "startedAt": "2026-11-27T22:48:24.431Z",
+  "finishedAt": "2026-11-27T23:00:37.454Z",
+  "durationSec": 733,
+  "mediaId": 1795819704437,
+  "error": null,
+  "usageDelta": {
+    "roomchat": {
+      "calls": 3,
+      "input": 10,
+      "cacheWrite": 4812,
+      "cacheRead": 50910,
+      "output": 560,
+      "processedTotal": 56292,
+      "quotaPoints": 0.00315,
+      "turns": 3,
+      "coldTurns": 0,
+      "cw1h": 4812,
+      "cw5m": 0,
+      "thinking": 140
+    }
+  },
+  "totals": {
+    "calls": 3,
+    "input": 10,
+    "cacheWrite": 4812,
+    "cacheRead": 50910,
+    "output": 560,
+    "processedTotal": 56292,
+    "quotaPoints": 0.00315,
+    "turns": 3,
+    "coldTurns": 0,
+    "cw1h": 4812,
+    "cw5m": 0,
+    "thinking": 140
+  },
+  "recall": null
+}

@@ -36,7 +36,7 @@ export default defineConfig([
   // gibi Node global'leri tanımlı olsun (aksi halde tarayıcı global seti yüzünden
   // yanlış "no-undef" hataları üretilir). Lint dışı davranışa etkisi yoktur.
   {
-    files: ['server.js', 'prisma/**/*.js', 'prisma.config.js', 'permission-hook.js', 'scripts/**/*.js', 'bench/**/*.js'],
+    files: ['server.js', 'prisma/**/*.js', 'prisma.config.js', 'permission-hook.js', 'bash-guard-hook.js', 'server/**/*.js', 'scripts/**/*.js', 'bench/**/*.js'],
     languageOptions: {
       globals: { ...globals.node },
     },
