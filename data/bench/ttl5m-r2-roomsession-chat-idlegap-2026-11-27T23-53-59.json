@@ -1,0 +1,41 @@
+{
+  "scenario": "roomsession-chat-idlegap",
+  "label": "ttl5m-r2",
+  "note": "roomsession sohbet — 3 tur, 6 dk boşluk; TTL kolu FOCUS_ROOM_LOOP_TTL ile",
+  "startedAt": "2026-11-27T23:53:59.798Z",
+  "finishedAt": "2026-11-28T00:06:14.999Z",
+  "durationSec": 735,
+  "mediaId": 1795823639815,
+  "error": null,
+  "usageDelta": {
+    "roomsession": {
+      "calls": 2,
+      "input": 12,
+      "cacheWrite": 33470,
+      "cacheRead": 33277,
+      "output": 192,
+      "processedTotal": 66951,
+      "quotaPoints": 0.01116,
+      "turns": 4,
+      "coldTurns": 0,
+      "cw1h": 0,
+      "cw5m": 33470,
+      "thinking": 0
+    }
+  },
+  "totals": {
+    "calls": 2,
+    "input": 12,
+    "cacheWrite": 33470,
+    "cacheRead": 33277,
+    "output": 192,
+    "processedTotal": 66951,
+    "quotaPoints": 0.01116,
+    "turns": 4,
+    "coldTurns": 0,
+    "cw1h": 0,
+    "cw5m": 33470,
+    "thinking": 0
+  },
+  "recall": null
+}

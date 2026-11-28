@@ -147,6 +147,8 @@ function expectedPersistent(opts) {
   const extra = [...(skills ? [] : ['--disable-slash-commands']), ...(effort ? ['--effort', effort] : [])]
   const e2 = { ...env }
   delete e2.CLAUDE_EFFORT   // efor artık env değil bayrak
+  // TTL A/B sonrası: roomsession varsayılanı 'default' (env yok); multiagent 5m kalır.
+  if (opts.tile === 'roomsession' && !opts.loopTtl) delete e2.FORCE_PROMPT_CACHING_5M
   return { args: [...args.slice(0, i), ...extra, ...args.slice(i)], env: e2 }
 }
 
@@ -218,9 +220,10 @@ test('Aşama 3: kod yazan tile\'lar varsayılan skill kapalı + medium; sohbet t
     assert.equal(S.persistent({ tile, settings: { effort: 'low' } }, ctx).env.CLAUDE_EFFORT, undefined)
   }
 })
-test('Aşama 3 TTL deney anahtarı: varsayılan 5m aynen, 1h ve default ayrık', () => {
+test('Aşama 3 TTL: roomsession varsayılanı default, multiagent 5m; anahtar kolları ayrık', () => {
+  assert.deepEqual(S.persistent({ tile: 'roomsession', settings: {} }, ctx).env, {})   // A/B kararı
+  assert.deepEqual(S.persistent({ tile: 'multiagent', settings: {} }, ctx).env, { FORCE_PROMPT_CACHING_5M: '1' })
   for (const tile of ['roomsession', 'multiagent']) {
-    assert.deepEqual(S.persistent({ tile, settings: {} }, ctx).env, { FORCE_PROMPT_CACHING_5M: '1' })
     assert.deepEqual(S.persistent({ tile, settings: {}, loopTtl: '5m' }, ctx).env, { FORCE_PROMPT_CACHING_5M: '1' })
     assert.deepEqual(S.persistent({ tile, settings: {}, loopTtl: '1h' }, ctx).env, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' })
     assert.deepEqual(S.persistent({ tile, settings: {}, loopTtl: 'default' }, ctx).env, {})

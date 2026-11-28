@@ -57,12 +57,17 @@ const effortArgs = (level) => (level ? ['--effort', level] : [])
 
 // Kalıcı tile varsayılanları. Tile ayarı (settings.effort ≠ 'normal', settings.skills)
 // bunların üstüne yazar. Listede olmayan tile = eski davranış (skill açık, efor miras).
+// ttl (yalnız roomsession/multiagent; sohbet tile'ları ENABLE_PROMPT_CACHING_1H ile kalır):
+//   roomsession 'default' — TTL A/B (bench/ASAMA3.md): 6 dk boşluklu sohbette 1h kolu
+//   kotayı −%66 düşürdü, boşluk sonrası turlar ~10× ucuz. 'default' = env yok → Claude
+//   Code abonelikte ana konuşmaya 1h verir, krediye düşünce kendisi 5m'ye iner.
+//   multiagent '5m' — henüz ölçülmedi (Faz 2 kararı korunuyor).
 export const PERSISTENT_DEFAULTS = {
   'ai-session': { skills: true,  effort: null },
   roomchat:     { skills: true,  effort: null },
   bluprint:     { skills: true,  effort: null },
-  roomsession:  { skills: false, effort: 'medium' },
-  multiagent:   { skills: false, effort: 'medium' },
+  roomsession:  { skills: false, effort: 'medium', ttl: 'default' },
+  multiagent:   { skills: false, effort: 'medium', ttl: '5m' },
 }
 
 // ─── Tek-atış profiller ───────────────────────────────────────────────────────
@@ -210,7 +215,7 @@ export function persistent({ tile, settings = {}, sys, maxTurns, tools, maxBudge
   // Faz 2 İş 2.2: hot loop (roomsession/multiagent) 5m, interaktif sohbet 1h.
   // Aşama 3'te abonelik varsayılanına (1h) karşı A/B ile yeniden değerlendirilecek.
   if (tile === 'roomsession' || tile === 'multiagent') {
-    const ttl = loopTtl || '5m'
+    const ttl = loopTtl || def.ttl || '5m'
     if (ttl === '5m') env.FORCE_PROMPT_CACHING_5M = '1'
     else if (ttl === '1h') env.CLAUDE_CODE_PROMPT_CACHE_TTL = '1h'
     // 'default': env yok

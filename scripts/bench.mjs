@@ -182,10 +182,18 @@ const FIELDS = ['calls', 'input', 'cacheWrite', 'cacheRead', 'output', 'processe
   'quotaPoints', 'turns', 'coldTurns', 'cw1h', 'cw5m', 'thinking']
 const round6 = (x) => Math.round(x * 1e6) / 1e6
 
+// Son 2 günün tile bazında toplamı. Tek gün okumak, koşu UTC gece yarısını geçince
+// sonraki günün turlarını kaçırıyordu (ttl5m-r2: 3. tur sayılmadı, bench/ASAMA3.md).
 async function usageSnapshot() {
-  const days = await api('GET', '/api/usage/daily?days=1')
-  const today = Object.keys(days).sort().pop()
-  return (today && days[today]) || {}
+  const days = await api('GET', '/api/usage/daily?days=2')
+  const sum = {}
+  for (const byTile of Object.values(days)) {
+    for (const [tile, t] of Object.entries(byTile)) {
+      const s = sum[tile] || (sum[tile] = {})
+      for (const f of FIELDS) s[f] = round6((s[f] || 0) + (t[f] || 0))
+    }
+  }
+  return sum
 }
 
 function usageDelta(before, after) {
