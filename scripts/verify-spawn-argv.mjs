@@ -115,8 +115,8 @@ function legacyPersistent({ tile, settings, sys, maxTurns, tools, maxBudgetUsd, 
 // Eski dizi + yalnız burada tarif edilen ekler. Başka her fark testi kırar.
 const ISOLATE = ['--setting-sources', 'project,local', '--disable-slash-commands']
 const AS3_ONESHOT_EXTRA = {
-  'projectview-detect': [...ISOLATE, '--effort', 'low'],
-  verify: [...ISOLATE, '--effort', 'low'],
+  'projectview-detect': [...ISOLATE, '--effort', 'low', '--fallback-model', 'claude-haiku-4-5-20251001'],
+  verify: [...ISOLATE, '--effort', 'low', '--fallback-model', 'claude-haiku-4-5-20251001'],
   orchestrate: [...ISOLATE, '--effort', 'low'],
   architect: [...ISOLATE, '--effort', 'high'],
 }
@@ -144,7 +144,9 @@ function expectedPersistent(opts) {
   const effort = st.effort && st.effort !== 'normal' ? st.effort : def.effort
   // Ekler mcpArgs'ın hemen ardına (eski dizide mcp 3 eleman, '--exclude-...' sonrası).
   const i = args.indexOf('--exclude-dynamic-system-prompt-sections') + 1 + 3
-  const extra = [...(skills ? [] : ['--disable-slash-commands']), ...(effort ? ['--effort', effort] : [])]
+  const loopTile = opts.tile === 'roomsession' || opts.tile === 'multiagent'
+  const fb = loopTile && cliModel(st.model) === 'opus' ? ['--fallback-model', 'sonnet'] : []
+  const extra = [...(skills ? [] : ['--disable-slash-commands']), ...(effort ? ['--effort', effort] : []), ...fb]
   const e2 = { ...env }
   delete e2.CLAUDE_EFFORT   // efor artık env değil bayrak
   // TTL A/B sonrası: roomsession varsayılanı 'default' (env yok); multiagent 5m kalır.

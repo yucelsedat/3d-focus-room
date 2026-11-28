@@ -2610,7 +2610,7 @@ class PersistentSession {
       if (ev.usage) {
         this.turnCount += 1
         recordGlobalUsage(this.key.split(':')[0], quotaRec)
-        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: this.settings.model, rec: quotaRec })
+        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: cliModel(this.settings.model), rec: quotaRec })
         if (this._logResumeCost) {
           this._logResumeCost = false
           const input = ev.usage.input_tokens || 0
