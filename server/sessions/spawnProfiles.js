@@ -55,6 +55,13 @@ const NO_SKILLS = ['--disable-slash-commands']
 // her spawn'a sızıyor ve düşünme (= çıktı, kotanın en pahalı türü) token'ı yakıyor.
 const effortArgs = (level) => (level ? ['--effort', level] : [])
 
+// Aşama 3: model aşırı yüklüyken (529) döngü durmasın. CLI ana modeli her turun
+// başında yeniden dener; yedek yalnız o tur için kullanılır (maliyet etkisi yok,
+// güvenilirlik). Tek-atış Haiku 5.5 → 4.5; kalıcı Opus → Sonnet (diğer modellerde yok).
+export const VERIFY_FALLBACK_MODEL = 'claude-haiku-4-5-20251001'
+const fallbackArgs = (model) => (model ? ['--fallback-model', model] : [])
+const persistentFallback = (cliModelName) => (cliModelName === 'opus' ? 'sonnet' : null)
+
 // Kalıcı tile varsayılanları. Tile ayarı (settings.effort ≠ 'normal', settings.skills)
 // bunların üstüne yazar. Listede olmayan tile = eski davranış (skill açık, efor miras).
 // ttl (yalnız roomsession/multiagent; sohbet tile'ları ENABLE_PROMPT_CACHING_1H ile kalır):
@@ -94,7 +101,7 @@ export const ONESHOT = {
       STABLE_PREFIX,
       NO_PERSIST,
       '--model', cliModel(VERIFY_MODEL), ...ctx.mcpArgs('verify'),
-      ...ISOLATE_FULL, ...effortArgs('low'),
+      ...ISOLATE_FULL, ...effortArgs('low'), ...fallbackArgs(VERIFY_FALLBACK_MODEL),
       SKIP_PERMS, prompt,
     ],
   },
@@ -123,7 +130,7 @@ export const ONESHOT = {
       STABLE_PREFIX,
       NO_PERSIST,
       '--model', cliModel(model || VERIFY_MODEL), ...ctx.mcpArgs('verify'),
-      ...ISOLATE_FULL, ...effortArgs('low'),
+      ...ISOLATE_FULL, ...effortArgs('low'), ...fallbackArgs(VERIFY_FALLBACK_MODEL),
       SKIP_PERMS, prompt,
     ],
   },
@@ -201,6 +208,7 @@ export function persistent({ tile, settings = {}, sys, maxTurns, tools, maxBudge
     ...ctx.mcpArgs(tile),
     ...(skills ? [] : NO_SKILLS),
     ...effortArgs(effort),
+    ...((tile === 'roomsession' || tile === 'multiagent') ? fallbackArgs(persistentFallback(cliModel(settings.model))) : []),
   ]
   if (PARTIAL_STREAM_TILES.has(tile)) a.push('--include-partial-messages')
   if (sys) a.push('--append-system-prompt', sys)

@@ -1,0 +1,94 @@
+{
+  "scenario": "roomsession-crud",
+  "label": "sonnet-r3",
+  "note": "roomsession LoopFlow — iş turu kalıcı oturum + haiku verify",
+  "startedAt": "2026-11-28T09:11:33.828Z",
+  "finishedAt": "2026-11-28T09:12:10.856Z",
+  "durationSec": 37,
+  "mediaId": 1795857093849,
+  "error": null,
+  "tileModel": "sonnet",
+  "functional": {
+    "ok": true,
+    "checks": {
+      "post": true,
+      "get": true,
+      "put": true,
+      "delete": true,
+      "deletedGone": true,
+      "notFound404": true
+    }
+  },
+  "usageDelta": {
+    "roomsession": {
+      "calls": 1,
+      "input": 8,
+      "cacheWrite": 8249,
+      "cacheRead": 59173,
+      "output": 2048,
+      "processedTotal": 69478,
+      "quotaPoints": 0.004549,
+      "turns": 4,
+      "coldTurns": 1,
+      "cw1h": 8249,
+      "cw5m": 0,
+      "thinking": 62,
+      "toolResultChars": 507
+    },
+    "verify": {
+      "calls": 1,
+      "input": 6,
+      "cacheWrite": 6581,
+      "cacheRead": 28297,
+      "output": 1125,
+      "processedTotal": 36009,
+      "quotaPoints": 0.000124,
+      "turns": 3,
+      "coldTurns": 1,
+      "cw1h": 0,
+      "cw5m": 6581,
+      "thinking": 194,
+      "toolResultChars": 3093
+    }
+  },
+  "totals": {
+    "calls": 2,
+    "input": 14,
+    "cacheWrite": 14830,
+    "cacheRead": 87470,
+    "output": 3173,
+    "processedTotal": 105487,
+    "quotaPoints": 0.004673,
+    "turns": 7,
+    "coldTurns": 2,
+    "cw1h": 8249,
+    "cw5m": 6581,
+    "thinking": 256,
+    "toolResultChars": 3600
+  },
+  "recall": {
+    "iteration": 1,
+    "maxIterations": 6,
+    "status": "met",
+    "respawns": 0,
+    "usage": {
+      "calls": 2,
+      "input": 14,
+      "cacheWrite": 14830,
+      "cacheRead": 87470,
+      "output": 3173,
+      "processedTotal": 105487,
+      "quotaPoints": 0.004673,
+      "cw1h": 8249,
+      "cw5m": 6581,
+      "thinking": 256,
+      "turns": 7,
+      "coldTurns": 2,
+      "toolResultChars": 3600,
+      "quotaByFamily": {
+        "sonnet": 0.004549,
+        "haiku5": 0.000124
+      }
+    }
+  }
+}

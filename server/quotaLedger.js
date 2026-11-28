@@ -15,7 +15,15 @@
 // Haftalık sayacın %1'ini dolduran token sayısı, model ailesi ve token türüne göre.
 // Kaynak: Atlas ADE "Plan usage burn data" (Ultra plan, canlı sayaca karşı fit,
 // 2026-10-29). ÜÇÜNCÜ TARAF TAHMİN — Anthropic resmi rakam yayınlamıyor.
-// haiku ölçülmedi: Sonnet × 3 varsayıldı (API fiyat oranı) → estimated:true.
+//
+// Haiku ölçülmedi → FİYAT TÜRETMESİ (estimated:true). Atlas'ın Opus ağırlıkları liste
+// fiyatıyla birebir tutarlı (%1 ≈ $9.2 çıktı · $8 girdi · $25.6 1h-yazma · $24 okuma;
+// Opus 5.5: $20/$4/$8/$0.20 per MTok). Varsayım: sayaç her token türünde Opus'taki
+// $→% oranını korur. ağırlık_aile = ağırlık_opus × fiyat_opus / fiyat_aile (tür başına).
+// Fiyatlar: platform.claude.com/docs/en/about-claude/pricing (2026-11-28 okundu).
+//   haiku  (4.x)  : $1 / $5 / $2 (1h) / $0.10   → opus'a göre 4× · 4× · 4× · 2×
+//   haiku5 (5.x)  : $0.10 / $0.50 / $0.20 / $0.01 (≤100K prompt) → 40× · 40× · 40× · 20×
+// Haiku 5.5'te >100K prompt 5× pahalı; verify/projectview prompt'ları bunun çok altında.
 export const DEFAULT_WEIGHTS = {
   source: 'atlas-ade.dev/docs/plan-usage-burn-data (2026-10-29, Ultra, third-party estimate)',
   unit: 'percent-of-weekly-meter',
@@ -23,7 +31,8 @@ export const DEFAULT_WEIGHTS = {
     opus:   { output: 460_000, input: 2_000_000, cacheWrite: 3_200_000, cacheRead: 120_000_000 },
     sonnet: { output: 760_000, input: 3_400_000, cacheWrite: 5_300_000, cacheRead: 200_000_000 },
     fable:  { output: 180_000, input: 790_000, cacheWrite: 1_200_000, cacheRead: 46_000_000 },
-    haiku:  { output: 2_280_000, input: 10_200_000, cacheWrite: 15_900_000, cacheRead: 600_000_000, estimated: true },
+    haiku:  { output: 1_840_000, input: 8_000_000, cacheWrite: 12_800_000, cacheRead: 240_000_000, estimated: true },
+    haiku5: { output: 18_400_000, input: 80_000_000, cacheWrite: 128_000_000, cacheRead: 2_400_000_000, estimated: true },
   },
   // Model bilinmiyorsa (eski kayıtlar, modelUsage yok): cliModel() varsayılanı Opus.
   defaultFamily: 'opus',
@@ -47,6 +56,7 @@ export const COLD_RATIO = 0.25
 export function modelFamily(model) {
   const m = String(model || '').toLowerCase()
   if (m.includes('fable')) return 'fable'
+  if (/haiku-?5/.test(m)) return 'haiku5'   // Haiku 5.x: fiyatı 4.x'in ~1/10'u
   if (m.includes('haiku')) return 'haiku'
   if (m.includes('sonnet')) return 'sonnet'
   if (m.includes('opus')) return 'opus'
@@ -125,7 +135,9 @@ export function isColdTurn(u, firstUsage = null) {
 //   prevModelUsage: aynı süreçte önceki result'ın modelUsage'ı (kalıcı oturum)
 //   firstUsage    : turun ilk assistant olayının message.usage'ı (soğuk tur tespiti)
 // Dönüş: { usage, points, byFamily, turns, cold, family } — usage null ise null.
-export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, firstUsage = null, weights = DEFAULT_WEIGHTS } = {}) {
+// toolResultChars: turda modele dönen araç sonuçlarının toplam karakteri (Aşama 4 kararı
+// için gerçek kullanım verisi: sıkıştırma hook'u ne kadar kazandırır?).
+export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, firstUsage = null, toolResultChars = 0, weights = DEFAULT_WEIGHTS } = {}) {
   const usage = normalizeUsage(ev?.usage)
   if (!usage) return null
   const byFamily = {}
@@ -148,6 +160,7 @@ export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, fi
     byFamily,
     turns: Number(ev.num_turns) || 0,
     cold: isColdTurn(ev.usage, firstUsage),
+    toolResultChars: Number(toolResultChars) || 0,
     family,
   }
 }
@@ -170,6 +183,7 @@ export function accumulate(t, rec) {
   t.thinking = (t.thinking || 0) + u.thinking
   t.turns = (t.turns || 0) + rec.turns
   t.coldTurns = (t.coldTurns || 0) + (rec.cold ? 1 : 0)
+  t.toolResultChars = (t.toolResultChars || 0) + (rec.toolResultChars || 0)
   const qf = t.quotaByFamily || (t.quotaByFamily = {})
   for (const [fam, p] of Object.entries(rec.byFamily)) qf[fam] = round6((qf[fam] || 0) + p)
   return t

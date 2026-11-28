@@ -2225,8 +2225,22 @@ const QUOTA_WEIGHTS = Quota.loadWeights(() =>
 // prevModelUsage: kalıcı süreçte önceki result'ın modelUsage'ı (birikimli alan).
 // firstUsage: turun ilk ana-konuşma assistant olayının usage'ı (soğuk tur tespiti;
 // result.usage.iterations SON isteği taşır, ilkini değil).
-function quotaRecord(ev, fallbackModel, prevModelUsage = null, firstUsage = null) {
-  return Quota.turnRecord(ev, { fallbackModel, prevModelUsage, firstUsage, weights: QUOTA_WEIGHTS })
+function quotaRecord(ev, fallbackModel, prevModelUsage = null, firstUsage = null, toolResultChars = 0) {
+  return Quota.turnRecord(ev, { fallbackModel, prevModelUsage, firstUsage, toolResultChars, weights: QUOTA_WEIGHTS })
+}
+
+// Ana konuşmaya dönen araç sonuçlarının karakter toplamı (subagent hariç). Aşama 4
+// (çıktı sıkıştırma) kararı için gerçek kullanım verisi toplar.
+function toolResultCharsOf(ev) {
+  if (ev?.type !== 'user' || ev.parent_tool_use_id || ev.isSidechain) return 0
+  const c = ev.message?.content
+  if (!Array.isArray(c)) return 0
+  let n = 0
+  for (const b of c) {
+    if (b?.type !== 'tool_result') continue
+    n += typeof b.content === 'string' ? b.content.length : JSON.stringify(b.content ?? '').length
+  }
+  return n
 }
 
 // Bir olay turun ilk ana-konuşma API isteğinin usage'ını taşıyor mu? (subagent hariç)
@@ -2260,7 +2274,7 @@ function logTurnUsage({ tile, key, turn, model, rec }) {
   if (!rec) return
   const u = rec.usage
   const total = u.input + u.cacheWrite + u.cacheRead + u.output
-  console.error(`[turn-usage] tile=${tile || '?'} key=${key || '-'} turn=${turn || 1} in=${u.input} cw=${u.cacheWrite} cr=${u.cacheRead} out=${u.output} total=${total} q=${rec.points.toFixed(4)} cold=${rec.cold ? 1 : 0} tools=${rec.turns} cw1h=${u.cw1h} cw5m=${u.cw5m} model=${model || rec.family || '-'}`)
+  console.error(`[turn-usage] tile=${tile || '?'} key=${key || '-'} turn=${turn || 1} in=${u.input} cw=${u.cacheWrite} cr=${u.cacheRead} out=${u.output} total=${total} q=${rec.points.toFixed(4)} cold=${rec.cold ? 1 : 0} tools=${rec.turns} toolchars=${rec.toolResultChars || 0} cw1h=${u.cw1h} cw5m=${u.cw5m} model=${model || rec.family || '-'}`)
 }
 
 // Spawn arg listesinden bir bayrağın değerini oku (turn-usage logunda model için).
@@ -2312,6 +2326,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
   let heartbeat = null
   let sawResult = false
   let firstUsage = null   // Aşama 1 düzeltmesi: turun ilk isteği (soğuk tur tespiti)
+  let toolChars = 0       // turdaki araç sonucu karakteri
 
   function finish() {
     if (finished) return
@@ -2341,10 +2356,11 @@ function streamClaudeToSSE(res, args, opts = {}) {
     try {
       const ev = JSON.parse(line)
       if (!firstUsage) firstUsage = mainAssistantUsage(ev)
+      toolChars += toolResultCharsOf(ev)
       if (ev.type === 'result' && ev.usage) {
         // Tek-atış süreç: modelUsage birikimli ama tek result olduğundan delta = tamamı.
         const model = cliArgValue(args, '--model')
-        const rec = quotaRecord(ev, model, null, firstUsage)
+        const rec = quotaRecord(ev, model, null, firstUsage, toolChars)
         recordGlobalUsage(opts.usageType, rec)
         logTurnUsage({ tile: opts.usageType, key: opts.usageKey || opts.usageType, turn: 1, model, rec })
         ev.quota = rec   // tarayıcı (Aşama 8 arayüzü) ve loop turn sink'i okur
@@ -2597,9 +2613,11 @@ class PersistentSession {
     // birikimli: delta için bir önceki snapshot kullanılır (respawn'da sıfırlanır).
     let quotaRec = null
     if (!this._turnFirstUsage) this._turnFirstUsage = mainAssistantUsage(ev)
+    this._turnToolChars = (this._turnToolChars || 0) + toolResultCharsOf(ev)
     if (ev.type === 'result' && ev.usage) {
-      quotaRec = quotaRecord(ev, cliModel(this.settings.model), this._prevModelUsage, this._turnFirstUsage)
+      quotaRec = quotaRecord(ev, cliModel(this.settings.model), this._prevModelUsage, this._turnFirstUsage, this._turnToolChars)
       this._turnFirstUsage = null   // sonraki tur kendi ilk isteğini yakalar
+      this._turnToolChars = 0
       if (ev.modelUsage) this._prevModelUsage = ev.modelUsage
       ev.quota = quotaRec
     }
@@ -2610,7 +2628,7 @@ class PersistentSession {
       if (ev.usage) {
         this.turnCount += 1
         recordGlobalUsage(this.key.split(':')[0], quotaRec)
-        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: this.settings.model, rec: quotaRec })
+        logTurnUsage({ tile: this.key.split(':')[0], key: this.key, turn: this.turnCount, model: cliModel(this.settings.model), rec: quotaRec })
         if (this._logResumeCost) {
           this._logResumeCost = false
           const input = ev.usage.input_tokens || 0
@@ -3957,7 +3975,7 @@ function removeSessionRecall(mediaId) {
 // normal çıktı sanmak loop'un hata üstüne iterasyon yakmasına yol açar.
 function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
   return new Promise((resolve) => {
-    let buf = '', text = '', failed = null, usage = null, quota = null, firstUsage = null
+    let buf = '', text = '', failed = null, usage = null, quota = null, firstUsage = null, toolChars = 0
     let proc
     try { proc = spawn(CLAUDE_CLI, args, { cwd: cwd || process.cwd(), env: buildSpawnEnv(envOverrides || {}) }) }
     catch (e) { return resolve({ text: '', failed: e.message, usage: null, quota: null }) }
@@ -3969,6 +3987,7 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
         let ev
         try { ev = JSON.parse(line) } catch { continue }
         if (!firstUsage) firstUsage = mainAssistantUsage(ev)
+        toolChars += toolResultCharsOf(ev)
         if (ev.type === 'assistant' && ev.message?.model === '<synthetic>') {
           const t = (ev.message.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ')
           failed = t || 'API hatası (synthetic yanıt)'
@@ -3977,7 +3996,7 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
           if (typeof ev.result === 'string') text = ev.result
           if (ev.usage) {
             usage = ev.usage
-            quota = quotaRecord(ev, cliArgValue(args, '--model'), null, firstUsage)   // tek-atış: delta = tamamı
+            quota = quotaRecord(ev, cliArgValue(args, '--model'), null, firstUsage, toolChars)   // tek-atış: delta = tamamı
           }
           if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
             failed = failed || (text ? text.slice(0, 200) : `sonuç hatası (${ev.subtype || 'bilinmiyor'})`)
@@ -4177,6 +4196,14 @@ class LoopRunner {
 
   async _workTurn(rec) {
     const key = `roomsession:${this.mediaId}`
+    // Aşama 5 ölçümü (deney anahtarı FOCUS_ROOM_LOOP_EPOCH): 'fresh' → her iterasyon
+    // taze oturum (önceki sürecin bağlamı kapatılır, --resume yok; durum dosyalarda +
+    // _workPrompt'taki iterasyon özetlerinde). Varsayılan 'accumulate' = eski davranış.
+    rec.epochMode = LOOP_EPOCH_MODE
+    if (LOOP_EPOCH_MODE === 'fresh' && rec.iteration > 0) {
+      sessionPool.evict(key)
+      this.settings = { ...this.settings, sessionId: null }
+    }
     let sys
     if (!sessionPool.get(key)) {
       sys = `Sen bu sanal odanın proje geliştiricisisin. Çalışma alanın geçerli klasör (${this.dir}). Tüm dosyaları bu klasör içinde oluştur ve düzenle; bu klasörün dışına çıkma. Web projeleri burada kurulabilir ve geliştirilebilir.`
@@ -4209,10 +4236,19 @@ class LoopRunner {
         p += `Kalan işler:\n${rec.lastCheck.remaining.map((r) => `- ${r}`).join('\n')}\n`
       }
     }
+    if (LOOP_EPOCH_MODE === 'fresh' && rec.history && rec.history.length) {
+      p += `\n## Önceki iterasyonlar (bu oturum TAZE: önceki sohbet yok, dosya sistemi esas)\n`
+      p += rec.history.map((h) => `- iterasyon ${h.iter}: ${String(h.summary || '').replace(/\s+/g, ' ').trim()}`).join('\n') + '\n'
+      p += `Önce mevcut dosyaları incele, sonra kaldığın yerden devam et.\n`
+    }
     p += `\nBu iterasyonda hedefe yaklaşmak için somut ve eksiksiz çalışma yap; dosyaları doğrudan oluştur/düzenle. Açıklama değil çalışan sonuç üret. Bittiğinde kısaca ne yaptığını özetle.`
     return p
   }
 }
+
+// Aşama 5 ölçümü: döngü iterasyonları birikimli tek oturumda mı ('accumulate', varsayılan)
+// yoksa her iterasyonda taze oturumla mı ('fresh') ilerlesin. Karar bench/ASAMA5.md ölçümüyle.
+const LOOP_EPOCH_MODE = process.env.FOCUS_ROOM_LOOP_EPOCH === 'fresh' ? 'fresh' : 'accumulate'
 
 const loopPool = new Map()
 const MAX_ACTIVE_LOOPS = 2   // eşzamanlı otonom loop tavanı (SessionPool çekişmesi + maliyet koruması)

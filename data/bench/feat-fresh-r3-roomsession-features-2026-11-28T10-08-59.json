@@ -1,0 +1,119 @@
+{
+  "scenario": "roomsession-features",
+  "label": "feat-fresh-r3",
+  "note": "roomsession LoopFlow — çok iterasyonlu (2 özellik/iterasyon); epoch kolu FOCUS_ROOM_LOOP_EPOCH ile",
+  "startedAt": "2026-11-28T10:08:59.153Z",
+  "finishedAt": "2026-11-28T10:11:23.689Z",
+  "durationSec": 145,
+  "mediaId": 1795860539179,
+  "error": null,
+  "tileModel": null,
+  "functional": {
+    "ok": true,
+    "checks": {
+      "post": true,
+      "get": true,
+      "put": true,
+      "delete": true,
+      "deletedGone": true,
+      "notFound404": true,
+      "validation400": true,
+      "putValidation400": true,
+      "delete404": true,
+      "filter": true,
+      "pagination": true,
+      "npmTest": true
+    }
+  },
+  "verifyFalsePositive": false,
+  "usageDelta": {
+    "roomsession": {
+      "calls": 3,
+      "input": 28,
+      "cacheWrite": 32902,
+      "cacheRead": 234016,
+      "output": 9105,
+      "processedTotal": 276051,
+      "quotaPoints": 0.03204,
+      "turns": 14,
+      "coldTurns": 3,
+      "cw1h": 32902,
+      "cw5m": 0,
+      "thinking": 505,
+      "toolResultChars": 7925
+    },
+    "verify": {
+      "calls": 3,
+      "input": 22,
+      "cacheWrite": 15057,
+      "cacheRead": 120924,
+      "output": 2668,
+      "processedTotal": 138671,
+      "quotaPoints": 0.000312,
+      "turns": 11,
+      "coldTurns": 1,
+      "cw1h": 0,
+      "cw5m": 15057,
+      "thinking": 459,
+      "toolResultChars": 19207
+    }
+  },
+  "totals": {
+    "calls": 6,
+    "input": 50,
+    "cacheWrite": 47959,
+    "cacheRead": 354940,
+    "output": 11773,
+    "processedTotal": 414722,
+    "quotaPoints": 0.032352,
+    "turns": 25,
+    "coldTurns": 4,
+    "cw1h": 32902,
+    "cw5m": 15057,
+    "thinking": 964,
+    "toolResultChars": 27132
+  },
+  "recall": {
+    "iteration": 3,
+    "maxIterations": 6,
+    "status": "met",
+    "respawns": 0,
+    "usage": {
+      "calls": 6,
+      "input": 50,
+      "cacheWrite": 47959,
+      "cacheRead": 354940,
+      "output": 11773,
+      "processedTotal": 414722,
+      "quotaPoints": 0.032352,
+      "cw1h": 32902,
+      "cw5m": 15057,
+      "thinking": 964,
+      "turns": 25,
+      "coldTurns": 4,
+      "toolResultChars": 27132,
+      "quotaByFamily": {
+        "opus": 0.03204,
+        "haiku5": 0.000312
+      }
+    },
+    "epochMode": "fresh",
+    "history": [
+      {
+        "iter": 1,
+        "met": false,
+        "remaining": 4
+      },
+      {
+        "iter": 2,
+        "met": false,
+        "remaining": 3
+      },
+      {
+        "iter": 3,
+        "met": true,
+        "remaining": 0
+      }
+    ]
+  }
+}

@@ -11,6 +11,23 @@ Karışmasın diye bu yol haritası **Aşama 1-9** kullanır.
 
 ---
 
+## Durum (2026-11-28, ölçülmüş sonuçlar)
+
+Bu tablo aşağıdaki planın **önüne geçer**: plandaki bazı maddeler ölçümle çürütüldü.
+Ayrıntı ve ham veri `bench/ASAMA*.md`, `data/bench/`.
+
+| Aşama | Durum | Ölçülen sonuç / karar |
+|---|---|---|
+| 1 Kota ölçümü | ✅ main | `quotaPoints`, soğuk tur (turun **ilk** isteği; `iterations` son isteği taşır), model kırılımı |
+| — Ajan koruma hook'u | ✅ main | `pkill -f "node server.js"` backend'i öldürmüştü; desen/port/PID kill reddediliyor |
+| 2a Spawn profilleri | ✅ main | tüm argv tek modülde; snapshot testi |
+| 3 Spawn diyeti | ✅ main + kapanış branch'i | roomsession-crud **−%47** (n=3+3); roomsession 1h TTL idle sohbette **−%66**; verify Haiku 5.5 (~10× ucuz); `--json-schema` **reddedildi** (çıktı/tur artırıyor); kısa yanıt kuralı **ertelendi** (metin çıktının %9-21'i) |
+| 4 Bağlam hijyeni | ⏸ ertelendi | bench'te araç çıktısı koşu başına 0.5-1.9K karakter, kazanç ≈ 0; gerçek kullanım `toolResultChars` ile ölçülüyor |
+| 5 Loop v2 | ◑ ölçüldü | **taze oturum reddedildi** (3 iterasyonda +%22); deterministik oracle **ürüne alınmadı** (verify hatasına doğrulanmış kanıt yok), bench'te duruyor |
+| 6 Model yönlendirme | ◑ ölçüldü | Sonnet 5.5 Opus'a göre −%48/−%60, kalite aynı. **Kullanıcı kararı: varsayılan Opus kalır** |
+| 8 Tile arayüzü | ◑ kısmen | tur/oturum kota satırı, gerçek bağlam penceresi |
+| 7, 9, 2b | ⏳ | sırada |
+
 ## 0. Kısa özet
 
 Faz 1-3 "önbellek tutmuyor" sorununu büyük ölçüde çözdü. Kalan maliyet artık başka

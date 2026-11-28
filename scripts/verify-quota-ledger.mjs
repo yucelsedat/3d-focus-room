@@ -51,6 +51,8 @@ test('modelFamily: kimlik ve takma adlar', () => {
   assert.equal(Q.modelFamily('opus'), 'opus')
   assert.equal(Q.modelFamily('claude-sonnet-5-5'), 'sonnet')
   assert.equal(Q.modelFamily('claude-haiku-4-5-20251001'), 'haiku')
+  assert.equal(Q.modelFamily('claude-haiku-5-5'), 'haiku5')
+  assert.equal(Q.modelFamily('haiku'), 'haiku')   // takma ad: sürüm bilinmiyor → muhafazakâr (4.x)
   assert.equal(Q.modelFamily('claude-fable-5-2'), 'fable')
   assert.equal(Q.modelFamily(null), null)
   assert.equal(Q.modelFamily('bilinmeyen'), null)
@@ -82,20 +84,20 @@ test('normalizeUsage: TTL kırılımı ve düşünme token\'ı', () => {
 // ─── tur kaydı ────────────────────────────────────────────────────────────────
 test('turnRecord tek-atış: modelUsage ailesi kullanılır (fallback değil)', () => {
   const r = Q.turnRecord(oneShot, { fallbackModel: 'opus' })
-  assert.deepEqual(Object.keys(r.byFamily), ['haiku'])
-  assert.equal(r.family, 'haiku')
-  near(r.points, Q.pointsFor({ input: 2, output: 4, cacheWrite: 4642, cacheRead: 649 }, 'haiku'))
+  assert.deepEqual(Object.keys(r.byFamily), ['haiku5'])
+  assert.equal(r.family, 'haiku5')
+  near(r.points, Q.pointsFor({ input: 2, output: 4, cacheWrite: 4642, cacheRead: 649 }, 'haiku5'))
   assert.equal(r.turns, 1)
 })
 test('turnRecord kalıcı süreç: modelUsage birikimli → ikinci tur sadece kendi deltası', () => {
   const r1 = Q.turnRecord(persistTurn1, { prevModelUsage: null })
   const r2 = Q.turnRecord(persistTurn2, { prevModelUsage: persistTurn1.modelUsage })
   const d2 = { input: 2, output: 4, cacheWrite: 936, cacheRead: 4392 }
-  near(r2.points, Q.pointsFor(d2, 'haiku'))
+  near(r2.points, Q.pointsFor(d2, 'haiku5'))
   // Delta alınmasaydı ikinci tur birikimli toplamı sayardı (≈ 2 kat):
   const wrong = Q.turnRecord(persistTurn2, { prevModelUsage: null })
   assert.ok(wrong.points > r2.points * 1.9)
-  near(r1.points, Q.pointsFor({ input: 2, output: 4, cacheWrite: 902, cacheRead: 4392 }, 'haiku'))
+  near(r1.points, Q.pointsFor({ input: 2, output: 4, cacheWrite: 902, cacheRead: 4392 }, 'haiku5'))
 })
 test('turnRecord: modelUsage yoksa spawn modelinin ailesi', () => {
   const ev = { type: 'result', usage: persistTurn1.usage }
@@ -119,6 +121,13 @@ test('turnRecord: firstUsage soğuk tespitine iletilir', () => {
   const ev = { type: 'result', usage: { input_tokens: 2, output_tokens: 4, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 9000 } }
   assert.equal(Q.turnRecord(ev).cold, false)
   assert.equal(Q.turnRecord(ev, { firstUsage: { cache_creation_input_tokens: 9000, cache_read_input_tokens: 0 } }).cold, true)
+})
+test('turnRecord + accumulate: araç sonucu karakteri taşınır ve birikir', () => {
+  const r = Q.turnRecord(persistTurn1, { toolResultChars: 1234 })
+  assert.equal(r.toolResultChars, 1234)
+  const t = {}
+  Q.accumulate(t, r); Q.accumulate(t, Q.turnRecord(persistTurn1))
+  assert.equal(t.toolResultChars, 1234)
 })
 test('turnRecord: usage yoksa null', () => {
   assert.equal(Q.turnRecord({ type: 'result' }), null)
@@ -172,12 +181,19 @@ test('accumulate: eski alanlar aynen, Aşama 1 alanları eklenir', () => {
   assert.equal(t.turns, 2)
   assert.equal(t.cw1h, 4642)
   assert.ok(t.quotaPoints > 0)
-  assert.ok(Math.abs(t.quotaByFamily.haiku - t.quotaPoints) < 1e-5)
+  assert.ok(Math.abs(t.quotaByFamily.haiku5 - t.quotaPoints) < 1e-5)
 })
 test('accumulate: null kayıt dokunmaz', () => {
   const t = { calls: 3 }
   Q.accumulate(t, null)
   assert.deepEqual(t, { calls: 3 })
+})
+test('Haiku türetmesi liste fiyatıyla tutarlı: 5.5 ≈ 4.5 / 10 (okuma /2)', () => {
+  const t = { output: 1000, input: 1000, cacheWrite: 1000 }
+  near(Q.pointsFor(t, 'haiku') / Q.pointsFor(t, 'haiku5'), 10, 1e-9)
+  near(Q.pointsFor({ cacheRead: 1000 }, 'haiku') / Q.pointsFor({ cacheRead: 1000 }, 'haiku5'), 10, 1e-9)
+  // Opus'a göre: 4.5 çıktısı 4× ucuz
+  near(Q.pointsFor({ output: 1000 }, 'opus') / Q.pointsFor({ output: 1000 }, 'haiku'), 4, 1e-9)
 })
 test('estimateLegacyPoints: eski kayıt varsayılan aileyle', () => {
   const t = { input: 0, output: 460_000, cacheWrite: 0, cacheRead: 0 }

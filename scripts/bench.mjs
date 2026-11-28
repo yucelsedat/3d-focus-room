@@ -20,6 +20,8 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import net from 'node:net'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -59,6 +61,30 @@ const SCENARIOS = {
     ],
     note: 'roomchat — 3 tur, turlar arası 6 dk boşluk; 1H cache + uzun idle doğrulaması',
   },
+  // Aşama 6: daha zor görev — model seçiminin kaliteye etkisini ölçmek için.
+  // Deterministik kontrol: checkTodoApi + doğrulama/filtre/sayfalama + npm test.
+  'roomsession-api-plus': {
+    tileType: 'roomsession',
+    goal: 'Express + SQLite todo API. Endpointler: GET /todos, POST /todos, PUT /todos/:id, DELETE /todos/:id. '
+      + 'Kurallar: (1) POST ve PUT\'ta title boş/eksikse 400 ve {error} döner; (2) olmayan id için PUT/DELETE 404 döner; '
+      + '(3) GET /todos?completed=true|false tamamlanma durumuna göre filtreler; (4) GET /todos?limit=N&offset=M sayfalar '
+      + '(id artan sırada). Sunucu PORT ortam değişkenini kullanır. package.json\'da "npm test" node:test ile bu '
+      + 'kuralların hepsini test eder ve geçer.',
+    maxIterations: 6,
+    note: 'roomsession LoopFlow — zor görev (doğrulama, filtre, sayfalama, testler); kalite deterministik',
+  },
+  // Aşama 5 ölçümü: aynı zor görev, ama özellik özellik ilerleme yönergesiyle →
+  // döngü doğal olarak birden çok iterasyona yayılır (Anthropic "bir seferde bir
+  // özellik" deseni). Kollar sunucu env'iyle: FOCUS_ROOM_LOOP_EPOCH=accumulate|fresh.
+  'roomsession-features': {
+    tileType: 'roomsession',
+    goalFrom: 'roomsession-api-plus',
+    subagents: 'Bu hedefi özellik özellik ilerlet. Sıra: (1) CRUD endpointleri, (2) title doğrulaması 400, '
+      + '(3) olmayan id 404, (4) completed filtresi, (5) limit/offset sayfalama, (6) tüm kuralları test eden npm test. '
+      + 'Her iterasyonda YALNIZCA sıradaki en fazla 2 özelliği bitir ve dur; sonraki özelliklere geçme.',
+    maxIterations: 6,
+    note: 'roomsession LoopFlow — çok iterasyonlu (2 özellik/iterasyon); epoch kolu FOCUS_ROOM_LOOP_EPOCH ile',
+  },
   // Aşama 3 TTL A/B: Oda Projesi tile'ında SOHBET (loop değil), turlar arası 6 dk.
   // 5m TTL'de 2./3. tur prefix'i yeniden yazar (soğuk); 1h'de okur (sıcak). Süreç
   // PERSIST_IDLE_MS (15 dk) sayesinde canlı kalır → fark yalnız TTL'den gelir.
@@ -84,12 +110,16 @@ const scenarioName = arg('scenario')
 const label = arg('label')
 const BASE = arg('base', `http://localhost:${process.env.PORT || 5001}`)
 const KEEP = process.argv.includes('--keep')
+// Aşama 6: roomsession tile modeli (ör. --model sonnet). Yoksa sunucu varsayılanı.
+const TILE_MODEL = arg('model')
 
-if (!scenarioName || !SCENARIOS[scenarioName] || !label) {
+// --check-only <klasör>: yalnız deterministik API kontrolü (model/sunucu gerekmez).
+const CHECK_ONLY = arg('check-only')
+if (!CHECK_ONLY && (!scenarioName || !SCENARIOS[scenarioName] || !label)) {
   console.error(`Kullanım: node scripts/bench.mjs --scenario <${Object.keys(SCENARIOS).join('|')}> --label <etiket> [--base URL] [--keep]`)
   process.exit(1)
 }
-const scenario = SCENARIOS[scenarioName]
+const scenario = SCENARIOS[scenarioName] || {}
 
 // ── HTTP yardımcıları ─────────────────────────────────────────────────────────
 async function api(method, url, body) {
@@ -179,7 +209,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 // ── usage-daily snapshot + delta ──────────────────────────────────────────────
 const FIELDS = ['calls', 'input', 'cacheWrite', 'cacheRead', 'output', 'processedTotal',
   // Aşama 1 (server/quotaLedger.js): Aşama 1 öncesi sunucuda bu alanlar 0 gelir.
-  'quotaPoints', 'turns', 'coldTurns', 'cw1h', 'cw5m', 'thinking']
+  'quotaPoints', 'turns', 'coldTurns', 'cw1h', 'cw5m', 'thinking', 'toolResultChars']
 const round6 = (x) => Math.round(x * 1e6) / 1e6
 
 // Son 2 günün tile bazında toplamı. Tek gün okumak, koşu UTC gece yarısını geçince
@@ -244,7 +274,61 @@ function tileBody(extra = {}) {
     width: 6, height: 4,
     position: '[0,0,0]',
     rotation: '[0,0,0,"XYZ"]',
+    ...(TILE_MODEL ? { model: TILE_MODEL } : {}),
     ...extra,
+  }
+}
+
+// ── Deterministik kalite kontrolü: üretilen todo API'yi gerçekten dene ─────────
+// Model çağırmaz. verify'ın "met" demesinden bağımsız ikinci bir kalite ölçütü
+// (Loop v2'deki deterministik oracle'ın prototipi). Sunucu boş bir portta
+// (PORT env) başlatılır, süreç grubu öldürülerek kapatılır (pkill YOK).
+function freePort() {
+  return new Promise((resolve) => {
+    const srv = net.createServer()
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)) })
+  })
+}
+async function checkTodoApi(dir) {
+  const checks = {}
+  let cmd = ['node', 'server.js']
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+    if (pkg.scripts?.start) cmd = ['npm', 'start']
+  } catch { return { ok: false, reason: 'package.json yok/okunamadı', checks } }
+  const port = await freePort()
+  const B = `http://127.0.0.1:${port}`
+  const child = spawn(cmd[0], cmd.slice(1), { cwd: dir, env: { ...process.env, PORT: String(port) }, detached: true, stdio: 'ignore' })
+  const req = async (method, url, body) => {
+    const r = await fetch(B + url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
+    let j = null
+    try { j = await r.json() } catch {}
+    return { status: r.status, body: j }
+  }
+  try {
+    let up = false
+    for (let i = 0; i < 60 && !up; i++) {
+      try { await fetch(B + '/todos'); up = true } catch { await sleep(250) }
+    }
+    if (!up) return { ok: false, reason: `sunucu ${port} portunda açılmadı (PORT env'ine uymuyor olabilir)`, checks }
+    const created = await req('POST', '/todos', { title: 'bench kontrol' })
+    const id = created.body?.id
+    checks.post = [200, 201].includes(created.status) && id != null && created.body?.title === 'bench kontrol'
+    const list = await req('GET', '/todos')
+    checks.get = list.status === 200 && Array.isArray(list.body) && list.body.some((t) => t.id === id)
+    const upd = await req('PUT', `/todos/${id}`, { title: 'bench kontrol 2', completed: true })
+    checks.put = upd.status === 200 && (upd.body?.title === 'bench kontrol 2' || upd.body?.completed === true || upd.body?.completed === 1)
+    const del = await req('DELETE', `/todos/${id}`)
+    checks.delete = [200, 204].includes(del.status)
+    const after = await req('GET', '/todos')
+    checks.deletedGone = after.status === 200 && Array.isArray(after.body) && !after.body.some((t) => t.id === id)
+    const missing = await req('PUT', '/todos/99999999', { title: 'x' })
+    checks.notFound404 = missing.status === 404
+    return { ok: Object.values(checks).every(Boolean), checks }
+  } catch (e) {
+    return { ok: false, reason: e.message, checks }
+  } finally {
+    try { process.kill(-child.pid, 'SIGTERM') } catch {}
   }
 }
 
@@ -276,9 +360,76 @@ async function runDirectCafe() {
   return { mediaId: media.id, recall: status.recall }
 }
 
+// api-plus: temel kontrol + ek kurallar + npm test. Her kural ayrı işaretlenir.
+// SIRA ÖNEMLİ: npm test, API denemesinden ÖNCE ve temiz durumda koşar. API denemesi
+// projenin varsayılan SQLite dosyasına kayıt bırakır; boş veritabanı varsayan ajan
+// testleri sonra koşarsa yanlışlıkla kalır (feat-acc-r2: ajanın kendi çalıştırmasında
+// 23/23 geçen testler düzenekte kaldı — bench/ASAMA5.md).
+async function checkTodoApiPlus(dir) {
+  const checks = {}
+  // npm test (agent'ın kendi testleri) — kendi portunu seçmeli; 120 sn tavan.
+  const t = spawn('npm', ['test'], { cwd: dir, env: { ...process.env, PORT: String(await freePort()) }, detached: true, stdio: 'ignore' })
+  const npmTest = await new Promise((resolve) => {
+    const timer = setTimeout(() => { try { process.kill(-t.pid, 'SIGKILL') } catch {} resolve(false) }, 120000)
+    t.on('exit', (code) => { clearTimeout(timer); resolve(code === 0) })
+  })
+  const base = await checkTodoApi(dir)
+  Object.assign(checks, base.checks)
+  let cmd = ['node', 'server.js']
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+    if (pkg.scripts?.start) cmd = ['npm', 'start']
+  } catch { return { ok: false, reason: 'package.json yok', checks } }
+  const port = await freePort()
+  const B = `http://127.0.0.1:${port}`
+  const child = spawn(cmd[0], cmd.slice(1), { cwd: dir, env: { ...process.env, PORT: String(port) }, detached: true, stdio: 'ignore' })
+  const req = async (method, url, body) => {
+    const r = await fetch(B + url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
+    let j = null
+    try { j = await r.json() } catch {}
+    return { status: r.status, body: j }
+  }
+  try {
+    let up = false
+    for (let i = 0; i < 60 && !up; i++) { try { await fetch(B + '/todos'); up = true } catch { await sleep(250) } }
+    if (!up) return { ok: false, reason: 'sunucu açılmadı', checks }
+    const empty = await req('POST', '/todos', { title: '' })
+    const missing = await req('POST', '/todos', {})
+    checks.validation400 = empty.status === 400 && missing.status === 400 && (empty.body?.error != null)
+    const ids = []
+    for (const [title, done] of [['a', false], ['b', true], ['c', false], ['d', true]]) {
+      const r = await req('POST', '/todos', { title })
+      ids.push(r.body?.id)
+      if (done) await req('PUT', `/todos/${r.body?.id}`, { title, completed: true })
+    }
+    const emptyPut = await req('PUT', `/todos/${ids[0]}`, { title: '' })
+    checks.putValidation400 = emptyPut.status === 400
+    checks.delete404 = (await req('DELETE', '/todos/99999999')).status === 404
+    const isDone = (t) => t.completed === true || t.completed === 1
+    const doneList = await req('GET', '/todos?completed=true')
+    const openList = await req('GET', '/todos?completed=false')
+    checks.filter = Array.isArray(doneList.body) && Array.isArray(openList.body)
+      && ids.filter((_, i) => i % 2 === 1).every((id) => doneList.body.some((t) => t.id === id && isDone(t)))
+      && doneList.body.every(isDone) && openList.body.every((t) => !isDone(t))
+    const all = (await req('GET', '/todos')).body || []
+    const page = await req('GET', '/todos?limit=2&offset=1')
+    const sorted = [...all].sort((x, y) => x.id - y.id)
+    checks.pagination = Array.isArray(page.body) && page.body.length === 2
+      && page.body[0].id === sorted[1]?.id && page.body[1].id === sorted[2]?.id
+  } catch (e) {
+    checks.plusError = false
+    base.reason = e.message
+  } finally {
+    try { process.kill(-child.pid, 'SIGTERM') } catch {}
+  }
+  checks.npmTest = npmTest
+  return { ok: Object.values(checks).every(Boolean), checks, reason: base.reason }
+}
+
 async function runRoomsessionCrud() {
+  const goal = scenario.goal || SCENARIOS[scenario.goalFrom]?.goal
   const media = await api('POST', '/api/roomsession', tileBody({
-    loop: { goal: scenario.goal, maxIterations: scenario.maxIterations },
+    loop: { goal, maxIterations: scenario.maxIterations, ...(scenario.subagents ? { subagents: scenario.subagents } : {}) },
   }))
   console.log(`  tile oluşturuldu: ${media.id}`)
 
@@ -324,6 +475,8 @@ async function runRoomsessionChatIdlegap() {
 const RUNNERS = {
   'direct-cafe': runDirectCafe,
   'roomsession-crud': runRoomsessionCrud,
+  'roomsession-api-plus': runRoomsessionCrud,
+  'roomsession-features': runRoomsessionCrud,
   'roomchat-3turn': runRoomchat3turn,
   'roomchat-idlegap': runRoomchat3turn,
   'roomsession-chat-idlegap': runRoomsessionChatIdlegap,
@@ -351,6 +504,13 @@ async function main() {
     result = { mediaId: null, recall: null }
   }
   const finishedAt = new Date()
+  // Kalite: roomsession-crud için deterministik API kontrolü (model çağırmaz).
+  let functional = null
+  if (['roomsession-crud', 'roomsession-api-plus', 'roomsession-features'].includes(scenarioName) && !error) {
+    const dir = path.join(ROOT, 'room-projects', String(bench.id))
+    functional = scenarioName === 'roomsession-crud' ? await checkTodoApi(dir) : await checkTodoApiPlus(dir)
+    console.log(`[bench] kalite (API kontrolü): ${functional.ok ? 'GEÇTİ' : 'KALDI'} ${JSON.stringify(functional.checks)}${functional.reason ? ' — ' + functional.reason : ''}`)
+  }
   // usage-daily debounce'lu (5 sn) yazılır; flush'ı bekle.
   await new Promise(r => setTimeout(r, 7000))
   const after = await usageSnapshot()
@@ -365,6 +525,10 @@ async function main() {
     durationSec: Math.round((finishedAt - startedAt) / 1000),
     mediaId: result.mediaId,
     error,
+    tileModel: TILE_MODEL || null,
+    functional,
+    // verify "met" dedi ama deterministik kontrol kaldı → yanlış pozitif
+    verifyFalsePositive: functional && result.recall ? (result.recall.status === 'met' && !functional.ok) : null,
     usageDelta: delta,
     totals: sumDelta(delta),
     recall: result.recall ? {
@@ -373,6 +537,9 @@ async function main() {
       status: result.recall.status,
       respawns: result.recall.respawns || 0,
       usage: result.recall.usage || null,
+      epochMode: result.recall.epochMode || null,
+      // Aşama 5: iterasyon başına verify kararı ve kalan iş sayısı (kalite/ilerleme izi)
+      history: (result.recall.history || []).map((h) => ({ iter: h.iter, met: !!h.check?.met, remaining: (h.check?.remaining || []).length })),
     } : null,
   }
 
@@ -398,4 +565,9 @@ async function main() {
   if (error) { console.error(`[bench] senaryo HATA ile bitti: ${error}`); process.exit(2) }
 }
 
-main().catch((e) => { console.error('[bench] hata:', e.message); process.exit(1) })
+if (CHECK_ONLY) {
+  const fn = process.argv.includes('--plus') ? checkTodoApiPlus : checkTodoApi
+  fn(path.resolve(CHECK_ONLY)).then((r) => { console.log(JSON.stringify(r)); process.exit(r.ok ? 0 : 3) })
+} else {
+  main().catch((e) => { console.error('[bench] hata:', e.message); process.exit(1) })
+}

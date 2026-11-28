@@ -2,10 +2,11 @@
 
 - **Tarih:** 2026-11-28 · Branch: `asama3-spawn-diyeti` (`asama2-session-cekirdegi` üstünde)
 - **Yol haritası:** `SESSION-YOL-HARITASI.md` §4 Aşama 3
-- **Durum:** dilim 1 (izolasyon, efor, verify modeli) ve TTL kararı yapıldı ve tekrarlı
-  bench ile ölçüldü. roomsession-crud kotası **−%42** (3'er koşu, aralıklar örtüşmüyor,
-  hedef 3/3). roomsession TTL'i 1h: idle sohbette **−%66**. `--json-schema` denendi,
-  reddedildi. Sırada: kısa yanıt kuralı, `--fallback-model`, multiagent TTL ölçümü.
+- **Durum:** TAMAMLANDI. Dilim 1 (izolasyon, efor, verify modeli) + TTL kararı tekrarlı
+  bench ile ölçüldü: roomsession-crud kotası **−%42** (3'er koşu, aralıklar örtüşmüyor,
+  hedef 3/3), roomsession idle sohbet **−%66**. Kapanış kararları ("Kapanış" bölümü):
+  `--fallback-model` eklendi, Haiku ağırlıkları ayrıldı, kısa yanıt kuralı ve multiagent
+  TTL ölçümü gerekçesiyle ertelendi, `--json-schema` reddedildi.
   **Özet tablo:** "Tekrarlı sonuçlar" bölümü.
 
 ## Madde 0 — "ikinci tur 11.5K yazıyor" bulgusunun kaynağı
@@ -223,10 +224,61 @@ koşu:
 döndürüyor, yani `parseVerdict` yeterli. Ayrıca prompt'taki "kısa gerekçe, tek satır"
 talimatı olmadan ilk denemede çıktı 608-639'a çıkmıştı. Kısalığı sağlayan şey prompt.
 
-## Sırada (bu aşama)
+## Kapanış (2026-11-28)
 
-1. ~~Bench karşılaştırması~~ yapıldı (yukarıda). Tekrar koşusu (varyans için) kaldı:
-   Aşama 1 baseline'ına karşı (`quotaPoints`, soğuk tur, verify geçme).
-2. TTL A/B (`roomsession`: 5m zorlaması / varsayılan 1h / ayrık TTL).
-3. Worker ve Oda Projesi için kısa yanıt kuralı (çıktı en pahalı token; bench ile).
-4. `--fallback-model` (maliyet değil güvenilirlik: 529'da döngü durmasın).
+### Kısa yanıt kuralı — ERTELENDİ (beklenen etki ölçüm gürültüsünün altında)
+
+Bench oturum kayıtlarından roomsession iş turlarının çıktısı ayrıştırıldı (8 oturum):
+görünür metin karakterlerin **%9-21**'i; gerisi araç girdileri, yani dosyalara yazılan
+kod (kısaltılamaz). Kural en iyi ihtimalle kotada ~%3-5 kazandırır. Tek koşu varyansı ise
+±%20. Etkiyi ayırt etmek çok sayıda koşu ister ve özet metni (`rec.currentStep` /
+`history.summary`) kalitesini riske atar. Loop v2'de prompt zaten yeniden yazılacak;
+kısa özet kuralı oraya taşınır.
+
+### multiagent TTL — ERTELENDİ
+
+Worker'lar her görevde taze oturumla başlıyor (stateless epoch). TTL yalnız süreçler arası
+paylaşılan prefix'i etkiler, görevler arası boşluk genelde 5 dk altında, ve mevcut
+`direct-cafe` senaryosu tek görevli (etkiyi gösteremez). 5m kalıyor. Loop v2 ile çok
+görevli bir senaryo geldiğinde ölçülecek.
+
+### `--fallback-model` — EKLENDİ (güvenilirlik)
+
+- verify, projectview-detect: Haiku 5.5 → yedek Haiku 4.5
+- roomsession, multiagent: ana model Opus ise → yedek Sonnet
+
+CLI ana modeli her turun başında yeniden dener; yedek yalnız aşırı yük (529) anında o tur
+için kullanılır. Maliyet etkisi beklenmez, döngü iterasyon yakmadan durmaz. Bayrağın
+stream-json girdili kalıcı modda kabul edildiği canlı doğrulandı. 529 bench'te
+üretilemediği için yedeğe geçiş ölçülmedi.
+
+### Kota modülü: Haiku 4.5 / 5.5 ayrıldı
+
+Atlas'ın Opus ağırlıkları liste fiyatıyla birebir tutarlı (%1 ≈ $9.2 çıktı, $8 girdi,
+$25.6 1h-yazma, $24 okuma). Ölçülmemiş aileler için aynı tür başına $→% oranı uygulandı
+(`estimated: true`, kaynak resmi fiyat tablosu):
+
+| Aile | çıktı/%1 | girdi/%1 | yazma/%1 | okuma/%1 |
+|---|---:|---:|---:|---:|
+| haiku (4.x) | 1.84M | 8M | 12.8M | 240M |
+| haiku5 (5.x, ≤100K prompt) | 18.4M | 80M | 128M | 2.4B |
+
+Bu düzeltmeyle verify farkı da doğru görünür. Tekrarlı koşuların (n=3+3) tur loglarından
+yeni ağırlıklarla yeniden hesap:
+
+| | verify ort. | iş turu ort. (Opus) | toplam |
+|---|---:|---:|---:|
+| Aşama 1 (Haiku 4.5) | 0.00282 | 0.0238 | 0.0266 |
+| Aşama 3 (Haiku 5.5) | 0.00013 | 0.0141 | 0.0142 |
+| Fark | −%95 | −%41 | **−%47** |
+
+Rapordaki önceki tablolar ölçüm anındaki eski haiku ağırlığıyla kaldı (−%42).
+
+Not: kalıcı oturumların `[turn-usage]` satırı `model=` alanına arayüzdeki adı
+(`claude-fable-5`) yazıyordu. Gerçekte çalışan Opus'tu (`cliModel`). Canlı kota hesabı
+`modelUsage`'dan okuduğu için etkilenmedi, yalnız log yanıltıcıydı; artık CLI model adı
+yazılıyor.
+
+## Sırada
+
+Aşama 3 kapandı. Sıradaki: Aşama 5 (Loop v2) + Aşama 2b (session sınıflarının taşınması).

@@ -1,0 +1,100 @@
+{
+  "scenario": "roomsession-api-plus",
+  "label": "plus-opus-r2",
+  "note": "roomsession LoopFlow — zor görev (doğrulama, filtre, sayfalama, testler); kalite deterministik",
+  "startedAt": "2026-11-28T09:15:57.766Z",
+  "finishedAt": "2026-11-28T09:16:59.133Z",
+  "durationSec": 61,
+  "mediaId": 1795857357790,
+  "error": null,
+  "tileModel": null,
+  "functional": {
+    "ok": true,
+    "checks": {
+      "post": true,
+      "get": true,
+      "put": true,
+      "delete": true,
+      "deletedGone": true,
+      "notFound404": true,
+      "validation400": true,
+      "putValidation400": true,
+      "delete404": true,
+      "filter": true,
+      "pagination": true,
+      "npmTest": true
+    }
+  },
+  "usageDelta": {
+    "roomsession": {
+      "calls": 1,
+      "input": 10,
+      "cacheWrite": 11690,
+      "cacheRead": 81515,
+      "output": 5197,
+      "processedTotal": 98412,
+      "quotaPoints": 0.015635,
+      "turns": 5,
+      "coldTurns": 1,
+      "cw1h": 11690,
+      "cw5m": 0,
+      "thinking": 134,
+      "toolResultChars": 957
+    },
+    "verify": {
+      "calls": 1,
+      "input": 6,
+      "cacheWrite": 9348,
+      "cacheRead": 28056,
+      "output": 673,
+      "processedTotal": 38083,
+      "quotaPoints": 0.000121,
+      "turns": 4,
+      "coldTurns": 1,
+      "cw1h": 0,
+      "cw5m": 9348,
+      "thinking": 63,
+      "toolResultChars": 9950
+    }
+  },
+  "totals": {
+    "calls": 2,
+    "input": 16,
+    "cacheWrite": 21038,
+    "cacheRead": 109571,
+    "output": 5870,
+    "processedTotal": 136495,
+    "quotaPoints": 0.015756,
+    "turns": 9,
+    "coldTurns": 2,
+    "cw1h": 11690,
+    "cw5m": 9348,
+    "thinking": 197,
+    "toolResultChars": 10907
+  },
+  "recall": {
+    "iteration": 1,
+    "maxIterations": 6,
+    "status": "met",
+    "respawns": 0,
+    "usage": {
+      "calls": 2,
+      "input": 16,
+      "cacheWrite": 21038,
+      "cacheRead": 109571,
+      "output": 5870,
+      "processedTotal": 136495,
+      "quotaPoints": 0.015756,
+      "cw1h": 11690,
+      "cw5m": 9348,
+      "thinking": 197,
+      "turns": 9,
+      "coldTurns": 2,
+      "toolResultChars": 10907,
+      "quotaByFamily": {
+        "opus": 0.015635,
+        "haiku5": 0.000121
+      }
+    }
+  }
+}
