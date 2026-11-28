@@ -3,7 +3,9 @@
 - **Tarih:** 2026-11-28 · Branch: `asama6-model-olcumu` (`asama3-tamamlama` üstünde)
 - **Yol haritası:** `SESSION-YOL-HARITASI.md` §4 Aşama 6 (ölçüm kısmı; ön ayarlar ve
   danışman henüz yok)
-- **Durum:** ölçüm tamam. Varsayılan model değişikliği **kullanıcı kararına bırakıldı**.
+- **Durum:** ölçüm tamam. **Karar (kullanıcı, 2026-11-28): varsayılan Opus kalıyor.** Sonnet
+  tile ayarından seçilebilir. Kazanç, kullanıcının bilinçli seçimine bırakıldı; bunun için
+  tile'da kota görünürlüğü (Aşama 8) öne alındı.
 
 ## Neden bu ölçüm
 
@@ -56,7 +58,9 @@ Fark **−%48**, aralıklar örtüşmüyor.
   (çıktı sıkıştırma) bench'te kazandıracağı bir şey yok; gerçek kullanım verisi
   `toolResultChars` ile birikiyor.
 
-## Öneri (karar kullanıcıda)
+## Öneri (sunulan) ve karar
+
+Kullanıcı "Opus kalsın" seçti. Aşağıdaki öneri kayıt için duruyor.
 
 1. Yeni Oda Projesi tile'larının varsayılanı **Sonnet 5.5**. Tile ayarından Opus seçilebilir
    kalır; mevcut tile'ların ayarı değişmez.
