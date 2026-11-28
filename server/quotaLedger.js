@@ -29,11 +29,20 @@ export const DEFAULT_WEIGHTS = {
   defaultFamily: 'opus',
 }
 
-// Soğuk tur eşiği: turun İLK API isteğinde yazılan cache okunan cache'ten büyükse
-// ve anlamlı büyüklükteyse prefix yeniden yazılmıştır (TTL dolması, respawn,
-// model değişimi, compaction). Turun sonraki istekleri doğal olarak yeni araç
-// çıktılarını cache'e yazar — o yüzden tüm tura değil ilk isteğe bakılır.
+// Soğuk tur: turun İLK API isteği prefix'in anlamlı bir kısmını yeniden yazdıysa
+// (TTL dolması, respawn, model değişimi, compaction). Turun sonraki istekleri doğal
+// olarak yeni araç çıktılarını cache'e yazar — o yüzden tüm tura değil ilk isteğe bakılır.
+//
+// DÜZELTME (2026-11-28, bench/ASAMA3.md TTL A/B): `usage.iterations` turun SON isteğini
+// içerir, ilkini değil (canlı doğrulandı: 2 istekli turda iterations[0] = son istek).
+// İlk isteğin usage'ı stream'deki ilk `assistant` olayında gelir; çağıran onu
+// `firstUsage` olarak verir. Yoksa tur toplamına bakan yedek kural uygulanır.
+//
+// Oran kuralı: sistem prompt'u + araçlar süreçler arası paylaşılan önbellekte kalabildiği
+// için soğuk bir turda bile okuma yazmaya yakın olabilir (gözlem: 5m kolunda 6 dk sonra
+// cw=16.7K, cr=16.5K). Bu yüzden "yazma > okuma" değil, "yazma ≥ bağlamın %25'i".
 export const COLD_MIN_WRITE = 2048
+export const COLD_RATIO = 0.25
 
 export function modelFamily(model) {
   const m = String(model || '').toLowerCase()
@@ -100,21 +109,23 @@ export function modelUsageDelta(modelUsage, prev = {}) {
   return delta
 }
 
-// Turun ilk API isteğine bakarak soğuk mu karar ver.
-export function isColdTurn(u) {
-  if (!u) return false
-  const first = Array.isArray(u.iterations) && u.iterations.length ? u.iterations[0] : u
-  const cw = first.cache_creation_input_tokens || 0
-  const cr = first.cache_read_input_tokens || 0
-  return cw >= COLD_MIN_WRITE && cw > cr
+// firstUsage: turun ilk assistant olayının message.usage'ı (varsa). u: result.usage.
+export function isColdTurn(u, firstUsage = null) {
+  const src = firstUsage || u
+  if (!src) return false
+  const cw = src.cache_creation_input_tokens || 0
+  const cr = src.cache_read_input_tokens || 0
+  const inp = src.input_tokens || 0
+  return cw >= COLD_MIN_WRITE && cw >= COLD_RATIO * (cw + cr + inp)
 }
 
 // Bir `result` olayından tur muhasebe kaydı üret.
 //   ev            : CLI result olayı
 //   fallbackModel : modelUsage yoksa kullanılacak model adı (spawn'daki --model)
 //   prevModelUsage: aynı süreçte önceki result'ın modelUsage'ı (kalıcı oturum)
+//   firstUsage    : turun ilk assistant olayının message.usage'ı (soğuk tur tespiti)
 // Dönüş: { usage, points, byFamily, turns, cold, family } — usage null ise null.
-export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, weights = DEFAULT_WEIGHTS } = {}) {
+export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, firstUsage = null, weights = DEFAULT_WEIGHTS } = {}) {
   const usage = normalizeUsage(ev?.usage)
   if (!usage) return null
   const byFamily = {}
@@ -136,7 +147,7 @@ export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, we
     points,
     byFamily,
     turns: Number(ev.num_turns) || 0,
-    cold: isColdTurn(ev.usage),
+    cold: isColdTurn(ev.usage, firstUsage),
     family,
   }
 }

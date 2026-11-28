@@ -115,6 +115,11 @@ test('turnRecord: çok modelli tur (ör. danışman) aile bazında ayrı tartıl
   near(r.byFamily.opus, Q.pointsFor({ output: 500 }, 'opus'))
   near(r.points, r.byFamily.sonnet + r.byFamily.opus)
 })
+test('turnRecord: firstUsage soğuk tespitine iletilir', () => {
+  const ev = { type: 'result', usage: { input_tokens: 2, output_tokens: 4, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 9000 } }
+  assert.equal(Q.turnRecord(ev).cold, false)
+  assert.equal(Q.turnRecord(ev, { firstUsage: { cache_creation_input_tokens: 9000, cache_read_input_tokens: 0 } }).cold, true)
+})
 test('turnRecord: usage yoksa null', () => {
   assert.equal(Q.turnRecord({ type: 'result' }), null)
   assert.equal(Q.turnRecord(null), null)
@@ -125,15 +130,28 @@ test('isColdTurn: ilk istek prefix\'i yazıyorsa soğuk', () => {
   assert.equal(Q.isColdTurn(oneShot.usage), true)          // 4642 yazma > 649 okuma
   assert.equal(Q.isColdTurn(persistTurn1.usage), false)    // 902 < eşik ve < okuma
 })
-test('isColdTurn: sıcak başlayıp sonra çok yazan ajan turu soğuk sayılmaz', () => {
-  const u = {
-    cache_creation_input_tokens: 60_000, cache_read_input_tokens: 40_000,   // tur toplamı: yazma > okuma
-    iterations: [
-      { cache_creation_input_tokens: 800, cache_read_input_tokens: 30_000 },  // ilk istek: sıcak
-      { cache_creation_input_tokens: 59_200, cache_read_input_tokens: 10_000 },
-    ],
+test('isColdTurn: CLI gerçeği — iterations SON isteği taşır; ilk istek firstUsage ile gelir', () => {
+  // Canlı gözlem (2026-11-28): 2 istekli tur. İlk istek 7214 yazdı (cr=0, soğuk),
+  // iterations[0] ise son isteği gösteriyordu (cw=106 cr=7214). Eski kod buna bakıp kaçırıyordu.
+  const resultUsage = {
+    cache_creation_input_tokens: 7320, cache_read_input_tokens: 7214,
+    iterations: [{ cache_creation_input_tokens: 106, cache_read_input_tokens: 7214 }],
   }
-  assert.equal(Q.isColdTurn(u), false)
+  const firstAssistant = { cache_creation_input_tokens: 7214, cache_read_input_tokens: 0, input_tokens: 3 }
+  assert.equal(Q.isColdTurn(resultUsage, firstAssistant), true)
+  assert.equal(Q.isColdTurn(resultUsage), true)   // yedek kural (tur toplamı) da yakalar
+})
+test('isColdTurn: sıcak başlayıp sonra çok yazan ajan turu — firstUsage varken soğuk değil', () => {
+  const u = { cache_creation_input_tokens: 60_000, cache_read_input_tokens: 40_000 }
+  assert.equal(Q.isColdTurn(u, { cache_creation_input_tokens: 800, cache_read_input_tokens: 30_000 }), false)
+})
+test('isColdTurn: TTL A/B gerçek sayıları (tur toplamı, yedek kural)', () => {
+  // 5m kolu, 6 dk sonra: sistem prompt'u paylaşılan önbellekte, konuşma kısmı yeniden yazıldı.
+  assert.equal(Q.isColdTurn({ cache_creation_input_tokens: 16685, cache_read_input_tokens: 16497 }), true)
+  // 1h kolu, 6 dk sonra: sıcak.
+  assert.equal(Q.isColdTurn({ cache_creation_input_tokens: 165, cache_read_input_tokens: 32634 }), false)
+  // roomsession-crud iş turu (7 araç-tur, sıcak başlangıç): soğuk sayılmamalı.
+  assert.equal(Q.isColdTurn({ cache_creation_input_tokens: 20477, cache_read_input_tokens: 109999 }), false)
 })
 test('isColdTurn: küçük yazma eşiğin altında soğuk değil', () => {
   assert.equal(Q.isColdTurn({ cache_creation_input_tokens: 1000, cache_read_input_tokens: 0 }), false)

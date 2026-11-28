@@ -2223,8 +2223,16 @@ const QUOTA_WEIGHTS = Quota.loadWeights(() =>
 
 // result olayından tur kaydı (kota puanı, soğuk tur, model kırılımı) üret.
 // prevModelUsage: kalıcı süreçte önceki result'ın modelUsage'ı (birikimli alan).
-function quotaRecord(ev, fallbackModel, prevModelUsage = null) {
-  return Quota.turnRecord(ev, { fallbackModel, prevModelUsage, weights: QUOTA_WEIGHTS })
+// firstUsage: turun ilk ana-konuşma assistant olayının usage'ı (soğuk tur tespiti;
+// result.usage.iterations SON isteği taşır, ilkini değil).
+function quotaRecord(ev, fallbackModel, prevModelUsage = null, firstUsage = null) {
+  return Quota.turnRecord(ev, { fallbackModel, prevModelUsage, firstUsage, weights: QUOTA_WEIGHTS })
+}
+
+// Bir olay turun ilk ana-konuşma API isteğinin usage'ını taşıyor mu? (subagent hariç)
+function mainAssistantUsage(ev) {
+  if (ev?.type !== 'assistant' || ev.parent_tool_use_id || ev.isSidechain) return null
+  return ev.message?.usage || null
 }
 
 // rec: quotaRecord() çıktısı (tur kaydı). Eski çağrı biçimi (ham usage) kabul edilmez —
@@ -2303,6 +2311,7 @@ function streamClaudeToSSE(res, args, opts = {}) {
   let idleTimer = null
   let heartbeat = null
   let sawResult = false
+  let firstUsage = null   // Aşama 1 düzeltmesi: turun ilk isteği (soğuk tur tespiti)
 
   function finish() {
     if (finished) return
@@ -2331,10 +2340,11 @@ function streamClaudeToSSE(res, args, opts = {}) {
     if (!line.trim()) return false
     try {
       const ev = JSON.parse(line)
+      if (!firstUsage) firstUsage = mainAssistantUsage(ev)
       if (ev.type === 'result' && ev.usage) {
         // Tek-atış süreç: modelUsage birikimli ama tek result olduğundan delta = tamamı.
         const model = cliArgValue(args, '--model')
-        const rec = quotaRecord(ev, model)
+        const rec = quotaRecord(ev, model, null, firstUsage)
         recordGlobalUsage(opts.usageType, rec)
         logTurnUsage({ tile: opts.usageType, key: opts.usageKey || opts.usageType, turn: 1, model, rec })
         ev.quota = rec   // tarayıcı (Aşama 8 arayüzü) ve loop turn sink'i okur
@@ -2488,6 +2498,7 @@ class PersistentSession {
     this.turnCount = 0                       // bu oturum nesnesinin tamamlanan tur sayısı (turn-usage logu)
     this.respawns = 0                        // --resume ile yeniden doğuş sayısı (faz1 İş 1.4)
     this._prevModelUsage = null              // Aşama 1: süreç içi birikimli modelUsage snapshot'ı (delta için)
+    this._turnFirstUsage = null              // Aşama 1 düzeltmesi: bu turun ilk assistant usage'ı
     this.pendingControls = new Map()         // Faz B: request_id → {resolve, reject, timeout} (control_response eşleştirme)
     this.status = 'idle'                     // Faz E: idle | running | input_needed | error (frontend rozeti)
     this.pendingAction = null                // Faz E: input_needed'da ne beklendiği { kind, toolUseId, toolName? }
@@ -2522,6 +2533,7 @@ class PersistentSession {
     // doğuş (idle evict / çökme / ayar değişimi). Faz 3'ün etkisi bu sayıyla ölçülür.
     if (this.sessionId) this.respawns += 1
     this._prevModelUsage = null   // Aşama 1: modelUsage yeni süreçte sıfırdan birikir
+    this._turnFirstUsage = null
     this.proc = spawn(CLAUDE_CLI, a, { cwd: this.cwd, env: buildSpawnEnv(envOverrides), detached: true })
     console.error(`[persist] SPAWN key=${this.key} pid=${this.proc.pid} resume=${this.sessionId || 'none'} respawns=${this.respawns}`)
     // Resume-şişkinlik göstergesi: respawn sonrası İLK turun input+cacheWrite'ı
@@ -2584,8 +2596,10 @@ class PersistentSession {
     // turn sink'ine (makeTurnSink) aynı olayla gider. modelUsage süreç boyunca
     // birikimli: delta için bir önceki snapshot kullanılır (respawn'da sıfırlanır).
     let quotaRec = null
+    if (!this._turnFirstUsage) this._turnFirstUsage = mainAssistantUsage(ev)
     if (ev.type === 'result' && ev.usage) {
-      quotaRec = quotaRecord(ev, cliModel(this.settings.model), this._prevModelUsage)
+      quotaRec = quotaRecord(ev, cliModel(this.settings.model), this._prevModelUsage, this._turnFirstUsage)
+      this._turnFirstUsage = null   // sonraki tur kendi ilk isteğini yakalar
       if (ev.modelUsage) this._prevModelUsage = ev.modelUsage
       ev.quota = quotaRec
     }
@@ -3943,7 +3957,7 @@ function removeSessionRecall(mediaId) {
 // normal çıktı sanmak loop'un hata üstüne iterasyon yakmasına yol açar.
 function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
   return new Promise((resolve) => {
-    let buf = '', text = '', failed = null, usage = null, quota = null
+    let buf = '', text = '', failed = null, usage = null, quota = null, firstUsage = null
     let proc
     try { proc = spawn(CLAUDE_CLI, args, { cwd: cwd || process.cwd(), env: buildSpawnEnv(envOverrides || {}) }) }
     catch (e) { return resolve({ text: '', failed: e.message, usage: null, quota: null }) }
@@ -3954,6 +3968,7 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
         if (!line.trim()) continue
         let ev
         try { ev = JSON.parse(line) } catch { continue }
+        if (!firstUsage) firstUsage = mainAssistantUsage(ev)
         if (ev.type === 'assistant' && ev.message?.model === '<synthetic>') {
           const t = (ev.message.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ')
           failed = t || 'API hatası (synthetic yanıt)'
@@ -3962,7 +3977,7 @@ function runClaudeCapture(args, { cwd, usageType, envOverrides } = {}) {
           if (typeof ev.result === 'string') text = ev.result
           if (ev.usage) {
             usage = ev.usage
-            quota = quotaRecord(ev, cliArgValue(args, '--model'))   // tek-atış: delta = tamamı
+            quota = quotaRecord(ev, cliArgValue(args, '--model'), null, firstUsage)   // tek-atış: delta = tamamı
           }
           if (ev.is_error || (ev.subtype && ev.subtype !== 'success')) {
             failed = failed || (text ? text.slice(0, 200) : `sonuç hatası (${ev.subtype || 'bilinmiyor'})`)
