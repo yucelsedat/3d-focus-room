@@ -1,0 +1,78 @@
+{
+  "scenario": "roomsession-crud",
+  "label": "asama3ttl-r1",
+  "note": "roomsession LoopFlow — iş turu kalıcı oturum + haiku verify",
+  "startedAt": "2026-11-28T00:09:45.696Z",
+  "finishedAt": "2026-11-28T00:10:41.344Z",
+  "durationSec": 56,
+  "mediaId": 1795824585719,
+  "error": null,
+  "usageDelta": {
+    "roomsession": {
+      "calls": 1,
+      "input": 10,
+      "cacheWrite": 10492,
+      "cacheRead": 76292,
+      "output": 3460,
+      "processedTotal": 90254,
+      "quotaPoints": 0.011441,
+      "turns": 5,
+      "coldTurns": 1,
+      "cw1h": 10492,
+      "cw5m": 0,
+      "thinking": 231
+    },
+    "verify": {
+      "calls": 1,
+      "input": 8,
+      "cacheWrite": 9347,
+      "cacheRead": 40560,
+      "output": 1579,
+      "processedTotal": 51494,
+      "quotaPoints": 0.001349,
+      "turns": 4,
+      "coldTurns": 1,
+      "cw1h": 0,
+      "cw5m": 9347,
+      "thinking": 162
+    }
+  },
+  "totals": {
+    "calls": 2,
+    "input": 18,
+    "cacheWrite": 19839,
+    "cacheRead": 116852,
+    "output": 5039,
+    "processedTotal": 141748,
+    "quotaPoints": 0.01279,
+    "turns": 9,
+    "coldTurns": 2,
+    "cw1h": 10492,
+    "cw5m": 9347,
+    "thinking": 393
+  },
+  "recall": {
+    "iteration": 1,
+    "maxIterations": 6,
+    "status": "met",
+    "respawns": 0,
+    "usage": {
+      "calls": 2,
+      "input": 18,
+      "cacheWrite": 19839,
+      "cacheRead": 116852,
+      "output": 5039,
+      "processedTotal": 141748,
+      "quotaPoints": 0.01279,
+      "cw1h": 10492,
+      "cw5m": 9347,
+      "thinking": 393,
+      "turns": 9,
+      "coldTurns": 2,
+      "quotaByFamily": {
+        "opus": 0.011441,
+        "haiku": 0.001349
+      }
+    }
+  }
+}

@@ -2,9 +2,11 @@
 
 - **Tarih:** 2026-11-28 · Branch: `asama3-spawn-diyeti` (`asama2-session-cekirdegi` üstünde)
 - **Yol haritası:** `SESSION-YOL-HARITASI.md` §4 Aşama 3
-- **Durum:** dilim 1 (izolasyon, efor, verify modeli) yapıldı ve bench ile ölçüldü:
-  roomsession-crud kotası −%49 (tek koşu, aynı sonuç). `--json-schema` denendi, reddedildi.
-  Sırada: tekrar koşusu, TTL A/B, kısa yanıt kuralı, `--fallback-model`.
+- **Durum:** dilim 1 (izolasyon, efor, verify modeli) ve TTL kararı yapıldı ve tekrarlı
+  bench ile ölçüldü. roomsession-crud kotası **−%42** (3'er koşu, aralıklar örtüşmüyor,
+  hedef 3/3). roomsession TTL'i 1h: idle sohbette **−%66**. `--json-schema` denendi,
+  reddedildi. Sırada: kısa yanıt kuralı, `--fallback-model`, multiagent TTL ölçümü.
+  **Özet tablo:** "Tekrarlı sonuçlar" bölümü.
 
 ## Madde 0 — "ikinci tur 11.5K yazıyor" bulgusunun kaynağı
 
@@ -86,7 +88,54 @@ Soğuk başlangıçta yazma %85 düştü. İkinci koşularda ikisi de sıcak (~8
 arka planda baseline bench'i koşuyordu ve o da verify çağırıyordu, yani önbellek durumu
 paylaşıldı. Kesin sayılar bench karşılaştırmasından gelecek.
 
-## Bench karşılaştırması: Aşama 1 baseline vs Aşama 3 dilim 1
+## Tekrarlı sonuçlar (2026-11-28, kesin tablo)
+
+Düzenek: worktree, DB kopyası, ayrı port/USAGE_FILE, koşular **sırayla ve dönüşümlü**
+(A1, A3, A1, A3), TTL kolları **ABBA** sırasıyla. Ham veri: `data/bench/asama1*`,
+`asama3*`, `ttl*`, `asama3ttl*`. Toplam ölçüm maliyeti tahmini ~%0.15 Ultra haftası.
+
+### roomsession-crud: Aşama 1 vs Aşama 3 (n=3 + 3)
+
+| | Kota ort. | Aralık | Araç-tur | Çıktı | Düşünme | cache okuma | Hedef |
+|---|---:|---|---:|---:|---:|---:|---|
+| Aşama 1 | 0.0259 | 0.0211–0.0293 | 18.0 | 8.223 | 1.706 | 317K | 3/3 met |
+| Aşama 3 (5m) | 0.0150 | 0.0134–0.0177 | 8.7 | 4.738 | 365 | 114K | 3/3 met |
+| Fark | **−%42** | örtüşmüyor | −%52 | −%42 | −%79 | −%64 | aynı |
+| Aşama 3 + TTL default (n=2) | 0.0124 | 0.0119–0.0128 | 8.5 | — | — | — | 2/2 met |
+
+Tek koşuluk ilk ölçüm (−%49) tekrarlarla −%42'ye oturdu. Yön kesin (aralıklar
+örtüşmüyor), büyüklük ±birkaç puan.
+
+### TTL A/B: roomsession sohbet, 6 dk boşluk (n=2 + 2, ABBA)
+
+Tur logları esas alındı (`ttl5m-r2` bench JSON'u UTC gece yarısında son turu
+kaçırdı; bench düzeltildi, aşağıda).
+
+| Kol | Kota (tur toplamı) | Soğuk tur | Boşluk sonrası tur başına |
+|---|---:|---:|---:|
+| 5m (`FORCE_PROMPT_CACHING_5M`) | 0.0141 / 0.0168 → ort. 0.0155 | 5/6 | 0.0056 (cw ≈ 16.7K yeniden yazım) |
+| 1h (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`) | 0.0065 / 0.0039 → ort. 0.0052 | 1/6 | 0.0005–0.0007 (cw ≈ 140-270) |
+| Fark | **−%66** | | **~10×** |
+
+1h kolundaki tek soğuk tur bir sürecin ilk turu (kaçınılmaz).
+
+**Karar:** roomsession `ttl: 'default'`. Env yok; Claude Code abonelikte ana konuşmaya
+1h veriyor (bu hesapta `ephemeral_1h` ile doğrulandı) ve krediye düşünce kendisi 5m'ye
+iniyor. Döngü turlarına etkisi ayrıca ölçüldü (yukarıdaki son satır): kötüleşme yok
+(0.0124, 5m'deki 0.0150 aralığının altında), yazmalar artık `cw1h`. multiagent
+ölçülmediği için 5m kalıyor.
+
+### Ölçüm hataları (bulundu, düzeltildi)
+
+1. **Soğuk tur dedektörü** (Aşama 1 kodu): `usage.iterations` turun **son** isteğini
+   taşıyor (canlı doğrulandı); dedektör buna bakıp soğuk turları kaçırıyordu. Düzeltme:
+   ilk ana-konuşma `assistant` olayının usage'ı + "yazma ≥ bağlamın %25'i" kuralı. Bu
+   rapordaki soğuk tur sayıları düzeltilmiş kuralla tur loglarından yeniden hesaplandı.
+   Düzeltme öncesi bench JSON'larındaki `coldTurns` alanı güvenilmez.
+2. **Bench gün sınırı:** snapshot yalnız son UTC gününü okuyordu. Artık son 2 günün
+   toplamı.
+
+## Bench karşılaştırması: Aşama 1 baseline vs Aşama 3 dilim 1 (ilk tek koşu)
 
 Aynı düzenek (worktree, DB kopyası, ayrı port/USAGE_FILE), koşular sırayla, aynı gece.
 Kaynak: `data/bench/asama{1,3}-*.json` ve sunucu `[turn-usage]` logları.
