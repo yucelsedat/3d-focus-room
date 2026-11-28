@@ -61,6 +61,18 @@ const SCENARIOS = {
     ],
     note: 'roomchat — 3 tur, turlar arası 6 dk boşluk; 1H cache + uzun idle doğrulaması',
   },
+  // Aşama 6: daha zor görev — model seçiminin kaliteye etkisini ölçmek için.
+  // Deterministik kontrol: checkTodoApi + doğrulama/filtre/sayfalama + npm test.
+  'roomsession-api-plus': {
+    tileType: 'roomsession',
+    goal: 'Express + SQLite todo API. Endpointler: GET /todos, POST /todos, PUT /todos/:id, DELETE /todos/:id. '
+      + 'Kurallar: (1) POST ve PUT\'ta title boş/eksikse 400 ve {error} döner; (2) olmayan id için PUT/DELETE 404 döner; '
+      + '(3) GET /todos?completed=true|false tamamlanma durumuna göre filtreler; (4) GET /todos?limit=N&offset=M sayfalar '
+      + '(id artan sırada). Sunucu PORT ortam değişkenini kullanır. package.json\'da "npm test" node:test ile bu '
+      + 'kuralların hepsini test eder ve geçer.',
+    maxIterations: 6,
+    note: 'roomsession LoopFlow — zor görev (doğrulama, filtre, sayfalama, testler); kalite deterministik',
+  },
   // Aşama 3 TTL A/B: Oda Projesi tile'ında SOHBET (loop değil), turlar arası 6 dk.
   // 5m TTL'de 2./3. tur prefix'i yeniden yazar (soğuk); 1h'de okur (sıcak). Süreç
   // PERSIST_IDLE_MS (15 dk) sayesinde canlı kalır → fark yalnız TTL'den gelir.
@@ -336,6 +348,66 @@ async function runDirectCafe() {
   return { mediaId: media.id, recall: status.recall }
 }
 
+// api-plus: temel kontrol + ek kurallar + npm test. Her kural ayrı işaretlenir.
+async function checkTodoApiPlus(dir) {
+  const base = await checkTodoApi(dir)
+  const checks = { ...base.checks }
+  let cmd = ['node', 'server.js']
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+    if (pkg.scripts?.start) cmd = ['npm', 'start']
+  } catch { return { ok: false, reason: 'package.json yok', checks } }
+  const port = await freePort()
+  const B = `http://127.0.0.1:${port}`
+  const child = spawn(cmd[0], cmd.slice(1), { cwd: dir, env: { ...process.env, PORT: String(port) }, detached: true, stdio: 'ignore' })
+  const req = async (method, url, body) => {
+    const r = await fetch(B + url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined })
+    let j = null
+    try { j = await r.json() } catch {}
+    return { status: r.status, body: j }
+  }
+  try {
+    let up = false
+    for (let i = 0; i < 60 && !up; i++) { try { await fetch(B + '/todos'); up = true } catch { await sleep(250) } }
+    if (!up) return { ok: false, reason: 'sunucu açılmadı', checks }
+    const empty = await req('POST', '/todos', { title: '' })
+    const missing = await req('POST', '/todos', {})
+    checks.validation400 = empty.status === 400 && missing.status === 400 && (empty.body?.error != null)
+    const ids = []
+    for (const [title, done] of [['a', false], ['b', true], ['c', false], ['d', true]]) {
+      const r = await req('POST', '/todos', { title })
+      ids.push(r.body?.id)
+      if (done) await req('PUT', `/todos/${r.body?.id}`, { title, completed: true })
+    }
+    const emptyPut = await req('PUT', `/todos/${ids[0]}`, { title: '' })
+    checks.putValidation400 = emptyPut.status === 400
+    checks.delete404 = (await req('DELETE', '/todos/99999999')).status === 404
+    const isDone = (t) => t.completed === true || t.completed === 1
+    const doneList = await req('GET', '/todos?completed=true')
+    const openList = await req('GET', '/todos?completed=false')
+    checks.filter = Array.isArray(doneList.body) && Array.isArray(openList.body)
+      && ids.filter((_, i) => i % 2 === 1).every((id) => doneList.body.some((t) => t.id === id && isDone(t)))
+      && doneList.body.every(isDone) && openList.body.every((t) => !isDone(t))
+    const all = (await req('GET', '/todos')).body || []
+    const page = await req('GET', '/todos?limit=2&offset=1')
+    const sorted = [...all].sort((x, y) => x.id - y.id)
+    checks.pagination = Array.isArray(page.body) && page.body.length === 2
+      && page.body[0].id === sorted[1]?.id && page.body[1].id === sorted[2]?.id
+  } catch (e) {
+    checks.plusError = false
+    base.reason = e.message
+  } finally {
+    try { process.kill(-child.pid, 'SIGTERM') } catch {}
+  }
+  // npm test (agent'ın kendi testleri) — kendi portunu seçmeli; 120 sn tavan.
+  const t = spawn('npm', ['test'], { cwd: dir, env: { ...process.env, PORT: String(await freePort()) }, detached: true, stdio: 'ignore' })
+  checks.npmTest = await new Promise((resolve) => {
+    const timer = setTimeout(() => { try { process.kill(-t.pid, 'SIGKILL') } catch {} resolve(false) }, 120000)
+    t.on('exit', (code) => { clearTimeout(timer); resolve(code === 0) })
+  })
+  return { ok: Object.values(checks).every(Boolean), checks, reason: base.reason }
+}
+
 async function runRoomsessionCrud() {
   const media = await api('POST', '/api/roomsession', tileBody({
     loop: { goal: scenario.goal, maxIterations: scenario.maxIterations },
@@ -384,6 +456,7 @@ async function runRoomsessionChatIdlegap() {
 const RUNNERS = {
   'direct-cafe': runDirectCafe,
   'roomsession-crud': runRoomsessionCrud,
+  'roomsession-api-plus': runRoomsessionCrud,
   'roomchat-3turn': runRoomchat3turn,
   'roomchat-idlegap': runRoomchat3turn,
   'roomsession-chat-idlegap': runRoomsessionChatIdlegap,
@@ -413,8 +486,9 @@ async function main() {
   const finishedAt = new Date()
   // Kalite: roomsession-crud için deterministik API kontrolü (model çağırmaz).
   let functional = null
-  if (scenarioName === 'roomsession-crud' && !error) {
-    functional = await checkTodoApi(path.join(ROOT, 'room-projects', String(bench.id)))
+  if ((scenarioName === 'roomsession-crud' || scenarioName === 'roomsession-api-plus') && !error) {
+    const dir = path.join(ROOT, 'room-projects', String(bench.id))
+    functional = scenarioName === 'roomsession-api-plus' ? await checkTodoApiPlus(dir) : await checkTodoApi(dir)
     console.log(`[bench] kalite (API kontrolü): ${functional.ok ? 'GEÇTİ' : 'KALDI'} ${JSON.stringify(functional.checks)}${functional.reason ? ' — ' + functional.reason : ''}`)
   }
   // usage-daily debounce'lu (5 sn) yazılır; flush'ı bekle.
@@ -467,7 +541,8 @@ async function main() {
 }
 
 if (CHECK_ONLY) {
-  checkTodoApi(path.resolve(CHECK_ONLY)).then((r) => { console.log(JSON.stringify(r)); process.exit(r.ok ? 0 : 3) })
+  const fn = process.argv.includes('--plus') ? checkTodoApiPlus : checkTodoApi
+  fn(path.resolve(CHECK_ONLY)).then((r) => { console.log(JSON.stringify(r)); process.exit(r.ok ? 0 : 3) })
 } else {
   main().catch((e) => { console.error('[bench] hata:', e.message); process.exit(1) })
 }
