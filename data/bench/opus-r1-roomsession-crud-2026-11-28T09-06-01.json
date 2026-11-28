@@ -1,0 +1,94 @@
+{
+  "scenario": "roomsession-crud",
+  "label": "opus-r1",
+  "note": "roomsession LoopFlow — iş turu kalıcı oturum + haiku verify",
+  "startedAt": "2026-11-28T09:06:01.359Z",
+  "finishedAt": "2026-11-28T09:06:51.071Z",
+  "durationSec": 50,
+  "mediaId": 1795856761392,
+  "error": null,
+  "tileModel": null,
+  "functional": {
+    "ok": true,
+    "checks": {
+      "post": true,
+      "get": true,
+      "put": true,
+      "delete": true,
+      "deletedGone": true,
+      "notFound404": true
+    }
+  },
+  "usageDelta": {
+    "roomsession": {
+      "calls": 1,
+      "input": 8,
+      "cacheWrite": 18857,
+      "cacheRead": 49234,
+      "output": 2999,
+      "processedTotal": 71098,
+      "quotaPoints": 0.012827,
+      "turns": 4,
+      "coldTurns": 1,
+      "cw1h": 18857,
+      "cw5m": 0,
+      "thinking": 120,
+      "toolResultChars": 581
+    },
+    "verify": {
+      "calls": 1,
+      "input": 6,
+      "cacheWrite": 8451,
+      "cacheRead": 26981,
+      "output": 897,
+      "processedTotal": 36335,
+      "quotaPoints": 0.000126,
+      "turns": 3,
+      "coldTurns": 1,
+      "cw1h": 0,
+      "cw5m": 8451,
+      "thinking": 76,
+      "toolResultChars": 4536
+    }
+  },
+  "totals": {
+    "calls": 2,
+    "input": 14,
+    "cacheWrite": 27308,
+    "cacheRead": 76215,
+    "output": 3896,
+    "processedTotal": 107433,
+    "quotaPoints": 0.012953,
+    "turns": 7,
+    "coldTurns": 2,
+    "cw1h": 18857,
+    "cw5m": 8451,
+    "thinking": 196,
+    "toolResultChars": 5117
+  },
+  "recall": {
+    "iteration": 1,
+    "maxIterations": 6,
+    "status": "met",
+    "respawns": 0,
+    "usage": {
+      "calls": 2,
+      "input": 14,
+      "cacheWrite": 27308,
+      "cacheRead": 76215,
+      "output": 3896,
+      "processedTotal": 107433,
+      "quotaPoints": 0.012953,
+      "cw1h": 18857,
+      "cw5m": 8451,
+      "thinking": 196,
+      "turns": 7,
+      "coldTurns": 2,
+      "toolResultChars": 5117,
+      "quotaByFamily": {
+        "opus": 0.012827,
+        "haiku5": 0.000126
+      }
+    }
+  }
+}
