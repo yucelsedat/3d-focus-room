@@ -122,6 +122,13 @@ test('turnRecord: firstUsage soğuk tespitine iletilir', () => {
   assert.equal(Q.turnRecord(ev).cold, false)
   assert.equal(Q.turnRecord(ev, { firstUsage: { cache_creation_input_tokens: 9000, cache_read_input_tokens: 0 } }).cold, true)
 })
+test('turnRecord + accumulate: araç sonucu karakteri taşınır ve birikir', () => {
+  const r = Q.turnRecord(persistTurn1, { toolResultChars: 1234 })
+  assert.equal(r.toolResultChars, 1234)
+  const t = {}
+  Q.accumulate(t, r); Q.accumulate(t, Q.turnRecord(persistTurn1))
+  assert.equal(t.toolResultChars, 1234)
+})
 test('turnRecord: usage yoksa null', () => {
   assert.equal(Q.turnRecord({ type: 'result' }), null)
   assert.equal(Q.turnRecord(null), null)

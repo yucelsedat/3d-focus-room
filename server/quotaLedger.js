@@ -135,7 +135,9 @@ export function isColdTurn(u, firstUsage = null) {
 //   prevModelUsage: aynı süreçte önceki result'ın modelUsage'ı (kalıcı oturum)
 //   firstUsage    : turun ilk assistant olayının message.usage'ı (soğuk tur tespiti)
 // Dönüş: { usage, points, byFamily, turns, cold, family } — usage null ise null.
-export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, firstUsage = null, weights = DEFAULT_WEIGHTS } = {}) {
+// toolResultChars: turda modele dönen araç sonuçlarının toplam karakteri (Aşama 4 kararı
+// için gerçek kullanım verisi: sıkıştırma hook'u ne kadar kazandırır?).
+export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, firstUsage = null, toolResultChars = 0, weights = DEFAULT_WEIGHTS } = {}) {
   const usage = normalizeUsage(ev?.usage)
   if (!usage) return null
   const byFamily = {}
@@ -158,6 +160,7 @@ export function turnRecord(ev, { fallbackModel = null, prevModelUsage = null, fi
     byFamily,
     turns: Number(ev.num_turns) || 0,
     cold: isColdTurn(ev.usage, firstUsage),
+    toolResultChars: Number(toolResultChars) || 0,
     family,
   }
 }
@@ -180,6 +183,7 @@ export function accumulate(t, rec) {
   t.thinking = (t.thinking || 0) + u.thinking
   t.turns = (t.turns || 0) + rec.turns
   t.coldTurns = (t.coldTurns || 0) + (rec.cold ? 1 : 0)
+  t.toolResultChars = (t.toolResultChars || 0) + (rec.toolResultChars || 0)
   const qf = t.quotaByFamily || (t.quotaByFamily = {})
   for (const [fam, p] of Object.entries(rec.byFamily)) qf[fam] = round6((qf[fam] || 0) + p)
   return t
