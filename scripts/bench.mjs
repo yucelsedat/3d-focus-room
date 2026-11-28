@@ -361,9 +361,20 @@ async function runDirectCafe() {
 }
 
 // api-plus: temel kontrol + ek kurallar + npm test. Her kural ayrı işaretlenir.
+// SIRA ÖNEMLİ: npm test, API denemesinden ÖNCE ve temiz durumda koşar. API denemesi
+// projenin varsayılan SQLite dosyasına kayıt bırakır; boş veritabanı varsayan ajan
+// testleri sonra koşarsa yanlışlıkla kalır (feat-acc-r2: ajanın kendi çalıştırmasında
+// 23/23 geçen testler düzenekte kaldı — bench/ASAMA5.md).
 async function checkTodoApiPlus(dir) {
+  const checks = {}
+  // npm test (agent'ın kendi testleri) — kendi portunu seçmeli; 120 sn tavan.
+  const t = spawn('npm', ['test'], { cwd: dir, env: { ...process.env, PORT: String(await freePort()) }, detached: true, stdio: 'ignore' })
+  const npmTest = await new Promise((resolve) => {
+    const timer = setTimeout(() => { try { process.kill(-t.pid, 'SIGKILL') } catch {} resolve(false) }, 120000)
+    t.on('exit', (code) => { clearTimeout(timer); resolve(code === 0) })
+  })
   const base = await checkTodoApi(dir)
-  const checks = { ...base.checks }
+  Object.assign(checks, base.checks)
   let cmd = ['node', 'server.js']
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
@@ -411,12 +422,7 @@ async function checkTodoApiPlus(dir) {
   } finally {
     try { process.kill(-child.pid, 'SIGTERM') } catch {}
   }
-  // npm test (agent'ın kendi testleri) — kendi portunu seçmeli; 120 sn tavan.
-  const t = spawn('npm', ['test'], { cwd: dir, env: { ...process.env, PORT: String(await freePort()) }, detached: true, stdio: 'ignore' })
-  checks.npmTest = await new Promise((resolve) => {
-    const timer = setTimeout(() => { try { process.kill(-t.pid, 'SIGKILL') } catch {} resolve(false) }, 120000)
-    t.on('exit', (code) => { clearTimeout(timer); resolve(code === 0) })
-  })
+  checks.npmTest = npmTest
   return { ok: Object.values(checks).every(Boolean), checks, reason: base.reason }
 }
 
